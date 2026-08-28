@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "fluid": true,
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{.venv/**,.uv-cache/**,tests/**,data/**,supabase/**}"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/partner-sync",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/police-sync",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "retriever-lost-found"
+version = "0.1.0"
+description = "경찰청 습득물 데이터 수집 및 자연어 검색 백엔드"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi[standard]>=0.116,<1",
+]
+
+[project.scripts]
+police-api = "retriever_lost_found.integrations.partner_api:main"
+kakao-map = "retriever_lost_found.web.app:main"
+geocode-institutions = "retriever_lost_found.tools.geocode_institutions:main"
+sync-police-locations = "retriever_lost_found.tools.sync_police_locations:main"
+export-selected-found-items = "retriever_lost_found.ingestion.collector:main"
+sync-found-items = "retriever_lost_found.ingestion.service:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"retriever_lost_found.web" = ["static/*"]

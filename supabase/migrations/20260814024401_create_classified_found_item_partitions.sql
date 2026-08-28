@@ -1,0 +1,3 @@
+-- Historical migration tombstone.
+-- The obsolete partitioned schema is superseded by the 20260826133434 core baseline.
+-- Keep this version so local migration history stays aligned with the linked project.

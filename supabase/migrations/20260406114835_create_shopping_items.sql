@@ -1,0 +1,3 @@
+-- Historical migration tombstone.
+-- The obsolete shopping_items schema is intentionally omitted from the current baseline.
+-- Keep this version so local migration history stays aligned with the linked project.

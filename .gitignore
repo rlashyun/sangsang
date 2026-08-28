@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.uv-cache/
+*.egg-info/
+.vercel/
+.playwright-cli/
+build/
+dist/
+*.log
+data/
+reports/

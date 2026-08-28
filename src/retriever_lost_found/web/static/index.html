@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>리트리버 장소 지도</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="__KAKAO_SDK_URL__"></script>
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="search-panel" aria-labelledby="page-title">
+        <header class="landing-header">
+          <p class="eyebrow">RETRIEVER MAP</p>
+          <h1 id="page-title">보관 장소 찾기</h1>
+          <p class="lede">장소명이나 정확한 주소를 검색하면 지도에서 바로 확인할 수 있어요.</p>
+        </header>
+
+        <div class="location-search-view">
+          <form id="search-form" class="search-form">
+            <div class="search-row">
+              <label class="sr-only" for="search-input">검색어</label>
+              <input
+                id="search-input"
+                name="query"
+                type="search"
+                maxlength="200"
+                autocomplete="off"
+                placeholder="장소명 또는 주소를 입력하세요"
+                required
+              />
+              <button type="submit">검색</button>
+            </div>
+          </form>
+
+          <div id="status" class="status" role="status" aria-live="polite">
+            장소명을 입력해 검색해보세요.
+          </div>
+          <ol id="results" class="results location-results" aria-label="위치 검색 결과"></ol>
+        </div>
+
+        <section id="selection-summary" class="selection-summary" aria-label="현재 탐색 범위" hidden>
+          <div>
+            <p id="selection-kicker" class="section-kicker">SELECTED LOCATION</p>
+            <h2 id="selection-title">선택한 위치</h2>
+            <p id="selection-description"></p>
+          </div>
+          <button id="change-location" type="button">장소 다시 찾기</button>
+        </section>
+
+        <section class="item-browser" aria-labelledby="item-browser-title">
+          <div class="item-browser-header">
+            <div>
+              <p class="section-kicker">FOUND ITEMS</p>
+              <h2 id="item-browser-title">주변 습득물</h2>
+            </div>
+            <button id="show-radius-items" class="scope-reset" type="button" hidden>
+              1km 전체
+            </button>
+          </div>
+
+          <form id="found-item-form" class="found-item-form">
+            <label class="sr-only" for="found-item-input">습득물 검색어</label>
+            <input
+              id="found-item-input"
+              type="search"
+              maxlength="100"
+              autocomplete="off"
+              placeholder="먼저 위치를 검색해주세요"
+              disabled
+            />
+            <button type="submit" disabled>물품 검색</button>
+          </form>
+
+          <div id="found-item-status" class="found-item-status" role="status" aria-live="polite">
+            위치를 검색하면 반경 1km의 습득물을 보여드립니다.
+          </div>
+          <ol id="found-items" class="found-items" aria-label="습득물 목록"></ol>
+        </section>
+      </section>
+
+      <section class="map-panel" aria-label="카카오 지도">
+        <div id="map"></div>
+        <div id="institution-status" class="institution-status" aria-live="polite">
+          <span class="status-dot"></span>
+          연계기관과 경찰청 위치를 불러오는 중…
+        </div>
+        <div class="map-toolbar">
+          <div id="map-badge" class="map-badge">확대하면 개별 기관을 볼 수 있어요</div>
+          <button id="reset-radius" class="reset-radius" type="button" hidden>전체 기관 보기</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
