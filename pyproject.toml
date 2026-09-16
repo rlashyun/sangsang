@@ -14,8 +14,6 @@ dependencies = [
 [project.scripts]
 police-api = "retriever_lost_found.integrations.partner_api:main"
 kakao-map = "retriever_lost_found.web.app:main"
-geocode-institutions = "retriever_lost_found.tools.geocode_institutions:main"
-sync-police-locations = "retriever_lost_found.tools.sync_police_locations:main"
 export-selected-found-items = "retriever_lost_found.ingestion.collector:main"
 sync-found-items = "retriever_lost_found.ingestion.service:main"
 

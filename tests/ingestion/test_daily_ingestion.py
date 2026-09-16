@@ -206,7 +206,7 @@ class DailyIngestionTests(unittest.TestCase):
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
-    def test_cron_incremental_sync_fetches_today_only(
+    def test_cron_incremental_sync_refetches_latest_stored_date(
         self, create_client, collect_rows
     ) -> None:
         store = FakeStore()
@@ -230,7 +230,35 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 27), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 27))])
+
+    @patch.object(daily_ingestion, "collect_selected_rows")
+    @patch.object(daily_ingestion, "create_source_client")
+    def test_cron_refetches_yesterday_when_database_is_current(
+        self, create_client, collect_rows
+    ) -> None:
+        store = FakeStore()
+        store.latest_date = date(2026, 8, 27)
+        collect_rows.return_value = (
+            [],
+            {
+                "fetched_count": 0,
+                "selected_count": 0,
+                "invalid_count": 0,
+                "outside_range_count": 0,
+                "api_total_count": 0,
+            },
+        )
+
+        result = daily_ingestion._sync_source(
+            store,
+            source="partner",
+            today=date(2026, 8, 27),
+            incremental_only=True,
+        )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(store.windows, [(date(2026, 8, 26), date(2026, 8, 27))])
 
 
 if __name__ == "__main__":

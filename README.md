@@ -96,15 +96,6 @@ Vercel에서는 Production·Preview·Development 환경을 구분해 값을 설�
 
 기관 좌표와 물품 수는 로컬·배포 환경 모두 Supabase에서 조회합니다.
 
-Esri Korea 공개 FeatureServer의 경찰관서 좌표를 두 CSV로 다시 내려받으려면 다음을 실행합니다.
-
-```powershell
-uv run sync-police-locations
-```
-
-- `data/esri_police_stations.csv`: 경찰서
-- `data/esri_police_substations.csv`: 지구대·파출소
-
 ## 일일 데이터 동기화
 
 두 경찰청 API에서 6개 서비스 카테고리만 선별해 Supabase에 멱등 upsert합니다.
