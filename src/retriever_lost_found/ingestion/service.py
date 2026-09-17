@@ -5,9 +5,8 @@ import json
 import re
 import unicodedata
 from collections.abc import Iterable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from .collector import (
     SOURCE_CODES,
@@ -19,6 +18,7 @@ from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 
 
 SOURCE_ORDER = ("partner", "police")
+KOREA_TIMEZONE = timezone(timedelta(hours=9))
 
 
 def _normalize_key(value: Any) -> str:
@@ -147,19 +147,22 @@ def _sync_source(
     today: date,
     incremental_only: bool = False,
 ) -> dict[str, Any]:
-    """한 출처를 동기화합니다. Cron은 당일만, 수동 실행은 누락 구간도 보완합니다."""
+    """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다."""
     if source not in SOURCE_ORDER:
         raise ValueError(f"지원하지 않는 수집원입니다: {source}")
     source_code = SOURCE_CODES[source]
     retention_days = SOURCE_RETENTION_DAYS[source]
     retention_start = today - timedelta(days=retention_days - 1)
+    latest_registered_on = store.latest_registered_on(source_code)
     if incremental_only:
-        start_date = today
+        # 오전 Cron 이후 같은 등록일로 추가되는 항목을 다음 실행에서 다시 확인합니다.
+        replay_from = today - timedelta(days=1)
+        start_candidate = min(latest_registered_on or retention_start, replay_from)
         trigger = "vercel_cron_incremental"
     else:
-        latest_registered_on = store.latest_registered_on(source_code)
-        start_date = max(retention_start, latest_registered_on or retention_start)
+        start_candidate = min(latest_registered_on or retention_start, today)
         trigger = "manual_catchup"
+    start_date = max(retention_start, start_candidate)
     result = _empty_result(source_code, "running")
 
     try:
@@ -296,8 +299,8 @@ def run_incremental_sync(
     source: str,
     today: date | None = None,
 ) -> dict[str, Any]:
-    """Vercel Cron용: 지정 수집원의 오늘 등록분만 멱등 동기화합니다."""
-    target_date = today or datetime.now(ZoneInfo("Asia/Seoul")).date()
+    """Vercel Cron용: 누락분과 전날 등록분을 포함해 멱등 동기화합니다."""
+    target_date = today or datetime.now(KOREA_TIMEZONE).date()
     result = _sync_source(
         SupabaseIngestionStore.from_environment(),
         source=source,
@@ -313,7 +316,7 @@ def run_incremental_sync(
 
 def run_daily_sync(today: date | None = None) -> dict[str, Any]:
     """수동 복구용: 두 출처의 누락 구간을 보존기간 안에서 보완합니다."""
-    target_date = today or datetime.now(ZoneInfo("Asia/Seoul")).date()
+    target_date = today or datetime.now(KOREA_TIMEZONE).date()
     store = SupabaseIngestionStore.from_environment()
     source_results = [
         _sync_source(store, source=source, today=target_date)
