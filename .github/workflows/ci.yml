@@ -1,31 +1,45 @@
 name: CI
+
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   tests:
     name: pytest
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      KAKAO_REST_API_KEY: test-kakao-rest-key
+      KAKAO_JAVASCRIPT_KEY: test-kakao-js-key
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_SECRET_KEY: test-supabase-secret
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
+
       - name: Install Python 3.12
         run: uv python install 3.12
+
       - name: Install locked dependencies
         run: uv sync --locked
+
       - name: Run tests
         run: uv run --with 'pytest>=8,<9' pytest -q
