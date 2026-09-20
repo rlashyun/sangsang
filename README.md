@@ -19,6 +19,32 @@ uv sync --locked
 `uv.lock`은 반드시 Git에 포함하고 `.venv`와 `.env`는 포함하지 않습니다.
 uv 캐시는 사용자 캐시 디렉토리를 사용하므로 프로젝트와 Git에 포함되지 않습니다.
 
+## 프런트엔드 개발 환경
+
+프런트엔드는 `frontend/`의 Vite + React + TypeScript 앱입니다. Node.js
+20.19 이상 또는 22.12 이상을 사용합니다.
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Vite 개발 서버는 `/api` 요청을 `http://127.0.0.1:8000`의 FastAPI 서버로
+전달합니다. 지도까지 확인하려면 프로젝트 루트의 `.env`에 카카오 키를 설정하고
+별도 터미널에서 `uv run kakao-map`을 함께 실행하세요.
+
+배포용 프런트엔드 파일은 다음 명령으로 생성합니다.
+
+```powershell
+cd frontend
+npm run build
+```
+
+빌드 결과는 `src/retriever_lost_found/web/static/`에 생성되며 FastAPI와 Vercel이
+기존과 동일한 URL로 제공합니다. React 소스를 수정한 경우 생성된 정적 파일도 함께
+갱신합니다.
+
 ## API 키
 
 `.env.example`을 복사해 `.env`를 만들고 인증키를 입력합니다.
@@ -129,6 +155,7 @@ uv run sync-found-items --today 2026-08-28
 
 ```text
 api/                         Vercel FastAPI 진입점
+frontend/                    Vite·React·TypeScript 프런트엔드 소스
 src/retriever_lost_found/
 ├─ config.py                 환경 변수 로딩
 ├─ web/                      웹 앱·Cron·정적 UI
