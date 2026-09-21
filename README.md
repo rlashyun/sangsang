@@ -96,6 +96,12 @@ Vercel에서는 Production·Preview·Development 환경을 구분해 값을 설�
 
 기관 좌표와 물품 수는 로컬·배포 환경 모두 Supabase에서 조회합니다.
 
+Vercel 함수는 [vercel.json](./vercel.json)의 `regions`에 따라 **서울(`icn1` =
+AWS `ap-northeast-2`)** 에서 실행합니다. Supabase·경찰청 API·카카오 API가 모두
+한국에 있으므로 함수도 같은 지역에 두어야 왕복 지연이 줄어듭니다. Vercel의 기본값은
+`iad1`(미국 버지니아)이라 명시하지 않으면 모든 DB 왕복이 태평양을 건넙니다.
+Hobby 요금제는 단일 리전만 허용하므로 `regions`에는 한 곳만 적습니다.
+
 ## 일일 데이터 동기화
 
 두 경찰청 API에서 6개 서비스 카테고리만 선별해 Supabase에 멱등 upsert합니다.
