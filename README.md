@@ -103,6 +103,11 @@ Vercel에서는 Production·Preview·Development 환경을 구분해 값을 설�
 10일·20일 구간을 다시 내려받지 않습니다. API 조회와 모든 upsert가 성공한 출처만
 연계기관 10일, 경찰관서 20일 보존기간 밖의 데이터를 삭제합니다.
 
+보존기간 삭제는 5,000건씩 배치로 나눠 반복 실행합니다. 만료분 전량을 단일
+DELETE로 지우면 `found_items`가 커졌을 때 Postgres `statement_timeout`에 걸려
+(`57014`) 한 건도 지우지 못합니다. 한 실행의 상한은 40배치(20만 건)이며, 남은
+만료분은 다음 실행이 이어서 지웁니다. 수집이 멱등이므로 중간에 멈춰도 안전합니다.
+
 ```powershell
 uv run sync-found-items
 uv run sync-found-items --today 2026-08-28

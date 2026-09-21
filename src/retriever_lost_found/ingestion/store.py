@@ -17,6 +17,12 @@ SOURCE_LOCATION_CODES = {
     "police_api": "esri_police",
 }
 UPSERT_BATCH_SIZE = 250
+# PRD 4.5 — 보존기간 삭제를 Postgres statement_timeout 안에서 끝내기 위한 배치 크기.
+# 전량 단일 DELETE는 found_items가 커지면 57014로 취소되어 삭제가 0건이 된다.
+DELETE_BATCH_SIZE = 5000
+# PRD 5 신뢰성 — 한 실행이 Vercel 함수 300초 예산을 삭제로 다 쓰지 않도록 둔 상한.
+# 남은 만료분은 다음 실행이 이어서 지운다(멱등).
+DELETE_MAX_BATCHES = 40
 
 
 class RunAlreadyActive(RuntimeError):
@@ -274,14 +280,26 @@ class SupabaseIngestionStore:
             )
 
     def delete_expired(self, source_code: str) -> int:
-        result = self._request(
-            "POST",
-            "rpc/delete_expired_found_items",
-            payload={"p_source_code": source_code},
-        )
-        if not isinstance(result, list) or len(result) != 1:
-            raise SupabaseRequestError("만료 데이터 삭제 결과를 확인하지 못했습니다.")
-        return int(result[0].get("deleted_count", 0))
+        """만료 데이터를 배치로 나눠 삭제하고 지운 총 건수를 반환합니다.
+
+        PRD 4.5 — 전량 단일 DELETE는 found_items가 커지면 Postgres
+        statement_timeout(57014)에 걸려 한 건도 지우지 못한다. 배치가 가득 차면
+        더 남은 것으로 보고 반복하고, 짧은 배치가 나오면 끝난 것으로 본다.
+        """
+        total = 0
+        for _ in range(DELETE_MAX_BATCHES):
+            result = self._request(
+                "POST",
+                "rpc/delete_expired_found_items",
+                payload={"p_source_code": source_code, "p_limit": DELETE_BATCH_SIZE},
+            )
+            if not isinstance(result, list) or len(result) != 1:
+                raise SupabaseRequestError("만료 데이터 삭제 결과를 확인하지 못했습니다.")
+            deleted = int(result[0].get("deleted_count", 0))
+            total += deleted
+            if deleted < DELETE_BATCH_SIZE:
+                break
+        return total
 
 
 def chunks(
