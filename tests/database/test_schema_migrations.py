@@ -34,6 +34,34 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("security invoker", hardening.lower())
         self.assertIn("grant execute", hardening.lower())
 
+    def test_retention_delete_is_batched_and_service_role_only(self) -> None:
+        # PRD 4.5 — 전량 단일 DELETE는 statement_timeout(57014)에 걸린다.
+        # 줄바꿈에 묶이지 않도록 공백을 정규화하고 비교한다.
+        batched = " ".join(
+            (MIGRATIONS / "20260921011500_batch_delete_expired_found_items.sql")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+
+        # 옛 단일 인자 함수를 남기면 오버로드가 되어 호출이 모호해진다.
+        self.assertIn(
+            "drop function if exists public.delete_expired_found_items(text)", batched
+        )
+        self.assertIn("p_limit", batched)
+        self.assertIn("security invoker", batched)
+        # 절대규칙 6 — service_role 전용, anon/authenticated 접근 금지.
+        self.assertIn(
+            "revoke all on function public.delete_expired_found_items(text, integer)"
+            " from public, anon, authenticated",
+            batched,
+        )
+        self.assertIn(
+            "grant execute on function"
+            " public.delete_expired_found_items(text, integer) to service_role",
+            batched,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
