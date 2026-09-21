@@ -30,8 +30,10 @@ as $$
           and (p_source_code is null or s.code = p_source_code)
     ),
     expiring as materialized (
-        -- found_items_source_registered_idx (item_source_code, registered_on)를 타고
-        -- LIMIT에서 조기 종료한다.
+        -- 작업량을 묶는 것은 LIMIT이다. retention_days가 조인된 item_sources에서
+        -- 오므로 조건이 상수가 아니고, 계획은 인덱스가 아닌 seq scan + LIMIT이
+        -- 된다. 조기 종료는 그대로 일어난다.
+        -- PG16 실측: 30만 행·대부분 만료 1.8ms / 4만 행·만료 소수 16.7ms.
         select fi.id
         from public.found_items as fi
         join target_sources as ts on fi.item_source_code = ts.code
