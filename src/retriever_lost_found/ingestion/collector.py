@@ -36,7 +36,8 @@ CSV_FIELDS = (
     "raw_payload",
 )
 
-SOURCE_RETENTION_DAYS = {"partner": 10, "police": 20}
+# PRD 3.1-2, 4.1 — 두 출처 모두 등록일 기준 180일을 보존합니다.
+SOURCE_RETENTION_DAYS = {"partner": 180, "police": 180}
 SOURCE_CODES = {"partner": "partner_api", "police": "police_api"}
 
 

@@ -114,7 +114,7 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertTrue(store.deleted)
         self.assertEqual(store.upserted[0]["storage_location_id"], 123)
         self.assertEqual(store.upserted[0]["location_match_status"], "matched")
-        self.assertEqual(store.windows, [(date(2026, 8, 18), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 3, 1), date(2026, 8, 27))])
         self.assertEqual(store.finished[0]["status"], "succeeded")
 
     @patch.object(daily_ingestion, "collect_selected_rows")
@@ -130,7 +130,7 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertFalse(store.deleted)
         self.assertEqual(store.finished[0]["deleted_count"], 0)
-        self.assertEqual(store.windows, [(date(2026, 8, 8), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 3, 1), date(2026, 8, 27))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
