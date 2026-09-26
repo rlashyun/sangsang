@@ -109,6 +109,17 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 
 ## 6. 작업 규칙
 
+### 프런트엔드 작업 전 필수 문서
+
+프런트엔드 UI를 수정하기 전에는 아래 문서를 순서대로 읽는다.
+
+1. `docs/PRD.md` — 제품 범위와 요구사항
+2. `docs/ui-patterns.md` — 사용자 흐름과 상태별 동작
+3. `docs/design-system.md` — 시각 원칙과 디자인 토큰
+4. `docs/frontend-guidelines.md` — React 구조, 구현 및 검증 규칙
+
+문서 우선순위는 **PRD → UI 패턴 → 디자인 시스템 → 프런트엔드 구현 가이드 → 현재 코드**다. 하위 문서나 코드가 상위 문서와 충돌하면 임의로 해석하지 말고 개발자에게 확인한다. `[결정 필요: ...]`로 표시된 항목은 결정 전까지 권장안을 사양으로 간주하지 않는다.
+
 | 규칙 | 이유 |
 | --- | --- |
 | **구현 근거를 PRD 절 번호·ID로 주석에 남긴다** — `# PRD 4.5 — 부분일치 금지` | 나중에 왜 그렇게 짰는지 복원 가능해야 한다 |
@@ -123,7 +134,9 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 
 ### 세션 완료 조건
 
-① PRD의 해당 항목 충족 ② `uv run pytest` 통과 ③ 근거 주석 존재 ④ 환경 변수·문서 갱신 반영
+① PRD의 해당 항목 충족 ② `uv run --with 'pytest>=8,<9' pytest -q` 통과 ③ 근거 주석 존재 ④ 환경 변수·문서 갱신 반영
+
+프런트엔드를 변경했다면 `frontend/`에서 `npm run build`와 관련 웹 테스트를 추가로 실행한다. 중요한 UI 변경은 앱을 직접 실행해 모바일·데스크톱과 loading·empty·error·disabled 상태를 확인한다.
 
 ---
 
@@ -149,6 +162,9 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 | --- | --- |
 | **`docs/PRD.md`** | 착수 전 1회, 그리고 작업 항목마다 — 범위·우선순위·예외 케이스 |
 | **`docs/open-questions.md`** | 9장 항목을 맡았을 때 — D1~D6 결정 근거, 열린 질문(`Q1`~`Q6`), PRD의 "결정 필요" 항목 |
+| **`docs/ui-patterns.md`** | UI 작업 전 — 사용자 흐름, 지도·목록 관계, 상태별 동작 |
+| **`docs/design-system.md`** | UI 작업 전 — 시각 원칙, 색상·간격·radius·shadow 토큰, 접근성 |
+| **`docs/frontend-guidelines.md`** | React 작업 전 — 파일 역할, 상태·API·라우팅·테스트 규칙 |
 | **`README.md`** | 환경 구성·실행 명령·환경 변수 |
 | `.env.example` | 필요한 환경 변수 목록 |
 | `supabase/migrations/` | 스키마의 사실상 원본 |
@@ -175,12 +191,18 @@ Claude 전용 지침이 필요하면 `CLAUDE.md`의 import **아래에** 덧붙�
 
 ```
 api/index.py                 Vercel 진입점 (web/app.py의 FastAPI app 재사용)
+frontend/                    React + TypeScript + Vite 소스
+├─ src/api/                  브라우저 API 클라이언트
+├─ src/components/           검색 · 지도 · 습득물 UI 컴포넌트
+├─ src/lib/                  거리 계산 · 표현 유틸리티
+├─ src/router.tsx            React Router 라우트
+└─ src/styles.css            전역 스타일 · 디자인 토큰 적용 위치
 src/retriever_lost_found/
 ├─ config.py                 환경 변수 로딩
 ├─ ingestion/                카테고리 선별 · 수집 · 저장 · 동기화 · 기관 매칭
 ├─ integrations/             Kakao · Supabase · 경찰청 API 연동
 ├─ search/fuzzy.py           가중 퍼지 유사도와 랭킹
-└─ web/                      FastAPI 라우트 · 크론 · 정적 UI
+└─ web/                      FastAPI 라우트 · 크론 · Vite 빌드 결과 제공
 supabase/migrations/         재현 가능한 DB 스키마
 tests/                       기능 영역별 테스트
 ```
@@ -202,11 +224,11 @@ tests/                       기능 영역별 테스트
 | No | 항목 | 사양 (PRD) | 현재 코드 | **결정 (2026-09-21)** |
 | --- | --- | --- | --- | --- |
 | **D1** | 보존기간 | 연계기관·경찰관서 **6개월** (3.1-2, 4.1) | **6개월 / 6개월** | **운영 DB 변경·일회성 백필 완료. 코드 변경은 이 브랜치에 반영** |
-| **D2** | 유사도 % 노출 | PRD 자기모순이었음 | `found-items.js`가 `유사도 87%`로 **표시 중** | **숨긴다.** PRD 3.1-6·4.5를 살리고 **4.1 차별점 2를 수정**. 코드에서 % 표시 제거 |
-| **D3** | 검색어 길이 상한 | **30자** (3.3) | `app.py` **100자**, `index.html` maxlength 200(장소)/100(물품) | **30자로 내린다** (PRD 3.3대로) — 아래 |
-| **D4** | 반경 1·3·5km 선택 | **P0.** PRD는 "완료 ✅"로 적혀 있으나 **미구현** (3.1-3, 4.2) | `SEARCH_RADIUS_METERS = 1000` **고정, 선택 UI 없음** | **PRD의 ✅ 표기를 먼저 정정.** 구현 시점은 D6 일정을 보고 별도로 정한다 |
+| **D2** | 유사도 % 노출 | PRD 자기모순이었음 | `FoundItemBrowser.tsx`가 `유사도 87%`로 **표시 중** | **숨긴다.** PRD 3.1-6·4.5를 살리고 **4.1 차별점 2를 수정**. 코드에서 % 표시 제거 |
+| **D3** | 검색어 길이 상한 | **30자** (3.3) | `app.py` **100자**, `FoundItemBrowser.tsx` maxLength 100 | **30자로 내린다** (PRD 3.3대로) — 아래 |
+| **D4** | 반경 1·3·5km 선택 | **P0.** PRD는 "완료 ✅"로 적혀 있으나 **미구현** (3.1-3, 4.2) | `SEARCH_RADIUS_METERS = 1000` **고정, 선택 UI 없음** | **PRD의 ✅ 표기를 먼저 정정.** UI 우선순위를 정한 뒤 구현한다 |
 | **D5** | 매칭 실패 대응 | **P0.** "스크립트 존재"로 적혀 있음 (4.3-D) | `tools/` 전체가 커밋 `09cca07`에서 **삭제됨**. README 구조도에는 남아 있음 | **관측부터.** 현재 매칭률을 먼저 측정하고, 그 수치를 보고 도구를 정한다 |
-| **D6** | 프런트엔드 스택 | **React + TypeScript + Vite + React Router** (10 부록) | 정적 HTML/CSS/JS (`web/static/`) | **전환한다.** 전환 전까지 UI 작업은 `web/static/`에 |
+| **D6** | 프런트엔드 스택 | **React + TypeScript + Vite + React Router** (10 부록) | `frontend/` 소스를 Vite로 빌드해 FastAPI가 정적 제공 | **전환 완료.** UI 소스는 `frontend/`, `web/static/`은 빌드 결과로 관리 |
 
 ⚠️ **D1 — 보존기간은 두 군데에 있다.** `SOURCE_RETENTION_MONTHS`(수집 창)와 DB `item_sources.retention_months`(삭제)를 모두 6개월로 유지한다. 오늘은 수집하지 않고 어제까지 완료된 날짜만 대상으로 한다. 과거 누락분은 2026-09-26에 일회성으로 채웠다.
 
@@ -220,15 +242,15 @@ tests/                       기능 영역별 테스트
 
 | No | 파일 | 변경 |
 | --- | --- | --- |
-| **D2** | `web/static/found-items.js` | 결과 카드의 `match-score` span 생성·삽입 제거 |
-| **D2** | `web/static/styles.css` | `.match-score` 규칙 제거 |
-| **D3** | `web/app.py` — `found_items()` | 상한 `100` → **`30`**, 오류 메시지의 자릿수도 함께 |
-| **D3** | `web/static/index.html` — `#found-item-input` | `maxlength="100"` → **`"30"`** |
+| **D2** | `frontend/src/components/FoundItemBrowser.tsx` | 결과 카드의 `match-score` span 생성·삽입 제거 |
+| **D2** | `frontend/src/styles.css` | `.match-score` 규칙 제거 |
+| **D3** | `src/retriever_lost_found/web/app.py` — `found_items()` | 상한 `100` → **`30`**, 오류 메시지의 자릿수도 함께 |
+| **D3** | `frontend/src/components/FoundItemBrowser.tsx` — `#found-item-input` | `maxLength={100}` → **`{30}`** |
 
 **건드리지 말 것**
 
 - `tests/web/test_kakao_map.py`의 `match_score` 단언 — D2는 **화면 노출만** 막는다. 랭킹 점수 자체는 내부 평가에 계속 쓴다(PRD 4.5). 이 테스트는 그대로 둔다
-- `index.html`의 `maxlength="200"` — **장소 검색칸**이다. PRD 3.3의 30자는 **습득물 검색어**에만 해당한다
+- `frontend/src/components/LocationSearch.tsx`의 `maxLength={200}` — **장소 검색칸**이다. PRD 3.3의 30자는 **습득물 검색어**에만 해당한다
 
 **같이 해야 할 것**
 
@@ -238,7 +260,7 @@ tests/                       기능 영역별 테스트
 **코드 변경이 아닌 것**
 
 - **D5 관측** — 코드를 고칠 필요가 없다. `ingestion_runs`의 `unmatched_count / selected_count`를 조회하면 된다. 수치를 본 뒤에 도구를 정한다
-- **D4 구현 시점** — 미정. D6(React 전환) 일정을 보고 정한다
+- **D4 구현 시점** — 미정. React 전환은 끝났으므로 UI 우선순위를 정한 뒤 진행한다
 
 ---
 
@@ -314,3 +336,4 @@ PRD 7.1의 마일스톤은 **날짜가 고정되어 있지 않다("유동적으�
 | 2026-09-21 | D1~D6 결정 기록. D3는 30자로 확정. 필요한 코드 변경을 9.2에 목록화 — **코드는 아직 미반영** |
 | 2026-09-21 | 9장의 결정 근거·열린 질문을 `docs/open-questions.md`로 분리 (349줄 → 295줄). 결정 요약표와 코드 변경 목록만 남김 |
 | 2026-09-21 | **`main` 보호가 실제로는 꺼져 있음을 확인하고 6·10장을 현재 상태대로 정정.** CODEOWNERS 승인·`pytest` 필수 체크가 강제된다고 적혀 있었으나 룰셋 `enforcement`가 `disabled`다. 9.2 D1(보존기간)·D4(반경)와 같은 "문서는 됐다는데 실제로는 아닌" 항목이 규칙 영역에도 있었던 셈 |
+| 2026-09-26 | 프런트엔드 문서 지도와 작업 전 읽기 순서를 추가하고, React 전환 완료 상태 및 현재 파일 경로를 반영. `docs/{ui-patterns,design-system,frontend-guidelines}.md` 초안 추가 |
