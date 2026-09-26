@@ -33,53 +33,60 @@
 
 ## 3. 디자인 토큰
 
-새 UI를 만들거나 기존 CSS를 수정할 때 아래 의미 기반 이름을 사용한다. 같은 의미의 값을 컴포넌트마다 새로 만들지 않는다. 현재 CSS의 직접 입력된 값은 점진적으로 이 토큰으로 옮긴다.
+현재 화면에 사용 중인 색상은 `frontend/src/styles.css`의 `:root`에 의미 기반 CSS 변수로 구현되어 있다. 새 UI를 만들거나 기존 CSS를 수정할 때 같은 의미의 값을 컴포넌트마다 새로 만들지 않고 해당 토큰을 사용한다.
+
+토큰은 다음 역할별로 나뉜다.
+
+- 기본 표면과 텍스트: `--color-bg-*`, `--color-text-*`
+- 브랜드와 행동: `--color-action-*`, `--color-brand-*`, `--color-focus*`
+- 상태: `--color-error`, `--color-warning`, `--color-info`, `--color-loading`
+- 부드러운 배경: hover, selected, disabled, placeholder
+- 경계와 오버레이: `--color-border-*`, `--color-overlay-*`
+- 지도 캔버스: `--color-map-*`, `--color-source-*`
+
+아래는 구조를 보여주는 대표 토큰이다. 전체 목록과 현재 값의 원본은 `frontend/src/styles.css`다.
 
 ```css
 :root {
-  /* Color */
   --color-bg-page: #edf2ee;
-  --color-bg-surface: #ffffff;
-  --color-bg-subtle: #f4f8f5;
+  --color-bg-surface: #fff;
   --color-text-primary: #17211d;
   --color-text-secondary: #69756f;
-  --color-text-muted: #8a948f;
-  --color-border: #d7dfda;
-  --color-primary: #178459;
-  --color-primary-strong: #0f7a4d;
-  --color-primary-soft: #eaf6ef;
+  --color-text-on-solid: #fff;
+
+  --color-focus: #178459;
+  --color-action-primary: #172f25;
+  --color-action: #176f4d;
+  --color-action-hover: #0f7a4d;
+  --color-brand-accent: #18845a;
+
+  --color-bg-hover: #f4f8f5;
+  --color-bg-selected: #eaf6ef;
+  --color-border-input: #d7dfda;
   --color-error: #b32d2d;
   --color-warning: #a66a18;
   --color-info: #2878d4;
+
   --color-source-partner: #18845a;
   --color-source-police: #f2b825;
-
-  /* Spacing: 4px 기준 */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
-
-  /* Radius */
-  --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 26px;
-  --radius-pill: 999px;
-
-  /* Shadow */
-  --shadow-panel: 0 18px 55px rgba(32, 52, 43, 0.09);
-  --shadow-floating: 0 8px 24px rgba(27, 54, 42, 0.14);
-
-  /* Typography */
-  --font-sans: Pretendard, "Noto Sans KR", system-ui, -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-map-radius-stroke: #13845a;
+  --color-map-radius-fill: #31a979;
 }
 ```
 
-토큰 추가가 필요하면 기존 토큰으로 표현할 수 없는 이유를 먼저 확인한다. 일회성 색상·간격·radius·shadow를 추가하지 않는다.
+카카오맵 SDK에 객체나 SVG 문자열로 전달해야 하는 색상도 `frontend/src/lib/theme.ts`를 통해 같은 CSS 변수를 읽는다. 따라서 향후 테마를 만들 때 CSS 토큰만 바꾸면 일반 UI와 지도 표현이 함께 바뀐다.
+
+현재는 **색상과 색상을 포함한 그림자만 토큰화되어 있다.** 간격·radius·타이포그래피 크기 토큰은 아직 구현하지 않았다. 토큰 추가가 필요하면 기존 토큰으로 표현할 수 없는 이유를 먼저 확인하고, 일회성 색상값을 컴포넌트에 직접 추가하지 않는다.
+
+### 개발용 테마 비교
+
+Vite 개발 서버에서만 화면 오른쪽 아래에 작은 테마 선택기를 표시한다. 선택한 값은 같은 브라우저에 저장되며 일반 UI와 지도 색상에 함께 적용된다.
+
+- `Warm`: 밝은 아이보리와 부드러운 갈색
+- `Cocoa`: 짙은 갈색과 절제된 크림색
+- `Modern`: 아이보리와 진한 갈색에 코랄을 제한적으로 사용한 균형형
+
+이 기능은 최종 브랜드 방향을 비교하기 위한 도구다. 배포 빌드에는 선택기를 표시하지 않으며, 세 안 중 하나를 최종안으로 확정한 뒤 기본 토큰에 반영하고 비교용 코드는 제거한다.
 
 ## 4. 색상 사용 규칙
 

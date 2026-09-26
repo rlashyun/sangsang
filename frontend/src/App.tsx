@@ -5,12 +5,23 @@ import { FoundItemBrowser } from "./components/FoundItemBrowser";
 import { KakaoMap, type KakaoMapHandle } from "./components/KakaoMap";
 import { LocationSearch } from "./components/LocationSearch";
 import { SelectionSummary } from "./components/SelectionSummary";
+import { ThemePreview } from "./components/ThemePreview";
 import { distanceMeters, SEARCH_RADIUS_METERS } from "./lib/geo.js";
 import { normalizePlace } from "./lib/presentation";
+import {
+  applyPreviewTheme,
+  readPreviewTheme,
+  type PreviewTheme,
+} from "./lib/theme";
 import type { Institution, Place, SelectionSummary as SelectionSummaryValue } from "./types";
 
 export function App() {
   const mapRef = useRef<KakaoMapHandle>(null);
+  const [previewTheme, setPreviewTheme] = useState<PreviewTheme>(() => {
+    const theme = import.meta.env.DEV ? readPreviewTheme() : "retriever-modern";
+    if (import.meta.env.DEV) applyPreviewTheme(theme);
+    return theme;
+  });
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [institutionsLoaded, setInstitutionsLoaded] = useState(false);
   const [institutionError, setInstitutionError] = useState("");
@@ -170,47 +181,56 @@ export function App() {
       ? "숫자를 누르면 확대 · 핀을 누르면 기관 정보"
       : "확대하면 개별 기관을 볼 수 있어요");
 
+  function handlePreviewThemeChange(theme: PreviewTheme) {
+    applyPreviewTheme(theme);
+    setPreviewTheme(theme);
+  }
+
   return (
-    <main className="app-shell">
-      <section className={`search-panel${selection ? " items-view" : ""}`} aria-labelledby="page-title">
-        <LocationSearch
-          results={places}
-          selectedPlace={selectedPlace}
-          status={locationStatus}
-          statusIsError={locationStatusIsError}
-          isSearching={isSearching}
-          onSearch={(query) => { void handleSearch(query); }}
-          onSelect={handlePlaceSelect}
-        />
-
-        {selection && (
-          <SelectionSummary selection={selection} onChangeLocation={resetLocation} />
-        )}
-
-        {selection && (
-          <FoundItemBrowser
-            scope={activeScope}
-            scopeTitle={activeScopeTitle}
-            radiusScope={radiusScope}
-            onShowRadius={showRadiusItems}
+    <>
+      <main className="app-shell">
+        <section className={`search-panel${selection ? " items-view" : ""}`} aria-labelledby="page-title">
+          <LocationSearch
+            results={places}
+            selectedPlace={selectedPlace}
+            status={locationStatus}
+            statusIsError={locationStatusIsError}
+            isSearching={isSearching}
+            onSearch={(query) => { void handleSearch(query); }}
+            onSelect={handlePlaceSelect}
           />
-        )}
-      </section>
 
-      <KakaoMap
-        ref={mapRef}
-        institutions={institutions}
-        institutionsLoaded={institutionsLoaded}
-        institutionError={institutionError}
-        countsAvailable={countsAvailable}
-        places={places}
-        selectedPlace={selectedPlace}
-        visibleInstitutions={visibleInstitutions}
-        mapBadge={mapBadge}
-        onPlaceSelect={handlePlaceSelect}
-        onInstitutionSelect={handleInstitutionSelect}
-        onResetRadius={resetLocation}
-      />
-    </main>
+          {selection && (
+            <SelectionSummary selection={selection} onChangeLocation={resetLocation} />
+          )}
+
+          {selection && (
+            <FoundItemBrowser
+              scope={activeScope}
+              scopeTitle={activeScopeTitle}
+              radiusScope={radiusScope}
+              onShowRadius={showRadiusItems}
+            />
+          )}
+        </section>
+
+        <KakaoMap
+          themeKey={previewTheme}
+          ref={mapRef}
+          institutions={institutions}
+          institutionsLoaded={institutionsLoaded}
+          institutionError={institutionError}
+          countsAvailable={countsAvailable}
+          places={places}
+          selectedPlace={selectedPlace}
+          visibleInstitutions={visibleInstitutions}
+          mapBadge={mapBadge}
+          onPlaceSelect={handlePlaceSelect}
+          onInstitutionSelect={handleInstitutionSelect}
+          onResetRadius={resetLocation}
+        />
+      </main>
+      <ThemePreview theme={previewTheme} onChange={handlePreviewThemeChange} />
+    </>
   );
 }

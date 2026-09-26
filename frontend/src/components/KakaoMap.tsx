@@ -9,6 +9,11 @@ import {
 
 import { distanceMeters, markerCountLabel, SEARCH_RADIUS_METERS } from "../lib/geo.js";
 import { escapeHtml } from "../lib/presentation";
+import {
+  readMapColorTokens,
+  type MapColorTokens,
+  type PreviewTheme,
+} from "../lib/theme";
 import type { Institution, Place } from "../types";
 
 declare global {
@@ -24,6 +29,7 @@ export interface KakaoMapHandle {
 }
 
 interface KakaoMapProps {
+  themeKey: PreviewTheme;
   institutions: Institution[];
   institutionsLoaded: boolean;
   institutionError: string;
@@ -41,27 +47,22 @@ function coordinateKey(institution: Institution) {
   return `${institution.latitude.toFixed(7)},${institution.longitude.toFixed(7)}`;
 }
 
-function clusterStyles() {
-  return [
-    [42, "#f39a45"],
-    [48, "#f18a37"],
-    [56, "#ee7d2f"],
-    [64, "#e96e24"],
-    [72, "#df5c19"],
-  ].map(([rawSize, color]) => {
+function clusterStyles(colors: MapColorTokens) {
+  return colors.clusterFills.map((color, index) => {
+    const rawSize = [42, 48, 56, 64, 72][index];
     const size = Number(rawSize);
     return {
       width: `${size}px`,
       height: `${size}px`,
       background: `${color}e8`,
-      border: "2px solid rgba(215, 83, 16, .72)",
+      border: `2px solid ${colors.clusterBorder}`,
       borderRadius: "50%",
-      color: "#fff",
+      color: colors.textOnSolid,
       fontSize: size >= 64 ? "18px" : "15px",
       fontWeight: "800",
       lineHeight: `${size - 4}px`,
       textAlign: "center",
-      boxShadow: "0 5px 16px rgba(118, 54, 17, .22)",
+      boxShadow: `0 5px 16px ${colors.clusterShadow}`,
     };
   });
 }
@@ -116,6 +117,7 @@ function circleBounds(kakao: any, center: Place) {
 }
 
 export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function KakaoMap({
+  themeKey,
   institutions,
   institutionsLoaded,
   institutionError,
@@ -138,6 +140,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const countMarkerImagesRef = useRef(new Map<string, any>());
   const selectedPlaceRef = useRef<Place | null>(selectedPlace);
   const [mapReady, setMapReady] = useState(false);
+  const mapColors = useMemo(() => readMapColorTokens(), [themeKey]);
 
   selectedPlaceRef.current = selectedPlace;
 
@@ -175,6 +178,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     if (!mapReady || !mapRef.current) return;
     const kakao = window.kakao;
     const map = mapRef.current;
+    countMarkerImagesRef.current.clear();
     clustererRef.current?.clear();
     institutionMarkersRef.current.forEach((marker) => marker.setMap(null));
 
@@ -186,17 +190,29 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       groups.set(key, group);
     });
 
+    function fallbackMarkerImage(source: "partner" | "police") {
+      const pinColor = source === "police" ? mapColors.pinPolice : mapColors.pinPartner;
+      const shadowColor = source === "police"
+        ? mapColors.pinPoliceShadow
+        : mapColors.pinPartnerShadow;
+      const iconPath = source === "police"
+        ? "M19 10.5 28 15v2H10v-2l9-4.5ZM12 19h3v7h-3v-7Zm5.5 0h3v7h-3v-7Zm5.5 0h3v7h-3v-7ZM10 28h18v3H10v-3Z"
+        : "M11 14.5a2.5 2.5 0 0 1 2.5-2.5h11a2.5 2.5 0 0 1 2.5 2.5V27h-3v-3h-3.5v3h-3v-3H14v3h-3V14.5Zm4 1v3h3v-3h-3Zm5 0v3h3v-3h-3Z";
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="38" height="46" viewBox="0 0 38 46">`
+        + `<filter id="s" x="-30%" y="-20%" width="160%" height="160%"><feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="${shadowColor}" flood-opacity="${source === "police" ? ".3" : ".28"}"/></filter>`
+        + `<path filter="url(#s)" fill="${pinColor}" stroke="${mapColors.textOnSolid}" stroke-width="3" d="M19 1.5C9.06 1.5 1 9.56 1 19.5c0 12.28 15.65 24.08 16.31 24.58a2.82 2.82 0 0 0 3.38 0C21.35 43.58 37 31.78 37 19.5c0-9.94-8.06-18-18-18Z"/>`
+        + `<path fill="${mapColors.textOnSolid}" d="${iconPath}"/>`
+        + "</svg>";
+      return new kakao.maps.MarkerImage(
+        `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+        new kakao.maps.Size(38, 46),
+        { offset: new kakao.maps.Point(19, 46) },
+      );
+    }
+
     const fallbackImages = {
-      partner: new kakao.maps.MarkerImage(
-        "/institution-marker.svg",
-        new kakao.maps.Size(38, 46),
-        { offset: new kakao.maps.Point(19, 46) },
-      ),
-      police: new kakao.maps.MarkerImage(
-        "/police-marker.svg",
-        new kakao.maps.Size(38, 46),
-        { offset: new kakao.maps.Point(19, 46) },
-      ),
+      partner: fallbackMarkerImage("partner"),
+      police: fallbackMarkerImage("police"),
     };
 
     function countMarkerImage(source: string | undefined, rawItemCount: number | undefined) {
@@ -204,16 +220,16 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       const cacheKey = `${source}:${label}`;
       const cached = countMarkerImagesRef.current.get(cacheKey);
       if (cached) return cached;
-      const pinColor = source === "police" ? "#f2b825" : "#18845a";
+      const pinColor = source === "police" ? mapColors.pinPolice : mapColors.pinPartner;
       const badgeWidth = label.length >= 4 ? 32 : label.length === 3 ? 27 : 23;
       const badgeX = 55 - badgeWidth;
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="58" height="62" viewBox="0 0 58 62">`
-        + `<filter id="s" x="-30%" y="-25%" width="170%" height="180%"><feDropShadow dx="0" dy="3" stdDeviation="2.4" flood-color="#17211d" flood-opacity=".25"/></filter>`
-        + `<g filter="url(#s)"><path d="M28 4C16.4 4 7 13.4 7 25c0 16 21 33 21 33s21-17 21-33C49 13.4 39.6 4 28 4Z" fill="${pinColor}" stroke="#fff" stroke-width="3"/>`
-        + `<circle cx="28" cy="25" r="9.5" fill="#fff" fill-opacity=".96"/>`
+        + `<filter id="s" x="-30%" y="-25%" width="170%" height="180%"><feDropShadow dx="0" dy="3" stdDeviation="2.4" flood-color="${mapColors.pinShadow}" flood-opacity=".25"/></filter>`
+        + `<g filter="url(#s)"><path d="M28 4C16.4 4 7 13.4 7 25c0 16 21 33 21 33s21-17 21-33C49 13.4 39.6 4 28 4Z" fill="${pinColor}" stroke="${mapColors.textOnSolid}" stroke-width="3"/>`
+        + `<circle cx="28" cy="25" r="9.5" fill="${mapColors.textOnSolid}" fill-opacity=".96"/>`
         + `<path d="M22 21.5h12v7H22zM24 19h8v3h-8z" fill="${pinColor}"/></g>`
-        + `<rect x="${badgeX}" y="1" width="${badgeWidth}" height="23" rx="11.5" fill="#667382" stroke="#fff" stroke-width="2"/>`
-        + `<text x="${badgeX + badgeWidth / 2}" y="16.2" fill="#fff" font-family="Arial,sans-serif" font-size="11.5" font-weight="700" text-anchor="middle">${label}</text>`
+        + `<rect x="${badgeX}" y="1" width="${badgeWidth}" height="23" rx="11.5" fill="${mapColors.pinBadge}" stroke="${mapColors.textOnSolid}" stroke-width="2"/>`
+        + `<text x="${badgeX + badgeWidth / 2}" y="16.2" fill="${mapColors.textOnSolid}" font-family="Arial,sans-serif" font-size="11.5" font-weight="700" text-anchor="middle">${label}</text>`
         + "</svg>";
       const image = new kakao.maps.MarkerImage(
         `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
@@ -256,14 +272,14 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       minClusterSize: 2,
       gridSize: 70,
       calculator: [10, 50, 100, 300],
-      styles: clusterStyles(),
+      styles: clusterStyles(mapColors),
     });
 
     return () => {
       clustererRef.current?.clear();
       markers.forEach((marker) => marker.setMap(null));
     };
-  }, [countsAvailable, institutions, mapReady, onInstitutionSelect]);
+  }, [countsAvailable, institutions, mapColors, mapReady, onInstitutionSelect]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
@@ -323,10 +339,10 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       center: new kakao.maps.LatLng(selectedPlace.latitude, selectedPlace.longitude),
       radius: SEARCH_RADIUS_METERS,
       strokeWeight: 2,
-      strokeColor: "#13845a",
+      strokeColor: mapColors.radiusStroke,
       strokeOpacity: 0.55,
       strokeStyle: "solid",
-      fillColor: "#31a979",
+      fillColor: mapColors.radiusFill,
       fillOpacity: 0.1,
       zIndex: 1,
     });
@@ -339,7 +355,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       infoWindowRef.current.open(map, selectedMarker);
     }
     map.setBounds(circleBounds(kakao, selectedPlace), 48, 48, 48, 48);
-  }, [institutions, mapReady, selectedPlace]);
+  }, [institutions, mapColors, mapReady, selectedPlace]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;
