@@ -17,3 +17,6 @@ data/
 reports/
 frontend/node_modules/
 frontend/.tmp/
+
+# supabase link --project-ref 가 만드는 로컬 전용 상태
+supabase/.temp/

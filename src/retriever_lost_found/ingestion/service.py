@@ -7,13 +7,14 @@ import unicodedata
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from .collector import (
+    KOREA_TIMEZONE,
     SOURCE_CODES,
-    SOURCE_RETENTION_DAYS,
+    SOURCE_RETENTION_MONTHS,
     collect_selected_rows,
     create_source_client,
+    retention_start,
 )
 from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 
@@ -147,26 +148,28 @@ def _sync_source(
     today: date,
     incremental_only: bool = False,
 ) -> dict[str, Any]:
-    """한 출처를 동기화합니다. Cron은 당일만, 수동 실행은 누락 구간도 보완합니다."""
+    """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다."""
     if source not in SOURCE_ORDER:
         raise ValueError(f"지원하지 않는 수집원입니다: {source}")
     source_code = SOURCE_CODES[source]
-    retention_days = SOURCE_RETENTION_DAYS[source]
-    retention_start = today - timedelta(days=retention_days - 1)
+    window_start = retention_start(today, SOURCE_RETENTION_MONTHS[source])
+    window_end = today - timedelta(days=1)
+    latest_registered_on = store.latest_registered_on(source_code)
     if incremental_only:
-        start_date = today
+        # 전날 등록분을 다시 읽어 늦게 공개된 항목도 반영합니다.
+        start_candidate = min(latest_registered_on or window_start, window_end)
         trigger = "vercel_cron_incremental"
     else:
-        latest_registered_on = store.latest_registered_on(source_code)
-        start_date = max(retention_start, latest_registered_on or retention_start)
+        start_candidate = min(latest_registered_on or window_start, window_end)
         trigger = "manual_catchup"
+    start_date = max(window_start, start_candidate)
     result = _empty_result(source_code, "running")
 
     try:
         run_id = store.create_run(
             source_code,
             start_date,
-            today,
+            window_end,
             trigger=trigger,
         )
     except RunAlreadyActive:
@@ -186,7 +189,7 @@ def _sync_source(
             client,
             source=source,
             start_date=start_date,
-            end_date=today,
+            end_date=window_end,
             rows_per_page=100,
         )
         result["fetched"] = fetch_summary["fetched_count"]
@@ -213,7 +216,7 @@ def _sync_source(
         audit = _audit_values(
             result,
             start_date=start_date,
-            end_date=today,
+            end_date=window_end,
             trigger=trigger,
             fetch_summary=fetch_summary,
         )
@@ -224,7 +227,7 @@ def _sync_source(
         audit = _audit_values(
             result,
             start_date=start_date,
-            end_date=today,
+            end_date=window_end,
             trigger=trigger,
             error_message=error_message,
             upsert_completed=upsert_completed,
@@ -296,8 +299,8 @@ def run_incremental_sync(
     source: str,
     today: date | None = None,
 ) -> dict[str, Any]:
-    """Vercel Cron용: 지정 수집원의 오늘 등록분만 멱등 동기화합니다."""
-    target_date = today or datetime.now(ZoneInfo("Asia/Seoul")).date()
+    """Vercel Cron용: 누락분과 전날 등록분을 포함해 멱등 동기화합니다."""
+    target_date = today or datetime.now(KOREA_TIMEZONE).date()
     result = _sync_source(
         SupabaseIngestionStore.from_environment(),
         source=source,
@@ -313,7 +316,7 @@ def run_incremental_sync(
 
 def run_daily_sync(today: date | None = None) -> dict[str, Any]:
     """수동 복구용: 두 출처의 누락 구간을 보존기간 안에서 보완합니다."""
-    target_date = today or datetime.now(ZoneInfo("Asia/Seoul")).date()
+    target_date = today or datetime.now(KOREA_TIMEZONE).date()
     store = SupabaseIngestionStore.from_environment()
     source_results = [
         _sync_source(store, source=source, today=target_date)

@@ -1,6 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "fluid": true,
+  "regions": ["icn1"],
   "functions": {
     "api/index.py": {
       "maxDuration": 300,

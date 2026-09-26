@@ -122,21 +122,25 @@ Vercel에서는 Production·Preview·Development 환경을 구분해 값을 설�
 
 기관 좌표와 물품 수는 로컬·배포 환경 모두 Supabase에서 조회합니다.
 
-Esri Korea 공개 FeatureServer의 경찰관서 좌표를 두 CSV로 다시 내려받으려면 다음을 실행합니다.
-
-```powershell
-uv run sync-police-locations
-```
-
-- `data/esri_police_stations.csv`: 경찰서
-- `data/esri_police_substations.csv`: 지구대·파출소
+Vercel 함수는 [vercel.json](./vercel.json)의 `regions`에 따라 **서울(`icn1` =
+AWS `ap-northeast-2`)** 에서 실행합니다. Supabase·경찰청 API·카카오 API가 모두
+한국에 있으므로 함수도 같은 지역에 두어야 왕복 지연이 줄어듭니다. Vercel의 기본값은
+`iad1`(미국 버지니아)이라 명시하지 않으면 모든 DB 왕복이 태평양을 건넙니다.
+Hobby 요금제는 단일 리전만 허용하므로 `regions`에는 한 곳만 적습니다.
 
 ## 일일 데이터 동기화
 
 두 경찰청 API에서 6개 서비스 카테고리만 선별해 Supabase에 멱등 upsert합니다.
 각 출처의 마지막 등록일을 다시 포함해 누락된 늦은 등록 건을 보충하므로 매일 전체
-10일·20일 구간을 다시 내려받지 않습니다. API 조회와 모든 upsert가 성공한 출처만
-연계기관 10일, 경찰관서 20일 보존기간 밖의 데이터를 삭제합니다.
+6개월 구간을 다시 내려받지 않습니다. 오늘은 미완료 날짜로 보고 어제 등록분까지만
+수집합니다. API 조회와 모든 upsert가 성공한 출처만 연계기관·경찰관서 모두
+달력 기준 6개월 시작일보다 오래된 데이터를 삭제합니다. 예를 들어 9월 26일
+동기화의 대상은 3월 26일~9월 25일입니다.
+
+보존기간 삭제는 5,000건씩 배치로 나눠 반복 실행합니다. 만료분 전량을 단일
+DELETE로 지우면 `found_items`가 커졌을 때 Postgres `statement_timeout`에 걸려
+(`57014`) 한 건도 지우지 못합니다. 한 실행의 상한은 40배치(20만 건)이며, 남은
+만료분은 다음 실행이 이어서 지웁니다. 수집이 멱등이므로 중간에 멈춰도 안전합니다.
 
 ```powershell
 uv run sync-found-items
