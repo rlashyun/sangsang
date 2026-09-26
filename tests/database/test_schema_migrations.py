@@ -62,6 +62,18 @@ class SchemaMigrationTests(unittest.TestCase):
             batched,
         )
 
+    def test_retention_uses_six_calendar_months(self) -> None:
+        migration = (
+            MIGRATIONS / "20260925163815_calendar_six_month_retention.sql"
+        ).read_text(encoding="utf-8").lower()
+        korea_date_fix = (
+            MIGRATIONS / "20260925164317_use_korea_date_for_retention.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("rename column retention_days to retention_months", migration)
+        self.assertIn("set retention_months = 6", migration)
+        self.assertIn("make_interval(months => ts.retention_months", korea_date_fix)
+        self.assertIn("now() at time zone 'asia/seoul'", korea_date_fix)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,20 +5,21 @@ import json
 import re
 import unicodedata
 from collections.abc import Iterable
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from .collector import (
+    KOREA_TIMEZONE,
     SOURCE_CODES,
-    SOURCE_RETENTION_DAYS,
+    SOURCE_RETENTION_MONTHS,
     collect_selected_rows,
     create_source_client,
+    retention_start,
 )
 from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 
 
 SOURCE_ORDER = ("partner", "police")
-KOREA_TIMEZONE = timezone(timedelta(hours=9))
 
 
 def _normalize_key(value: Any) -> str:
@@ -151,25 +152,24 @@ def _sync_source(
     if source not in SOURCE_ORDER:
         raise ValueError(f"지원하지 않는 수집원입니다: {source}")
     source_code = SOURCE_CODES[source]
-    retention_days = SOURCE_RETENTION_DAYS[source]
-    retention_start = today - timedelta(days=retention_days - 1)
+    window_start = retention_start(today, SOURCE_RETENTION_MONTHS[source])
+    window_end = today - timedelta(days=1)
     latest_registered_on = store.latest_registered_on(source_code)
     if incremental_only:
-        # 오전 Cron 이후 같은 등록일로 추가되는 항목을 다음 실행에서 다시 확인합니다.
-        replay_from = today - timedelta(days=1)
-        start_candidate = min(latest_registered_on or retention_start, replay_from)
+        # 전날 등록분을 다시 읽어 늦게 공개된 항목도 반영합니다.
+        start_candidate = min(latest_registered_on or window_start, window_end)
         trigger = "vercel_cron_incremental"
     else:
-        start_candidate = min(latest_registered_on or retention_start, today)
+        start_candidate = min(latest_registered_on or window_start, window_end)
         trigger = "manual_catchup"
-    start_date = max(retention_start, start_candidate)
+    start_date = max(window_start, start_candidate)
     result = _empty_result(source_code, "running")
 
     try:
         run_id = store.create_run(
             source_code,
             start_date,
-            today,
+            window_end,
             trigger=trigger,
         )
     except RunAlreadyActive:
@@ -189,7 +189,7 @@ def _sync_source(
             client,
             source=source,
             start_date=start_date,
-            end_date=today,
+            end_date=window_end,
             rows_per_page=100,
         )
         result["fetched"] = fetch_summary["fetched_count"]
@@ -216,7 +216,7 @@ def _sync_source(
         audit = _audit_values(
             result,
             start_date=start_date,
-            end_date=today,
+            end_date=window_end,
             trigger=trigger,
             fetch_summary=fetch_summary,
         )
@@ -227,7 +227,7 @@ def _sync_source(
         audit = _audit_values(
             result,
             start_date=start_date,
-            end_date=today,
+            end_date=window_end,
             trigger=trigger,
             error_message=error_message,
             upsert_completed=upsert_completed,
