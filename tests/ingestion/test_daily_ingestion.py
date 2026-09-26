@@ -6,6 +6,7 @@ from datetime import date
 from unittest.mock import patch
 
 from retriever_lost_found.ingestion import service as daily_ingestion
+from retriever_lost_found.ingestion.collector import retention_start
 from retriever_lost_found.ingestion.store import LocationReference, RunAlreadyActive
 
 
@@ -114,7 +115,7 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertTrue(store.deleted)
         self.assertEqual(store.upserted[0]["storage_location_id"], 123)
         self.assertEqual(store.upserted[0]["location_match_status"], "matched")
-        self.assertEqual(store.windows, [(date(2026, 3, 1), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 2, 27), date(2026, 8, 26))])
         self.assertEqual(store.finished[0]["status"], "succeeded")
 
     @patch.object(daily_ingestion, "collect_selected_rows")
@@ -130,7 +131,7 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertFalse(store.deleted)
         self.assertEqual(store.finished[0]["deleted_count"], 0)
-        self.assertEqual(store.windows, [(date(2026, 3, 1), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 2, 27), date(2026, 8, 26))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
@@ -202,7 +203,7 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 26))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
@@ -230,7 +231,7 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 26))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
@@ -258,7 +259,27 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 26), date(2026, 8, 27))])
+        self.assertEqual(store.windows, [(date(2026, 8, 26), date(2026, 8, 26))])
+
+    def test_calendar_six_month_window_includes_march_26_not_today(self) -> None:
+        self.assertEqual(retention_start(date(2026, 9, 26)), date(2026, 3, 26))
+        self.assertEqual(retention_start(date(2026, 8, 31)), date(2026, 2, 28))
+        self.assertEqual(retention_start(date(2028, 8, 31)), date(2028, 2, 29))
+
+        store = FakeStore()
+        with patch.object(daily_ingestion, "create_source_client"), patch.object(
+            daily_ingestion, "collect_selected_rows"
+        ) as collect_rows:
+            collect_rows.return_value = (
+                [],
+                {
+                    "fetched_count": 0, "selected_count": 0,
+                    "invalid_count": 0, "outside_range_count": 0,
+                    "api_total_count": 0,
+                },
+            )
+            daily_ingestion._sync_source(store, source="partner", today=date(2026, 9, 26))
+        self.assertEqual(store.windows, [(date(2026, 3, 26), date(2026, 9, 25))])
 
 
 if __name__ == "__main__":

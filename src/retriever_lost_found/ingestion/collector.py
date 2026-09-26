@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import csv
 import json
 import sys
 import time
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -36,9 +37,19 @@ CSV_FIELDS = (
     "raw_payload",
 )
 
-# PRD 3.1-2, 4.1 — 두 출처 모두 등록일 기준 180일을 보존합니다.
-SOURCE_RETENTION_DAYS = {"partner": 180, "police": 180}
+# PRD 3.1-2, 4.1 — 완료된 어제까지 달력 기준 6개월을 보존합니다.
+SOURCE_RETENTION_MONTHS = {"partner": 6, "police": 6}
 SOURCE_CODES = {"partner": "partner_api", "police": "police_api"}
+KOREA_TIMEZONE = timezone(timedelta(hours=9))
+
+
+def retention_start(today: date, months: int = 6) -> date:
+    """오늘을 제외한 최근 달력상 months개월의 첫날을 반환합니다."""
+    month_index = today.year * 12 + today.month - 1 - months
+    year, month_zero_based = divmod(month_index, 12)
+    month = month_zero_based + 1
+    day = min(today.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 class PageClient(Protocol):
@@ -235,17 +246,22 @@ def main() -> int:
     )
     parser.add_argument("--source", choices=sorted(SOURCE_CODES), required=True)
     parser.add_argument("--start", help="조회 시작일 YYYY-MM-DD")
-    parser.add_argument("--end", help="조회 종료일 YYYY-MM-DD (기본: 오늘)")
+    parser.add_argument("--end", help="조회 종료일 YYYY-MM-DD (기본: 어제)")
     parser.add_argument("--rows", type=int, default=100)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    end_date = date.fromisoformat(args.end) if args.end else date.today()
-    default_days = SOURCE_RETENTION_DAYS[args.source]
+    end_date = (
+        date.fromisoformat(args.end)
+        if args.end
+        else datetime.now(KOREA_TIMEZONE).date() - timedelta(days=1)
+    )
     start_date = (
         date.fromisoformat(args.start)
         if args.start
-        else end_date - timedelta(days=default_days - 1)
+        else retention_start(
+            end_date + timedelta(days=1), SOURCE_RETENTION_MONTHS[args.source]
+        )
     )
 
     client = create_source_client(args.source)
