@@ -27,6 +27,14 @@ from retriever_lost_found.web.app import (
 )
 
 
+def _csp_directives(policy: str) -> dict[str, list[str]]:
+    directives = {}
+    for directive in policy.split(";"):
+        name, *sources = directive.split()
+        directives[name] = sources
+    return directives
+
+
 class FakeResponse:
     def __init__(self, payload) -> None:
         self.payload = payload
@@ -128,6 +136,23 @@ class KakaoLocalClientTests(unittest.TestCase):
 
         self.assertIn("http://t1.daumcdn.net", policy)
         self.assertIn("http://*.daumcdn.net", policy)
+
+    # PRD 3.2-2 — 습득물 사진(image_url)은 전부 minwon24.police.go.kr에서 온다 (운영 DB 2026-09-27 확인)
+    def test_csp_allows_police_item_photos_as_images(self) -> None:
+        directives = _csp_directives(_content_security_policy())
+
+        self.assertIn("https://minwon24.police.go.kr", directives["img-src"])
+
+    def test_csp_limits_police_photo_host_to_img_src(self) -> None:
+        directives = _csp_directives(_content_security_policy())
+
+        for name, sources in directives.items():
+            if name != "img-src":
+                self.assertNotIn("https://minwon24.police.go.kr", sources, name)
+        self.assertNotIn("http://minwon24.police.go.kr", directives["img-src"])
+        self.assertNotIn("https://*.police.go.kr", directives["img-src"])
+        self.assertNotIn("https:", directives["img-src"])
+        self.assertNotIn("*", directives["img-src"])
 
     def test_handler_requests_clusterer_library(self) -> None:
         url = _kakao_sdk_url("javascript-key")
