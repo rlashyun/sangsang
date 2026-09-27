@@ -55,7 +55,15 @@ class FakeFoundItemClient:
 
 
 class FakeMapLocationClient:
-    def fetch_locations(self) -> list[dict]:
+    def __init__(self, *, counts_error: bool = False, locations_error: bool = False) -> None:
+        self.counts_error = counts_error
+        self.locations_error = locations_error
+
+    def fetch_locations(self, *, with_counts: bool = True) -> list[dict]:
+        if with_counts and self.counts_error:
+            raise RuntimeError("Supabase 지도 위치 API HTTP 500: statement timeout")
+        if not with_counts and self.locations_error:
+            raise RuntimeError("Supabase 지도 위치 API 연결 실패: timed out")
         return [{
             "id": 77,
             "storage_location_id": 77,
@@ -68,7 +76,7 @@ class FakeMapLocationClient:
             "source": "partner",
             "longitude": 127.1,
             "latitude": 37.5,
-            "item_count": 4,
+            "item_count": 4 if with_counts else 0,
         }]
 
 
@@ -162,6 +170,31 @@ class KakaoLocalClientTests(unittest.TestCase):
         )
         self.assertIn("offset=0", request.full_url)
         self.assertEqual(request.headers["Authorization"], "Bearer server-secret")
+
+    @patch("urllib.request.urlopen")
+    def test_supabase_map_locations_without_counts_use_lightweight_rpc(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse([
+            {
+                "id": 101,
+                "location_source_code": "partner_csv",
+                "source_key": "partner:test",
+                "name": "테스트 보관소",
+                "address": "서울시 테스트로 1",
+                "phone": "",
+                "display_group": "partner",
+                "longitude": 127.1,
+                "latitude": 37.5,
+            }
+        ])
+        client = SupabaseMapLocationClient("https://example.supabase.co", "server-secret")
+
+        locations = client.fetch_locations(with_counts=False)
+
+        self.assertEqual(locations[0]["storage_location_id"], 101)
+        self.assertEqual(locations[0]["item_count"], 0)
+        request = urlopen.call_args.args[0]
+        self.assertIn("/rest/v1/rpc/map_locations?", request.full_url)
+        self.assertNotIn("map_locations_with_item_counts", request.full_url)
 
     @patch("urllib.request.urlopen")
     def test_supabase_map_locations_are_paginated_without_process_cache(self, urlopen) -> None:
@@ -312,6 +345,41 @@ class KakaoLocalClientTests(unittest.TestCase):
             response.headers["vercel-cdn-cache-control"],
             "public, s-maxage=300, stale-while-revalidate=600",
         )
+
+    def test_institution_endpoint_keeps_map_when_item_counts_fail(self) -> None:
+        # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=FakeMapLocationClient(counts_error=True),
+        )
+
+        response = TestClient(app).get("/api/institutions")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(payload["institutions"]), 1)
+        self.assertEqual(payload["institutions"][0]["storage_location_id"], 77)
+        self.assertFalse(payload["counts_available"])
+        self.assertIn("statement timeout", payload["count_error"])
+        self.assertEqual(
+            response.headers["vercel-cdn-cache-control"],
+            "public, s-maxage=60, stale-while-revalidate=60",
+        )
+
+    def test_institution_endpoint_fails_when_locations_are_unavailable(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=FakeMapLocationClient(
+                counts_error=True, locations_error=True
+            ),
+        )
+
+        response = TestClient(app).get("/api/institutions")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("연결 실패", response.json()["error"])
 
     def test_runtime_app_uses_supabase(self) -> None:
         environment = {
