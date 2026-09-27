@@ -323,6 +323,43 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["item_name"], "애플 아이폰")
         self.assertEqual(response.headers["cache-control"], "no-store")
 
+    # PRD 3.3 · D3 — 습득물 검색어 상한 30자. 경계값 양쪽을 쌍으로 확인한다.
+    def test_found_item_endpoint_accepts_query_of_30_characters(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=FakeFoundItemClient(),
+        )
+        query = "가" * 30
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "q": query},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["query"], query)
+
+    def test_found_item_endpoint_rejects_query_of_31_characters(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=FakeFoundItemClient(),
+        )
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "q": "가" * 31},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "습득물 검색어는 30자 이하여야 합니다.",
+        )
+
     def test_institution_endpoint_uses_database_locations_and_vercel_cdn_cache(self) -> None:
         app = create_app(
             KakaoLocalClient("kakao-secret"),

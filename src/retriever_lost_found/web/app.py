@@ -156,8 +156,9 @@ def create_app(
             )
         validated_ids = validate_location_ids(location_ids)
         search_query = q.strip()
-        if len(search_query) > 100:
-            raise ValueError("습득물 검색어는 100자 이하여야 합니다.")
+        # PRD 3.3 · D3 — 습득물 검색어 상한 30자 (장소 검색칸 200자와는 별개)
+        if len(search_query) > 30:
+            raise ValueError("습득물 검색어는 30자 이하여야 합니다.")
         candidates = found_item_client.fetch_items(validated_ids)
         matched_items = rank_found_items(candidates, search_query)
         return JSONResponse(
