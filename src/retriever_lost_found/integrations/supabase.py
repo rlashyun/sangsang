@@ -4,6 +4,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -121,6 +122,72 @@ class SupabaseFoundItemClient:
             if len(payload) < FOUND_ITEM_PAGE_SIZE:
                 return items
             offset += FOUND_ITEM_PAGE_SIZE
+
+
+class SupabaseSyncStatusClient:
+    """ingestion_runs에서 화면에 보여 줄 최종 갱신 시각을 읽습니다 (PRD 6)."""
+
+    # partial은 upsert까지 끝나고 보존기간 삭제·감사 기록만 실패한 실행이라 데이터는 반영되어 있다.
+    APPLIED_STATUSES = "in.(succeeded,partial)"
+
+    def __init__(
+        self,
+        url: str,
+        secret_key: str,
+        *,
+        source_codes: tuple[str, ...],
+        timeout: float = 10.0,
+    ) -> None:
+        self.url = url.rstrip("/")
+        self.secret_key = secret_key.strip()
+        self.source_codes = source_codes
+        self.timeout = timeout
+        if not self.url or not self.secret_key:
+            raise ValueError("Supabase URL과 서버 전용 secret key가 필요합니다.")
+        if not source_codes:
+            raise ValueError("갱신 시각을 확인할 수집 출처가 필요합니다.")
+
+    def fetch_data_updated_at(self) -> str | None:
+        """모든 출처가 반영된 시점, 곧 출처별 마지막 성공 시각 중 가장 오래된 값을 돌려준다.
+
+        한 출처라도 성공 기록이 없으면 None — 최신이라고 과장하지 않는다 (PRD 6).
+        """
+        finished_times: list[datetime] = []
+        for source_code in self.source_codes:
+            finished_at = self._latest_applied_finish(source_code)
+            if finished_at is None:
+                return None
+            finished_times.append(finished_at)
+        return min(finished_times).isoformat()
+
+    def _latest_applied_finish(self, source_code: str) -> datetime | None:
+        query = urllib.parse.urlencode(
+            {
+                "select": "finished_at",
+                "item_source_code": f"eq.{source_code}",
+                "status": self.APPLIED_STATUSES,
+                # ingestion_runs_source_started_idx (item_source_code, started_at desc)를 탄다.
+                "order": "started_at.desc",
+                "limit": 1,
+            }
+        )
+        request = urllib.request.Request(
+            f"{self.url}/rest/v1/ingestion_runs?{query}",
+            headers=_headers(self.secret_key),
+        )
+        payload = _request_json(request, self.timeout, "Supabase 동기화 기록 API")
+        if not isinstance(payload, list):
+            raise RuntimeError("Supabase 동기화 기록 API 응답 형식이 올바르지 않습니다.")
+        if not payload:
+            return None
+        row = payload[0]
+        try:
+            finished_at = datetime.fromisoformat(str(row["finished_at"]))
+        except (TypeError, KeyError, ValueError):
+            raise RuntimeError("Supabase 동기화 기록의 완료 시각 형식이 올바르지 않습니다.") from None
+        if finished_at.tzinfo is None:
+            raise RuntimeError("Supabase 동기화 기록의 완료 시각에 시간대가 없습니다.")
+        return finished_at.astimezone(timezone.utc)
 
 
 def map_location_from_rpc(row: Any) -> dict[str, Any] | None:

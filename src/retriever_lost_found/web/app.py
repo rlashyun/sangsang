@@ -10,10 +10,12 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from ..config import read_env_value, read_optional_env_value
+from ..ingestion.collector import SOURCE_CODES
 from ..integrations.kakao import KakaoLocalClient, kakao_sdk_url
 from ..integrations.supabase import (
     SupabaseFoundItemClient,
     SupabaseMapLocationClient,
+    SupabaseSyncStatusClient,
     apply_item_counts,
     validate_location_ids,
 )
@@ -30,6 +32,7 @@ def create_app(
     institutions: list[dict[str, Any]] | None = None,
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
+    sync_status_client: SupabaseSyncStatusClient | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
     sdk_url = kakao_sdk_url(javascript_key)
@@ -129,6 +132,13 @@ def create_app(
             else:
                 locations = database_locations
             counts_available = count_error is None
+        data_updated_at = None
+        if sync_status_client is not None:
+            try:
+                data_updated_at = sync_status_client.fetch_data_updated_at()
+            except RuntimeError:
+                # PRD 6 — 갱신 시각을 못 읽어도 지도는 보여야 한다. null이면 화면은 문구를 숨긴다.
+                data_updated_at = None
         # 개수 없는 응답은 짧게만 캐시해 집계가 회복되면 곧 다시 반영되게 한다.
         cdn_cache = (
             "public, s-maxage=300, stale-while-revalidate=600"
@@ -140,6 +150,8 @@ def create_app(
                 "institutions": locations,
                 "counts_available": counts_available,
                 "count_error": count_error,
+                # PRD 6 — 두 출처가 모두 반영된 마지막 시각(ISO 8601 UTC). 없으면 null
+                "data_updated_at": data_updated_at,
             },
             headers={
                 "Cache-Control": "public, max-age=0, must-revalidate",
@@ -194,11 +206,17 @@ def create_runtime_app() -> FastAPI:
 
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
+    sync_status_client = SupabaseSyncStatusClient(
+        supabase_url,
+        supabase_secret_key,
+        source_codes=tuple(SOURCE_CODES.values()),
+    )
     app = create_app(
         KakaoLocalClient(rest_api_key),
         javascript_key,
         map_location_client=map_location_client,
         found_item_client=found_item_client,
+        sync_status_client=sync_status_client,
     )
     app.state.location_source = "supabase"
     app.state.item_counts_available = True
