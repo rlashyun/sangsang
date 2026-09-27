@@ -99,11 +99,17 @@ def create_app(
 
     @app.get("/api/institutions")
     def institution_list() -> JSONResponse:
+        count_error = None
         if map_location_client is None:
             locations = map_locations
             counts_available = False
         else:
-            database_locations = map_location_client.fetch_locations()
+            try:
+                database_locations = map_location_client.fetch_locations()
+            except RuntimeError as error:
+                # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
+                database_locations = map_location_client.fetch_locations(with_counts=False)
+                count_error = str(error)
             if map_locations:
                 counts = {
                     (
@@ -122,18 +128,22 @@ def create_app(
                 locations = apply_item_counts(map_locations, counts, location_ids)
             else:
                 locations = database_locations
-            counts_available = True
+            counts_available = count_error is None
+        # 개수 없는 응답은 짧게만 캐시해 집계가 회복되면 곧 다시 반영되게 한다.
+        cdn_cache = (
+            "public, s-maxage=300, stale-while-revalidate=600"
+            if count_error is None
+            else "public, s-maxage=60, stale-while-revalidate=60"
+        )
         return JSONResponse(
             content={
                 "institutions": locations,
                 "counts_available": counts_available,
-                "count_error": None,
+                "count_error": count_error,
             },
             headers={
                 "Cache-Control": "public, max-age=0, must-revalidate",
-                "Vercel-CDN-Cache-Control": (
-                    "public, s-maxage=300, stale-while-revalidate=600"
-                ),
+                "Vercel-CDN-Cache-Control": cdn_cache,
             },
         )
 

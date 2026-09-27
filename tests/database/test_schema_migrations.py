@@ -74,6 +74,33 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("make_interval(months => ts.retention_months", korea_date_fix)
         self.assertIn("now() at time zone 'asia/seoul'", korea_date_fix)
 
+    def test_map_rpc_aggregates_counts_before_join_and_is_service_role_only(self) -> None:
+        # PRD 6 — 행마다 기관 컬럼(geography 포함)으로 group by하면 57014로 지도 전체가 비었다.
+        migration = " ".join(
+            (MIGRATIONS / "20260927090000_fast_map_location_rpcs.sql")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+
+        self.assertIn(
+            "create or replace function public.map_locations_with_item_counts()",
+            migration,
+        )
+        self.assertIn("item_counts as materialized", migration)
+        self.assertIn("group by item.storage_location_id", migration)
+        self.assertNotIn("storage.position,", migration.split("group by", 1)[1])
+        self.assertIn("create or replace function public.map_locations()", migration)
+        for function in ("map_locations_with_item_counts()", "map_locations()"):
+            self.assertIn(
+                f"revoke all on function public.{function} from public, anon, authenticated",
+                migration,
+            )
+            self.assertIn(
+                f"grant execute on function public.{function} to service_role",
+                migration,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

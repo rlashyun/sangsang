@@ -30,7 +30,8 @@ class SupabaseMapLocationClient:
         if not self.url or not self.secret_key:
             raise ValueError("Supabase URL과 서버 전용 secret key가 필요합니다.")
 
-    def fetch_locations(self) -> list[dict[str, Any]]:
+    def fetch_locations(self, *, with_counts: bool = True) -> list[dict[str, Any]]:
+        rpc_name = "map_locations_with_item_counts" if with_counts else "map_locations"
         locations: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -42,7 +43,7 @@ class SupabaseMapLocationClient:
                 }
             )
             request = urllib.request.Request(
-                f"{self.url}/rest/v1/rpc/map_locations_with_item_counts?{query}",
+                f"{self.url}/rest/v1/rpc/{rpc_name}?{query}",
                 data=b"{}",
                 method="POST",
                 headers=_headers(self.secret_key, content_type=True),

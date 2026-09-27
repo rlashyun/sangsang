@@ -361,7 +361,9 @@ import { escapeHtml, fetchJson } from "./ui.js";
           const total = group.reduce((sum, item) => sum + (Number(item.item_count) || 0), 0);
           showItemView({
             title,
-            description: `${group[0].address} · 보관 물품 ${total.toLocaleString("ko-KR")}개`,
+            description: itemCountsAvailable
+              ? `${group[0].address} · 보관 물품 ${total.toLocaleString("ko-KR")}개`
+              : group[0].address,
             institution: true,
           });
           foundItemBrowser.showInstitution(group, title);
