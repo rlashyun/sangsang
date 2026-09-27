@@ -42,9 +42,9 @@ PRD 3.3대로 **30자**가 사양이다. 상한 초과는 400과 한국어 메�
 
 참고 — 삭제된 `tools/`(커밋 `09cca07`)에 있던 것은 `geocode_institutions.py`와 `sync_police_locations.py`(좌표 도구)다. PRD 4.3-D가 말하는 **별칭 등록 스크립트는 원래 없었을 수 있다.** 복원할지 새로 만들지는 매칭률을 본 뒤에 정한다.
 
-### D6 — React 전환을 시작할 때
+### D6 — React 전환 완료
 
-**정적 파일 제공 방식**(Vite 빌드 산출물을 FastAPI가 서빙)과 **CSP 재검토**를 함께 다룬다.
+React + TypeScript + Vite + React Router 전환을 완료했다. 소스는 `frontend/`에서 관리하고 Vite 빌드 산출물을 FastAPI가 정적 파일로 제공한다. 앞으로 외부 스크립트·이미지·폰트를 추가할 때는 CSP와 브라우저에 노출되는 키를 함께 검토한다.
 
 ---
 

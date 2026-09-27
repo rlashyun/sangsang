@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.DS_Store
 .venv/
 __pycache__/
 *.py[cod]
@@ -14,9 +15,8 @@ dist/
 *.log
 data/
 reports/
-
-.vercel
-.env*
+frontend/node_modules/
+frontend/.tmp/
 
 # supabase link --project-ref 가 만드는 로컬 전용 상태
 supabase/.temp/
