@@ -221,7 +221,8 @@ def content_security_policy() -> str:
             "default-src 'self'",
             "script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net http://t1.daumcdn.net",
             "style-src 'self' 'unsafe-inline' https://t1.daumcdn.net http://t1.daumcdn.net",
-            "img-src 'self' data: blob: https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net",
+            # PRD 3.2-2 — 습득물 사진(image_url) 원본 호스트. 이미지로만 허용한다
+            "img-src 'self' data: blob: https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net https://minwon24.police.go.kr",
             "connect-src 'self' https://dapi.kakao.com https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com",
             "font-src 'self' data:",
             "frame-src https://map.kakao.com",
