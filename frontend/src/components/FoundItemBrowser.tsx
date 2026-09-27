@@ -32,6 +32,7 @@ export function FoundItemBrowser({
   const locationIds = useMemo(() => institutionLocationIds(scope), [scope]);
   const showRadiusButton = radiusScope.length > 0
     && !sameInstitutionScope(scope, radiusScope);
+  const showCenteredStatus = items.length === 0 && !isLoading && !statusIsError;
 
   async function load(searchQuery: string, signal?: AbortSignal) {
     const sequence = ++requestSequence.current;
@@ -104,19 +105,36 @@ export function FoundItemBrowser({
 
       <form className="found-item-form" onSubmit={handleSubmit}>
         <label className="sr-only" htmlFor="found-item-input">습득물 검색어</label>
-        <input
-          id="found-item-input"
-          type="search"
-          maxLength={100}
-          autoComplete="off"
-          placeholder="예: 검정 지갑, 아이퐁, 흰색 카드"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <button type="submit" disabled={isLoading}>물품 검색</button>
+        <div className="search-input-shell">
+          <input
+            id="found-item-input"
+            type="search"
+            maxLength={100}
+            autoComplete="off"
+            placeholder="예: 검정 지갑, 아이퐁, 흰색 카드"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <button
+            className="search-icon-button"
+            type="submit"
+            aria-label="물품 검색"
+            title="물품 검색"
+            disabled={isLoading}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m16.25 16.25 4.25 4.25" />
+            </svg>
+          </button>
+        </div>
       </form>
 
-      <div className={`found-item-status${statusIsError ? " error" : ""}`} role="status" aria-live="polite">
+      <div
+        className={`found-item-status${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
+        role="status"
+        aria-live="polite"
+      >
         {status}
       </div>
       <ol className="found-items" aria-label="습득물 목록">
