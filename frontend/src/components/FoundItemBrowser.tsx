@@ -120,7 +120,8 @@ export function FoundItemBrowser({
           <input
             id="found-item-input"
             type="search"
-            maxLength={100}
+            /* PRD 3.3 · D3 — 습득물 검색어 상한 30자 (서버 found_items()와 동일) */
+            maxLength={30}
             autoComplete="off"
             placeholder="예: 검정 지갑, 아이퐁, 흰색 카드"
             value={query}

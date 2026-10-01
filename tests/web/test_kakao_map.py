@@ -17,6 +17,7 @@ from retriever_lost_found.integrations.kakao import (
 from retriever_lost_found.integrations.supabase import (
     SupabaseFoundItemClient,
     SupabaseMapLocationClient,
+    SupabaseSyncStatusClient,
     apply_item_counts,
 )
 from retriever_lost_found.search.fuzzy import fuzzy_item_score, rank_found_items
@@ -25,6 +26,14 @@ from retriever_lost_found.web.app import (
     create_app,
     create_runtime_app,
 )
+
+
+def _csp_directives(policy: str) -> dict[str, list[str]]:
+    directives = {}
+    for directive in policy.split(";"):
+        name, *sources = directive.split()
+        directives[name] = sources
+    return directives
 
 
 class FakeResponse:
@@ -80,6 +89,105 @@ class FakeMapLocationClient:
         }]
 
 
+class FakeSyncStatusClient:
+    def __init__(self, updated_at: str | None = None, *, error: bool = False) -> None:
+        self.updated_at = updated_at
+        self.error = error
+
+    def fetch_data_updated_at(self) -> str | None:
+        if self.error:
+            raise RuntimeError("Supabase 동기화 기록 API 연결 실패: timed out")
+        return self.updated_at
+
+
+class SyncRunResponses:
+    """출처별 ingestion_runs 조회 URL에 맞춰 가짜 응답을 돌려준다."""
+
+    def __init__(self, rows_by_source: dict[str, list[dict]]) -> None:
+        self.rows_by_source = rows_by_source
+
+    def __call__(self, request, timeout=None):
+        params = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
+        source = params["item_source_code"][0].removeprefix("eq.")
+        return FakeResponse(self.rows_by_source.get(source, []))
+
+
+class SupabaseSyncStatusClientTests(unittest.TestCase):
+    # PRD 6 — "오늘 오전 9시 기준" 최종 갱신 시각. 두 출처 중 더 오래된 성공 시각을 쓴다.
+
+    def _client(self) -> SupabaseSyncStatusClient:
+        return SupabaseSyncStatusClient(
+            "https://example.supabase.co",
+            "server-secret",
+            source_codes=("partner_api", "police_api"),
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_returns_older_success_time_of_two_sources(self, urlopen) -> None:
+        urlopen.side_effect = SyncRunResponses({
+            "partner_api": [{"finished_at": "2026-09-27T00:01:40+00:00"}],
+            "police_api": [{"finished_at": "2026-09-27T00:03:05+00:00"}],
+        })
+
+        self.assertEqual(
+            self._client().fetch_data_updated_at(),
+            "2026-09-27T00:01:40+00:00",
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_failed_source_holds_time_back_to_its_last_success(self, urlopen) -> None:
+        # 경찰관서가 오늘 실패했다면 조회 결과는 어제 성공 기록이다.
+        urlopen.side_effect = SyncRunResponses({
+            "partner_api": [{"finished_at": "2026-09-27T00:01:40+00:00"}],
+            "police_api": [{"finished_at": "2026-09-26T00:02:10+00:00"}],
+        })
+
+        self.assertEqual(
+            self._client().fetch_data_updated_at(),
+            "2026-09-26T00:02:10+00:00",
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_queries_only_runs_whose_data_was_applied(self, urlopen) -> None:
+        # partial은 upsert까지 끝난 실행이다 — 데이터는 반영되었다 (service.py).
+        urlopen.side_effect = SyncRunResponses({
+            "partner_api": [{"finished_at": "2026-09-27T00:01:40+00:00"}],
+            "police_api": [{"finished_at": "2026-09-27T00:03:05+00:00"}],
+        })
+
+        self._client().fetch_data_updated_at()
+
+        self.assertEqual(urlopen.call_count, 2)
+        for call in urlopen.call_args_list:
+            request = call.args[0]
+            parsed = urllib.parse.urlparse(request.full_url)
+            params = urllib.parse.parse_qs(parsed.query)
+            self.assertEqual(parsed.path, "/rest/v1/ingestion_runs")
+            self.assertEqual(params["status"], ["in.(succeeded,partial)"])
+            self.assertEqual(params["order"], ["started_at.desc"])
+            self.assertEqual(params["limit"], ["1"])
+            self.assertEqual(request.headers["Authorization"], "Bearer server-secret")
+
+    @patch("urllib.request.urlopen")
+    def test_returns_none_when_any_source_never_succeeded(self, urlopen) -> None:
+        urlopen.side_effect = SyncRunResponses({
+            "partner_api": [{"finished_at": "2026-09-27T00:01:40+00:00"}],
+            "police_api": [],
+        })
+
+        self.assertIsNone(self._client().fetch_data_updated_at())
+
+    @patch("urllib.request.urlopen")
+    def test_rejects_malformed_finished_at(self, urlopen) -> None:
+        urlopen.side_effect = SyncRunResponses({
+            "partner_api": [{"finished_at": "2026-09-27T00:01:40+00:00"}],
+            "police_api": [{"finished_at": "어제"}],
+        })
+
+        with self.assertRaises(RuntimeError):
+            self._client().fetch_data_updated_at()
+
+
 class KakaoLocalClientTests(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_geocode_address_uses_address_endpoint(self, urlopen) -> None:
@@ -128,6 +236,23 @@ class KakaoLocalClientTests(unittest.TestCase):
 
         self.assertIn("http://t1.daumcdn.net", policy)
         self.assertIn("http://*.daumcdn.net", policy)
+
+    # PRD 3.2-2 — 습득물 사진(image_url)은 전부 minwon24.police.go.kr에서 온다 (운영 DB 2026-09-27 확인)
+    def test_csp_allows_police_item_photos_as_images(self) -> None:
+        directives = _csp_directives(_content_security_policy())
+
+        self.assertIn("https://minwon24.police.go.kr", directives["img-src"])
+
+    def test_csp_limits_police_photo_host_to_img_src(self) -> None:
+        directives = _csp_directives(_content_security_policy())
+
+        for name, sources in directives.items():
+            if name != "img-src":
+                self.assertNotIn("https://minwon24.police.go.kr", sources, name)
+        self.assertNotIn("http://minwon24.police.go.kr", directives["img-src"])
+        self.assertNotIn("https://*.police.go.kr", directives["img-src"])
+        self.assertNotIn("https:", directives["img-src"])
+        self.assertNotIn("*", directives["img-src"])
 
     def test_handler_requests_clusterer_library(self) -> None:
         url = _kakao_sdk_url("javascript-key")
@@ -323,6 +448,43 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(payload["items"][0]["item_name"], "애플 아이폰")
         self.assertEqual(response.headers["cache-control"], "no-store")
 
+    # PRD 3.3 · D3 — 습득물 검색어 상한 30자. 경계값 양쪽을 쌍으로 확인한다.
+    def test_found_item_endpoint_accepts_query_of_30_characters(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=FakeFoundItemClient(),
+        )
+        query = "가" * 30
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "q": query},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["query"], query)
+
+    def test_found_item_endpoint_rejects_query_of_31_characters(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=FakeFoundItemClient(),
+        )
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "q": "가" * 31},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "습득물 검색어는 30자 이하여야 합니다.",
+        )
+
     def test_institution_endpoint_uses_database_locations_and_vercel_cdn_cache(self) -> None:
         app = create_app(
             KakaoLocalClient("kakao-secret"),
@@ -366,6 +528,53 @@ class KakaoLocalClientTests(unittest.TestCase):
             response.headers["vercel-cdn-cache-control"],
             "public, s-maxage=60, stale-while-revalidate=60",
         )
+
+    def test_institution_endpoint_reports_data_updated_at(self) -> None:
+        # PRD 6 — 최종 갱신 시각. 기관 목록과 함께 내려준다.
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=FakeMapLocationClient(),
+            sync_status_client=FakeSyncStatusClient("2026-09-27T00:01:40+00:00"),
+        )
+
+        response = TestClient(app).get("/api/institutions")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["data_updated_at"], "2026-09-27T00:01:40+00:00")
+        self.assertEqual(len(payload["institutions"]), 1)
+
+    def test_institution_endpoint_keeps_map_when_sync_status_fails(self) -> None:
+        # PRD 6 — 갱신 시각을 못 읽어도 기관 마커는 보여야 한다. 문구만 숨긴다(null).
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=FakeMapLocationClient(),
+            sync_status_client=FakeSyncStatusClient(error=True),
+        )
+
+        response = TestClient(app).get("/api/institutions")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(payload["data_updated_at"])
+        self.assertEqual(len(payload["institutions"]), 1)
+        self.assertEqual(payload["institutions"][0]["storage_location_id"], 77)
+        self.assertTrue(payload["counts_available"])
+
+    def test_institution_endpoint_without_sync_status_client_returns_null(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=FakeMapLocationClient(),
+        )
+
+        payload = TestClient(app).get("/api/institutions").json()
+
+        self.assertIn("data_updated_at", payload)
+        self.assertIsNone(payload["data_updated_at"])
+        self.assertEqual(len(payload["institutions"]), 1)
 
     def test_institution_endpoint_fails_when_locations_are_unavailable(self) -> None:
         app = create_app(
