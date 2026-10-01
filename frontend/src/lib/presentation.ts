@@ -23,13 +23,6 @@ export function institutionLocationIds(scope: Institution[]) {
     .filter((value) => Number.isInteger(value) && value > 0))];
 }
 
-export function sameInstitutionScope(left: Institution[], right: Institution[]) {
-  const leftIds = institutionLocationIds(left).sort((a, b) => a - b);
-  const rightIds = institutionLocationIds(right).sort((a, b) => a - b);
-  return leftIds.length === rightIds.length
-    && leftIds.every((value, index) => value === rightIds[index]);
-}
-
 export function categoryIcon(rawCategory?: string) {
   const parent = String(rawCategory || "").split(">")[0].trim();
   return ({

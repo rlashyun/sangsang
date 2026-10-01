@@ -7,7 +7,11 @@ import {
   useState,
 } from "react";
 
-import { distanceMeters, markerCountLabel, SEARCH_RADIUS_METERS } from "../lib/geo.js";
+import {
+  distanceMeters,
+  markerCountLabel,
+  radiusKilometersLabel,
+} from "../lib/geo.js";
 import { escapeHtml } from "../lib/presentation";
 import {
   readMapColorTokens,
@@ -36,6 +40,7 @@ interface KakaoMapProps {
   countsAvailable: boolean;
   places: Place[];
   selectedPlace: Place | null;
+  radiusMeters: number;
   visibleInstitutions: Institution[];
   mapBadge: string;
   onPlaceSelect: (place: Place) => void;
@@ -100,10 +105,10 @@ function institutionDetails(
     + "</div>";
 }
 
-function circleBounds(kakao: any, center: Place) {
-  const latitudeDelta = SEARCH_RADIUS_METERS / 111320;
+function circleBounds(kakao: any, center: Place, radiusMeters: number) {
+  const latitudeDelta = radiusMeters / 111320;
   const longitudeScale = Math.max(0.1, Math.cos(center.latitude * Math.PI / 180));
-  const longitudeDelta = SEARCH_RADIUS_METERS / (111320 * longitudeScale);
+  const longitudeDelta = radiusMeters / (111320 * longitudeScale);
   const bounds = new kakao.maps.LatLngBounds();
   bounds.extend(new kakao.maps.LatLng(
     center.latitude - latitudeDelta,
@@ -124,6 +129,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   countsAvailable,
   places,
   selectedPlace,
+  radiusMeters,
   visibleInstitutions,
   mapBadge,
   onPlaceSelect,
@@ -324,8 +330,9 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       return;
     }
 
+    const visibleInstitutionSet = new Set(visibleInstitutions);
     const nearbyMarkers = institutions.flatMap((institution, index) => (
-      distanceMeters(selectedPlace, institution) <= SEARCH_RADIUS_METERS
+      visibleInstitutionSet.has(institution)
         ? [institutionMarkersRef.current[index]]
         : []
     )).filter(Boolean);
@@ -337,7 +344,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     radiusCircleRef.current = new kakao.maps.Circle({
       map,
       center: new kakao.maps.LatLng(selectedPlace.latitude, selectedPlace.longitude),
-      radius: SEARCH_RADIUS_METERS,
+      radius: radiusMeters,
       strokeWeight: 2,
       strokeColor: mapColors.radiusStroke,
       strokeOpacity: 0.55,
@@ -354,8 +361,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       );
       infoWindowRef.current.open(map, selectedMarker);
     }
-    map.setBounds(circleBounds(kakao, selectedPlace), 48, 48, 48, 48);
-  }, [institutions, mapColors, mapReady, selectedPlace]);
+    map.setBounds(circleBounds(kakao, selectedPlace, radiusMeters), 48, 48, 48, 48);
+  }, [institutions, mapColors, mapReady, radiusMeters, selectedPlace, visibleInstitutions]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;
@@ -376,7 +383,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         {institutionsLoaded && !institutionError && (
           <>
             <span className="status-dot" />
-            {selectedPlace && <b>반경 1km</b>}
+            {selectedPlace && <b>반경 {radiusKilometersLabel(radiusMeters)}</b>}
             <span className="source-count"><span className="source-dot partner" />연계기관 <strong>{sourceCounts.partner.toLocaleString("ko-KR")}곳</strong></span>
             <span className="source-count"><span className="source-dot police" />경찰청 <strong>{sourceCounts.police.toLocaleString("ko-KR")}곳</strong></span>
             {!countsAvailable && <span className="count-warning">물품 수 미연결</span>}

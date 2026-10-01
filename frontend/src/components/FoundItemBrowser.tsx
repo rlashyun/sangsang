@@ -5,41 +5,52 @@ import {
   categoryIcon,
   formatRegisteredDate,
   institutionLocationIds,
-  sameInstitutionScope,
   sourceLabel,
 } from "../lib/presentation";
+import {
+  radiusKilometersLabel,
+  SEARCH_RADIUS_OPTIONS_METERS,
+} from "../lib/geo.js";
 import type { FoundItem, Institution } from "../types";
 
 interface FoundItemBrowserProps {
   scope: Institution[];
   scopeTitle: string;
-  radiusScope: Institution[];
+  canShowRadiusScope: boolean;
+  radiusMeters: number;
   onShowRadius: () => void;
+  onRadiusChange: (radiusMeters: number) => void;
 }
 
 export function FoundItemBrowser({
   scope,
   scopeTitle,
-  radiusScope,
+  canShowRadiusScope,
+  radiusMeters,
   onShowRadius,
+  onRadiusChange,
 }: FoundItemBrowserProps) {
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<FoundItem[]>([]);
-  const [status, setStatus] = useState("위치를 검색하면 반경 1km의 습득물을 보여드립니다.");
+  const [status, setStatus] = useState(
+    () => `위치를 검색하면 반경 ${radiusKilometersLabel(radiusMeters)}의 습득물을 보여드립니다.`,
+  );
   const [statusIsError, setStatusIsError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const requestSequence = useRef(0);
   const locationIds = useMemo(() => institutionLocationIds(scope), [scope]);
-  const showRadiusButton = radiusScope.length > 0
-    && !sameInstitutionScope(scope, radiusScope);
   const showCenteredStatus = items.length === 0 && !isLoading && !statusIsError;
+  const largerRadiusOptions = SEARCH_RADIUS_OPTIONS_METERS.filter(
+    (option) => option > radiusMeters,
+  );
 
   async function load(searchQuery: string, signal?: AbortSignal) {
     const sequence = ++requestSequence.current;
     if (!locationIds.length) {
       setItems([]);
-      setStatus("연결된 보관기관 또는 습득물이 없습니다.");
+      setStatus(`반경 ${radiusKilometersLabel(radiusMeters)} 안에 등록된 보관기관이 없습니다.`);
       setStatusIsError(false);
+      setIsLoading(false);
       return;
     }
 
@@ -82,7 +93,7 @@ export function FoundItemBrowser({
     setQuery("");
     void load("", controller.signal);
     return () => controller.abort();
-  }, [locationIds.join(","), scopeTitle]);
+  }, [locationIds.join(","), radiusMeters, scopeTitle]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -96,9 +107,9 @@ export function FoundItemBrowser({
           <p className="section-kicker">FOUND ITEMS</p>
           <h2 id="item-browser-title">{scopeTitle}</h2>
         </div>
-        {showRadiusButton && (
+        {canShowRadiusScope && (
           <button className="scope-reset" type="button" onClick={onShowRadius}>
-            1km 전체
+            {radiusKilometersLabel(radiusMeters)} 전체
           </button>
         )}
       </div>
@@ -130,12 +141,38 @@ export function FoundItemBrowser({
         </div>
       </form>
 
+      <fieldset className="radius-selector">
+        <legend>탐색 반경</legend>
+        <div className="radius-options">
+          {SEARCH_RADIUS_OPTIONS_METERS.map((option) => (
+            <button
+              key={option}
+              className="radius-option"
+              type="button"
+              aria-pressed={radiusMeters === option}
+              onClick={() => onRadiusChange(option)}
+            >
+              {radiusKilometersLabel(option)}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
       <div
         className={`found-item-status${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
         role="status"
         aria-live="polite"
       >
         {status}
+        {!locationIds.length && largerRadiusOptions.length > 0 && !statusIsError && (
+          <div className="radius-empty-actions" aria-label="검색 반경 넓히기">
+            {largerRadiusOptions.map((option) => (
+              <button key={option} type="button" onClick={() => onRadiusChange(option)}>
+                {radiusKilometersLabel(option)}로 넓히기
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <ol className="found-items" aria-label="습득물 목록">
         {items.map((item, index) => {

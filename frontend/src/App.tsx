@@ -6,7 +6,11 @@ import { KakaoMap, type KakaoMapHandle } from "./components/KakaoMap";
 import { LocationSearch } from "./components/LocationSearch";
 import { SelectionSummary } from "./components/SelectionSummary";
 import { ThemePreview } from "./components/ThemePreview";
-import { distanceMeters, SEARCH_RADIUS_METERS } from "./lib/geo.js";
+import {
+  DEFAULT_SEARCH_RADIUS_METERS,
+  isWithinRadius,
+  radiusKilometersLabel,
+} from "./lib/geo.js";
 import { normalizePlace } from "./lib/presentation";
 import {
   applyPreviewTheme,
@@ -28,13 +32,11 @@ export function App() {
   const [countsAvailable, setCountsAvailable] = useState(false);
   const [places, setPlaces] = useState<Place[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
+  const [radiusMeters, setRadiusMeters] = useState(DEFAULT_SEARCH_RADIUS_METERS);
   const [locationStatus, setLocationStatus] = useState("장소명을 입력해 검색해보세요.");
   const [locationStatusIsError, setLocationStatusIsError] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [selection, setSelection] = useState<SelectionSummaryValue | null>(null);
-  const [radiusScope, setRadiusScope] = useState<Institution[]>([]);
-  const [activeScope, setActiveScope] = useState<Institution[]>([]);
-  const [activeScopeTitle, setActiveScopeTitle] = useState("주변 습득물");
+  const [selectedInstitutionScope, setSelectedInstitutionScope] = useState<Institution[] | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,45 +63,56 @@ export function App() {
     return () => controller.abort();
   }, []);
 
-  const visibleInstitutions = useMemo(() => (
+  const radiusScope = useMemo(() => (
     selectedPlace
       ? institutions.filter((institution) => (
-        distanceMeters(selectedPlace, institution) <= SEARCH_RADIUS_METERS
+        isWithinRadius(selectedPlace, institution, radiusMeters)
       ))
-      : institutions
-  ), [institutions, selectedPlace]);
+      : []
+  ), [institutions, radiusMeters, selectedPlace]);
+  const visibleInstitutions = selectedPlace ? radiusScope : institutions;
+  const activeScope = selectedInstitutionScope ?? radiusScope;
+  const selection = useMemo<SelectionSummaryValue | null>(() => {
+    if (selectedInstitutionScope?.length) {
+      const total = selectedInstitutionScope.reduce(
+        (sum, institution) => sum + (Number(institution.item_count) || 0),
+        0,
+      );
+      return {
+        title: selectedInstitutionScope.length === 1
+          ? `${selectedInstitutionScope[0].name} 보관 물품`
+          : `이 위치의 ${selectedInstitutionScope.length}개 기관 보관 물품`,
+        description: `${selectedInstitutionScope[0].address} · 보관 물품 ${total.toLocaleString("ko-KR")}개`,
+        institution: true,
+      };
+    }
+    if (!selectedPlace) return null;
+    return {
+      title: `${selectedPlace.name} 주변 습득물`,
+      description: `${selectedPlace.address} · 반경 ${radiusKilometersLabel(radiusMeters)} 기관 ${radiusScope.length.toLocaleString("ko-KR")}곳`,
+    };
+  }, [radiusMeters, radiusScope.length, selectedInstitutionScope, selectedPlace]);
+  const activeScopeTitle = selection?.title ?? "주변 습득물";
+
+  useEffect(() => {
+    if (!selectedPlace) return;
+    const resultPrefix = places.length > 1 ? `검색 결과 ${places.length}개 중 ` : "";
+    setLocationStatus(
+      `${resultPrefix}'${selectedPlace.name}' 기준 ${radiusKilometersLabel(radiusMeters)} 내 보관기관 ${radiusScope.length.toLocaleString("ko-KR")}곳입니다.`,
+    );
+    setLocationStatusIsError(false);
+  }, [places.length, radiusMeters, radiusScope.length, selectedPlace]);
 
   const handlePlaceSelect = useCallback((place: Place) => {
-    const nearby = institutions.filter((institution) => (
-      distanceMeters(place, institution) <= SEARCH_RADIUS_METERS
-    ));
     setSelectedPlace(place);
-    setRadiusScope(nearby);
-    setActiveScope(nearby);
-    const title = `${place.name} 주변 습득물`;
-    setActiveScopeTitle(title);
-    setSelection({
-      title,
-      description: `${place.address} · 반경 1km 기관 ${nearby.length.toLocaleString("ko-KR")}곳`,
-    });
-    setLocationStatus(places.length > 1
-      ? `검색 결과 ${places.length}개 중 '${place.name}' 기준 1km 내 보관기관 ${nearby.length}곳입니다.`
-      : `'${place.name}' 기준 1km 내 보관기관 ${nearby.length}곳입니다.`);
+    setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
+    setSelectedInstitutionScope(null);
     setLocationStatusIsError(false);
-  }, [institutions, places.length]);
+  }, []);
 
   const handleInstitutionSelect = useCallback((group: Institution[]) => {
-    const title = group.length === 1
-      ? `${group[0].name} 보관 물품`
-      : `이 위치의 ${group.length}개 기관 보관 물품`;
-    const total = group.reduce((sum, item) => sum + (Number(item.item_count) || 0), 0);
-    setActiveScope(group);
-    setActiveScopeTitle(title);
-    setSelection({
-      title,
-      description: `${group[0].address} · 보관 물품 ${total.toLocaleString("ko-KR")}개`,
-      institution: true,
-    });
+    if (!group.length) return;
+    setSelectedInstitutionScope(group);
   }, []);
 
   async function handleSearch(query: string) {
@@ -126,9 +139,8 @@ export function App() {
         .filter((place) => Number.isFinite(place.latitude) && Number.isFinite(place.longitude));
       setPlaces(nextPlaces);
       setSelectedPlace(null);
-      setRadiusScope([]);
-      setActiveScope([]);
-      setSelection(null);
+      setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
+      setSelectedInstitutionScope(null);
       if (!nextPlaces.length) {
         setLocationStatus("검색 결과가 없습니다. 더 구체적인 장소명이나 주소를 입력해보세요.");
       } else {
@@ -137,9 +149,8 @@ export function App() {
     } catch (error) {
       setPlaces([]);
       setSelectedPlace(null);
-      setRadiusScope([]);
-      setActiveScope([]);
-      setSelection(null);
+      setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
+      setSelectedInstitutionScope(null);
       setLocationStatusIsError(true);
       setLocationStatus(error instanceof Error ? error.message : "검색에 실패했습니다.");
     } finally {
@@ -150,23 +161,21 @@ export function App() {
   function resetLocation() {
     setSelectedPlace(null);
     setPlaces([]);
-    setSelection(null);
-    setRadiusScope([]);
-    setActiveScope([]);
-    setActiveScopeTitle("주변 습득물");
+    setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
+    setSelectedInstitutionScope(null);
     setLocationStatus("전체 연계기관과 경찰청 관서를 표시하고 있습니다.");
     setLocationStatusIsError(false);
   }
 
   function showRadiusItems() {
-    if (!selectedPlace || !radiusScope.length) return;
-    const title = `${selectedPlace.name} 주변 습득물`;
-    setActiveScope(radiusScope);
-    setActiveScopeTitle(title);
-    setSelection({
-      title,
-      description: `${selectedPlace.address} · 반경 1km 전체 기관의 물품`,
-    });
+    if (!selectedPlace) return;
+    setSelectedInstitutionScope(null);
+  }
+
+  function handleRadiusChange(nextRadiusMeters: number) {
+    if (!selectedPlace) return;
+    setRadiusMeters(nextRadiusMeters);
+    setSelectedInstitutionScope(null);
   }
 
   const nearbyItemCount = visibleInstitutions.reduce(
@@ -175,8 +184,8 @@ export function App() {
   );
   const mapBadge = selectedPlace
     ? (visibleInstitutions.length
-      ? `${selectedPlace.name} 기준 1km · 보관기관 ${visibleInstitutions.length.toLocaleString("ko-KR")}곳${countsAvailable ? ` · 물품 ${nearbyItemCount.toLocaleString("ko-KR")}개` : ""}`
-      : `${selectedPlace.name} 기준 1km · 등록된 기관 없음`)
+      ? `${selectedPlace.name} 기준 ${radiusKilometersLabel(radiusMeters)} · 보관기관 ${visibleInstitutions.length.toLocaleString("ko-KR")}곳${countsAvailable ? ` · 물품 ${nearbyItemCount.toLocaleString("ko-KR")}개` : ""}`
+      : `${selectedPlace.name} 기준 ${radiusKilometersLabel(radiusMeters)} · 등록된 기관 없음`)
     : (institutionsLoaded
       ? "숫자를 누르면 확대 · 핀을 누르면 기관 정보"
       : "확대하면 개별 기관을 볼 수 있어요");
@@ -201,15 +210,20 @@ export function App() {
           />
 
           {selection && (
-            <SelectionSummary selection={selection} onChangeLocation={resetLocation} />
+            <SelectionSummary
+              selection={selection}
+              onChangeLocation={resetLocation}
+            />
           )}
 
           {selection && (
             <FoundItemBrowser
               scope={activeScope}
               scopeTitle={activeScopeTitle}
-              radiusScope={radiusScope}
+              canShowRadiusScope={selectedInstitutionScope !== null && selectedPlace !== null}
+              radiusMeters={radiusMeters}
               onShowRadius={showRadiusItems}
+              onRadiusChange={handleRadiusChange}
             />
           )}
         </section>
@@ -223,6 +237,7 @@ export function App() {
           countsAvailable={countsAvailable}
           places={places}
           selectedPlace={selectedPlace}
+          radiusMeters={radiusMeters}
           visibleInstitutions={visibleInstitutions}
           mapBadge={mapBadge}
           onPlaceSelect={handlePlaceSelect}

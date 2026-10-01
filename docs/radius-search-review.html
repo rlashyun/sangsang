@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>1·3·5km 반경 검색 구현 및 구조 개선 제안</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f6f2;
+      --surface: #ffffff;
+      --surface-soft: #f7faf7;
+      --text: #17211d;
+      --muted: #637069;
+      --line: #dce5df;
+      --brand: #176f4d;
+      --brand-soft: #e8f4ed;
+      --warning: #9b6215;
+      --warning-soft: #fff4df;
+      --danger: #a92d2d;
+      --danger-soft: #fff0ee;
+      --info: #285d9f;
+      --info-soft: #edf5ff;
+      --shadow: 0 18px 45px rgba(27, 48, 38, 0.09);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font-family: Pretendard, "Noto Sans KR", -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+      line-height: 1.65;
+    }
+    a { color: var(--brand); }
+    code {
+      padding: 0.12em 0.38em;
+      border-radius: 6px;
+      background: #edf1ee;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+    .page {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 42px 0 72px;
+    }
+    .hero {
+      padding: clamp(28px, 6vw, 62px);
+      border-radius: 28px;
+      color: #fff;
+      background:
+        radial-gradient(circle at 82% 15%, rgba(255,255,255,.18), transparent 26%),
+        linear-gradient(135deg, #173e2e, #176f4d 68%, #258561);
+      box-shadow: var(--shadow);
+    }
+    .eyebrow {
+      margin: 0 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .16em;
+    }
+    h1 {
+      max-width: 850px;
+      margin: 0;
+      font-size: clamp(32px, 6vw, 58px);
+      line-height: 1.12;
+      letter-spacing: -.055em;
+    }
+    .hero-copy {
+      max-width: 760px;
+      margin: 22px 0 0;
+      color: rgba(255,255,255,.86);
+      font-size: clamp(16px, 2vw, 19px);
+    }
+    .hero-meta {
+      display: flex;
+      gap: 10px;
+      margin-top: 28px;
+      flex-wrap: wrap;
+    }
+    .hero-meta span {
+      padding: 7px 12px;
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 999px;
+      background: rgba(255,255,255,.1);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin: 22px 0 42px;
+    }
+    .metric {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: 0 8px 22px rgba(27, 48, 38, .05);
+    }
+    .metric strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--brand);
+      font-size: 25px;
+      letter-spacing: -.04em;
+    }
+    .metric span { color: var(--muted); font-size: 13px; }
+    .layout {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 28px;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 18px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,.88);
+      backdrop-filter: blur(10px);
+    }
+    .toc strong { display: block; margin-bottom: 8px; font-size: 13px; }
+    .toc a {
+      display: block;
+      padding: 6px 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-decoration: none;
+    }
+    .toc a:hover { color: var(--brand); }
+    main { min-width: 0; }
+    section {
+      margin-bottom: 24px;
+      padding: clamp(22px, 4vw, 36px);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface);
+      box-shadow: 0 12px 35px rgba(27, 48, 38, .05);
+    }
+    h2 {
+      margin: 0 0 18px;
+      font-size: clamp(23px, 3vw, 31px);
+      letter-spacing: -.045em;
+    }
+    h3 { margin: 28px 0 10px; font-size: 18px; letter-spacing: -.025em; }
+    p { margin: 10px 0; }
+    .lead { color: var(--muted); font-size: 17px; }
+    .callout {
+      margin: 20px 0;
+      padding: 16px 18px;
+      border-left: 4px solid var(--brand);
+      border-radius: 0 12px 12px 0;
+      background: var(--brand-soft);
+    }
+    .callout.warning { border-color: var(--warning); background: var(--warning-soft); }
+    .callout.danger { border-color: var(--danger); background: var(--danger-soft); }
+    .callout.info { border-color: var(--info); background: var(--info-soft); }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      margin: 22px 0;
+    }
+    .flow-step {
+      position: relative;
+      min-height: 120px;
+      padding: 16px 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-soft);
+    }
+    .flow-step:not(:last-child)::after {
+      position: absolute;
+      top: 50%;
+      right: -9px;
+      z-index: 2;
+      width: 16px;
+      height: 16px;
+      border-top: 2px solid var(--brand);
+      border-right: 2px solid var(--brand);
+      background: var(--surface);
+      content: "";
+      transform: translateY(-50%) rotate(45deg);
+    }
+    .flow-step b { display: block; margin-bottom: 7px; color: var(--brand); font-size: 13px; }
+    .flow-step span { font-size: 13px; line-height: 1.5; }
+    .table-wrap { overflow-x: auto; margin: 18px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 13px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+    th { color: var(--muted); background: var(--surface-soft); font-size: 12px; }
+    td strong { color: var(--brand); }
+    .error-chain {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+      margin: 18px 0;
+      flex-wrap: wrap;
+    }
+    .error-chain span {
+      flex: 1 1 125px;
+      padding: 12px;
+      border: 1px solid #f0cccc;
+      border-radius: 12px;
+      background: var(--danger-soft);
+      color: #722020;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .error-chain i { align-self: center; color: var(--danger); font-style: normal; }
+    .compare {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .compare article {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--surface-soft);
+    }
+    .compare h3 { margin: 0 0 8px; }
+    ul, ol { padding-left: 22px; }
+    li + li { margin-top: 7px; }
+    .roadmap { counter-reset: roadmap; margin: 20px 0 0; padding: 0; list-style: none; }
+    .roadmap li {
+      position: relative;
+      margin: 0 0 12px;
+      padding: 17px 18px 17px 62px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-soft);
+    }
+    .roadmap li::before {
+      position: absolute;
+      top: 15px;
+      left: 16px;
+      display: grid;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      place-items: center;
+      color: #fff;
+      background: var(--brand);
+      content: counter(roadmap);
+      counter-increment: roadmap;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .roadmap b { display: block; margin-bottom: 3px; }
+    .decision {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 12px;
+      align-items: stretch;
+      margin-top: 20px;
+    }
+    .decision article {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface-soft);
+    }
+    .decision .arrow { display: grid; place-items: center; color: var(--brand); font-size: 24px; }
+    footer { padding: 8px 4px; color: var(--muted); font-size: 12px; text-align: center; }
+
+    @media (max-width: 900px) {
+      .summary-grid { grid-template-columns: repeat(2, 1fr); }
+      .layout { grid-template-columns: 1fr; }
+      .toc { position: static; }
+      .flow { grid-template-columns: 1fr; }
+      .flow-step { min-height: 0; }
+      .flow-step:not(:last-child)::after { display: none; }
+    }
+    @media (max-width: 620px) {
+      .page { width: min(100% - 20px, 1120px); padding-top: 10px; }
+      .hero { border-radius: 20px; }
+      .summary-grid, .compare, .decision { grid-template-columns: 1fr; }
+      .decision .arrow { transform: rotate(90deg); }
+      section { border-radius: 18px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .page { width: 100%; padding: 0; }
+      .hero, section, .metric { box-shadow: none; break-inside: avoid; }
+      .toc { display: none; }
+      .layout { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="eyebrow">RETRIEVER · ENGINEERING REVIEW</p>
+      <h1>1·3·5km 반경 검색 구현과<br>조회 구조 개선 제안</h1>
+      <p class="hero-copy">
+        프런트엔드 반경 선택 기능을 구현하며 확인한 동작, 실제 오류와 원인,
+        그리고 안정적인 서비스로 만들기 위해 필요한 다음 작업을 정리했습니다.
+      </p>
+      <div class="hero-meta">
+        <span>작성일 2026-09-30</span>
+        <span>대상: 프런트엔드 · 백엔드 · DB</span>
+        <span>운영 DB 변경 없음</span>
+      </div>
+    </header>
+
+    <div class="summary-grid" aria-label="핵심 수치">
+      <div class="metric"><strong>1·3·5km</strong><span>사용자가 직접 선택하는 검색 반경</span></div>
+      <div class="metric"><strong>125곳</strong><span>서울역 3km 내 보관기관</span></div>
+      <div class="metric"><strong>37,057건</strong><span>서울역 3km 내 표시 물품 집계</span></div>
+      <div class="metric"><strong>8.306초 → 502</strong><span>재현된 DB statement timeout</span></div>
+    </div>
+
+    <div class="layout">
+      <nav class="toc" aria-label="문서 목차">
+        <strong>목차</strong>
+        <a href="#summary">한눈에 보는 결론</a>
+        <a href="#implementation">구현 방식</a>
+        <a href="#error">발생한 오류</a>
+        <a href="#structure">드러난 구조 문제</a>
+        <a href="#proposal">개선 제안</a>
+        <a href="#plan">권장 진행 순서</a>
+      </nav>
+
+      <main>
+        <section id="summary">
+          <h2>1. 한눈에 보는 결론</h2>
+          <p class="lead">
+            반경을 계산하고 지도 범위를 바꾸는 프런트엔드 기능은 정상 동작합니다.
+            문제는 반경이 넓어질수록 백엔드가 가져오는 습득물 후보가 급증한다는 점입니다.
+          </p>
+          <div class="callout">
+            <strong>핵심 결론</strong>
+            3km 오류는 반경 계산 버그나 기관 300곳 제한이 아닙니다.
+            125개 기관의 물품 약 3만 7천 건을 서버로 모두 가져오려다가 Supabase 쿼리 제한시간을 넘겼습니다.
+          </div>
+          <div class="decision">
+            <article>
+              <b>정상 동작한 부분</b>
+              <p>1·3·5km 선택, Haversine 거리 계산, 지도 원·마커·기관 수 동기화</p>
+            </article>
+            <div class="arrow" aria-hidden="true">→</div>
+            <article>
+              <b>추가 개선이 필요한 부분</b>
+              <p>대량 물품 조회, DB 정렬, 전체 후보 전송, Python 퍼지 랭킹</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="implementation">
+          <h2>2. 1·3·5km 반경은 어떻게 구현했나</h2>
+          <p class="lead">
+            서버에 반경을 보내는 대신, 브라우저가 이미 받은 전국 기관 좌표에서 선택 지점과의 거리를 계산합니다.
+          </p>
+
+          <div class="flow" aria-label="반경 검색 처리 흐름">
+            <div class="flow-step"><b>① 장소 선택</b><span>카카오 검색 결과에서 기준 위치의 위도·경도를 선택</span></div>
+            <div class="flow-step"><b>② 반경 선택</b><span>기본 1km 또는 사용자가 3km·5km 버튼 선택</span></div>
+            <div class="flow-step"><b>③ 거리 계산</b><span>Haversine 공식으로 각 기관과의 실제 지표면 거리 계산</span></div>
+            <div class="flow-step"><b>④ 기관 필터</b><span>선택 반경 안에 있는 기관 ID만 추림</span></div>
+            <div class="flow-step"><b>⑤ 물품 조회</b><span>선택된 기관 ID 묶음을 기존 API로 전송</span></div>
+          </div>
+
+          <h3>화면에서 함께 바뀌는 항목</h3>
+          <ul>
+            <li>지도에 그려지는 반경 원의 크기</li>
+            <li>지도에 표시되는 기관 마커와 기관 수</li>
+            <li>선택 위치 설명과 지도 하단 범위 안내</li>
+            <li><code>/api/found-items</code>로 보내는 기관 ID 목록</li>
+            <li>특정 기관을 보던 중 반경을 바꾸면 해당 반경 전체 목록으로 복귀</li>
+            <li>기관이 0곳이면 사용자가 직접 3km·5km로 넓히는 버튼 제공</li>
+          </ul>
+
+          <div class="callout info">
+            <strong>변경하지 않은 부분</strong>
+            Supabase 스키마, 백엔드 API 계약, 운영 DB는 변경하지 않았습니다.
+            이번 구현은 프런트엔드가 보내는 기관 ID 범위만 1·3·5km에 따라 달라지게 한 것입니다.
+          </div>
+        </section>
+
+        <section id="error">
+          <h2>3. 구현 후 어떤 오류가 발생했나</h2>
+          <p>
+            서울역 3km 범위에서 물품을 불러오는 도중 화면에
+            <code>습득물 로딩 실패: Failed to fetch</code>가 표시됐습니다.
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>반경</th><th>기관 수</th><th>기관별 물품 수 합계</th><th>관찰 결과</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>1km</td><td>17곳</td><td>7,920건</td><td>응답하지만 이미 느림</td></tr>
+                <tr><td><strong>3km</strong></td><td><strong>125곳</strong></td><td><strong>37,057건</strong></td><td><strong>8.306초 후 502</strong></td></tr>
+                <tr><td>5km</td><td>236곳</td><td>41,023건</td><td>동일 위험이 더 큼</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout danger">
+            <strong>직접 재현한 오류</strong>
+            Supabase 오류 코드 <code>57014</code>, 메시지
+            <code>canceling statement due to statement timeout</code>이 확인됐습니다.
+          </div>
+
+          <div class="error-chain" aria-label="오류 전달 과정">
+            <span>대량 물품 조회</span><i>→</i>
+            <span>Supabase 제한시간 초과</span><i>→</i>
+            <span>배포 API 502</span><i>→</i>
+            <span>로컬 프록시 연결 종료</span><i>→</i>
+            <span>브라우저 Failed to fetch</span>
+          </div>
+
+          <p>
+            로컬 미리보기는 Vite와 임시 API 중계 서버를 한 번 더 거쳤기 때문에 상세 JSON 오류 대신
+            일반 네트워크 오류가 표시됐습니다. 하지만 근본 원인은 로컬 서버가 아니라 Supabase 쿼리 시간 초과입니다.
+          </p>
+        </section>
+
+        <section id="structure">
+          <h2>4. 이 오류로 알게 된 구조적 문제</h2>
+
+          <h3>문제 1 — 검색어가 있어도 물품 전체를 먼저 가져온다</h3>
+          <p>
+            사용자가 “검정 지갑”을 검색해도 DB에서 검정 지갑 후보만 가져오는 것이 아닙니다.
+            반경 안의 물품 약 3만 7천 건을 먼저 Python 서버로 가져온 뒤 퍼지 검색을 실행합니다.
+          </p>
+
+          <div class="flow" aria-label="현재 물품 검색 구조">
+            <div class="flow-step"><b>기관 125곳</b><span>브라우저가 기관 ID 전달</span></div>
+            <div class="flow-step"><b>물품 37,057건</b><span>Supabase에서 전체 후보 조회</span></div>
+            <div class="flow-step"><b>1,000건씩 전송</b><span>페이지마다 조회와 정렬 반복</span></div>
+            <div class="flow-step"><b>Python 검색</b><span>모든 후보를 받은 뒤 퍼지 랭킹</span></div>
+            <div class="flow-step"><b>화면 반환</b><span>최종 결과를 브라우저에 전달</span></div>
+          </div>
+
+          <h3>문제 2 — 1,000건 페이징이 DB 작업량을 줄이지 못한다</h3>
+          <p>
+            1,000건만 반환하더라도 DB는 최신 1,000건을 고르기 위해 훨씬 많은 후보를 읽고 정렬할 수 있습니다.
+            현재 <code>offset</code> 방식은 뒤 페이지로 갈수록 앞 데이터를 반복해서 건너뛰어야 합니다.
+          </p>
+
+          <h3>문제 3 — 현재 인덱스가 실제 조회 형태와 정확히 맞지 않는다</h3>
+          <div class="compare">
+            <article>
+              <h3>현재 인덱스 순서</h3>
+              <p><code>기관 → 카테고리 → 등록일</code></p>
+              <p>카테고리를 지정할 때 유리합니다.</p>
+            </article>
+            <article>
+              <h3>실제 API 요청</h3>
+              <p><code>여러 기관 → 전체 카테고리 → 등록일·ID 순</code></p>
+              <p>여러 묶음을 읽고 다시 정렬할 가능성이 있습니다.</p>
+            </article>
+          </div>
+
+          <h3>문제 4 — 기관 300곳 제한과 별개의 문제다</h3>
+          <p>
+            서울역 3km는 기관 125곳뿐이므로 300곳 제한에 걸리지 않았습니다.
+            병목은 “기관 수”보다 그 기관들이 가진 “물품 후보 수”에서 발생했습니다.
+          </p>
+
+          <h3>문제 5 — 좌표 기반 공간 쿼리만으로는 해결되지 않는다</h3>
+          <p>
+            DB가 반경 내 기관을 직접 찾도록 바꾸면 긴 기관 ID URL 문제는 개선됩니다.
+            하지만 찾아낸 기관의 물품 3만 7천 건을 모두 가져오는 구조는 그대로이므로 이번 시간 초과의 핵심 해결책은 아닙니다.
+          </p>
+        </section>
+
+        <section id="proposal">
+          <h2>5. 어떻게 수정하는 것이 좋은가</h2>
+          <p class="lead">
+            한 번에 구조를 모두 바꾸기보다, 병목을 측정한 뒤 목록 조회와 검색 조회를 분리해 개선하는 방식을 권장합니다.
+          </p>
+
+          <h3>A. 먼저 스테이징에서 쿼리 실행계획 확인</h3>
+          <ul>
+            <li>운영 DB가 아닌 스테이징에서 동일 규모 데이터를 준비합니다.</li>
+            <li><code>EXPLAIN ANALYZE</code>로 테이블 스캔·정렬·인덱스 사용 시간을 확인합니다.</li>
+            <li>추측으로 인덱스를 추가하지 않고 실제 병목을 기준으로 결정합니다.</li>
+          </ul>
+
+          <h3>B. 실제 조회에 맞는 인덱스 후보 검증</h3>
+          <p>다음 형태를 후보로 실험하되, 적용 여부는 실행계획과 쓰기 비용을 함께 보고 결정합니다.</p>
+          <div class="callout info">
+            <code>(storage_location_id, registered_on DESC, id DESC)</code>
+          </div>
+
+          <h3>C. 검색어가 없는 목록은 커서 기반으로 나눠 보여주기</h3>
+          <ul>
+            <li>첫 화면에서 3만 건 전체를 보내지 않고 최신 일부만 반환합니다.</li>
+            <li>사용자가 더 볼 때 다음 페이지를 요청합니다.</li>
+            <li><code>offset</code> 대신 마지막 등록일·ID를 사용하는 커서 페이지네이션을 권장합니다.</li>
+          </ul>
+
+          <h3>D. 검색어가 있으면 DB에서 후보를 먼저 줄이기</h3>
+          <ul>
+            <li>정규화 검색 텍스트, 카테고리, 색상 등으로 1차 후보를 DB에서 축소합니다.</li>
+            <li>축소된 후보에만 현재 Python 퍼지 랭킹을 적용합니다.</li>
+            <li>후보 상한은 평가셋으로 검색 품질을 확인하며 정합니다.</li>
+          </ul>
+
+          <h3>E. 하지 말아야 할 임시 해결</h3>
+          <ul>
+            <li>기관 ID를 앞에서 300개만 잘라 일부 물품을 조용히 누락하는 방식</li>
+            <li>프런트에서 여러 요청으로 쪼갠 뒤 순위를 단순 합치는 방식</li>
+            <li>DB 원인을 확인하지 않고 제한시간만 크게 늘리는 방식</li>
+            <li>오류를 빈 결과로 바꿔 사용자가 “물품이 없다”고 오인하게 하는 방식</li>
+          </ul>
+        </section>
+
+        <section id="plan">
+          <h2>6. 권장 진행 순서</h2>
+          <ol class="roadmap">
+            <li><b>프런트 반경 기능은 유지</b>지도와 기관 범위 계산은 정상이며 자동 테스트도 통과했습니다.</li>
+            <li><b>3km·5km 출시 전 백엔드 조회 문제 해결</b>현재 상태로는 넓은 반경에서 안정적인 물품 조회를 보장할 수 없습니다.</li>
+            <li><b>스테이징 데이터와 EXPLAIN ANALYZE 준비</b>현재 쿼리, 인덱스 후보, 커서 페이지네이션을 같은 조건에서 비교합니다.</li>
+            <li><b>목록 조회와 검색 조회 분리</b>검색어가 없을 때는 최신순 페이지, 검색어가 있을 때는 후보 축소 후 퍼지 랭킹을 사용합니다.</li>
+            <li><b>대표 지점 성능 검증</b>서울역 1·3·5km와 최고 밀집 지역에서 p50·p95, 후보 수, 오류율을 측정합니다.</li>
+            <li><b>기준 충족 후 배포</b>지도 기관 수와 검색 범위가 일치하고, 시간 초과 없이 한국어 오류 처리가 되는지 확인합니다.</li>
+          </ol>
+
+          <div class="callout warning">
+            <strong>팀 결정이 필요한 항목</strong>
+            3km·5km에서 검색어 없이 물품 전체를 반드시 보여줘야 하는지,
+            아니면 최신순 페이지로 나눠 보여줘도 되는지 제품 정책을 먼저 합의해야 합니다.
+          </div>
+
+          <div class="callout">
+            <strong>최종 제안</strong>
+            반경 선택 UI는 유지하되 현재 상태로 바로 출시하지 않습니다.
+            스테이징에서 DB 실행계획을 확인하고, 목록 페이지네이션과 검색 후보 축소를 적용한 뒤
+            서울역 5km 기준 성능을 다시 측정하는 것이 가장 안전합니다.
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer>
+      Retriever · 1·3·5km 반경 검색 구현 리뷰 · 측정 기준 2026-09-30
+    </footer>
+  </div>
+</body>
+</html>
