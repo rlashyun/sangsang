@@ -1,4 +1,5 @@
-export const SEARCH_RADIUS_METERS = 1000;
+export const SEARCH_RADIUS_OPTIONS_METERS = Object.freeze([1000, 3000, 5000]);
+export const DEFAULT_SEARCH_RADIUS_METERS = SEARCH_RADIUS_OPTIONS_METERS[0];
 const EARTH_RADIUS_METERS = 6371008.8;
 
 /** @param {number} value */
@@ -18,6 +19,20 @@ export function distanceMeters(from, to) {
   const a = Math.sin(latitudeDelta / 2) ** 2
     + Math.cos(fromLatitude) * Math.cos(toLatitude) * Math.sin(longitudeDelta / 2) ** 2;
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/**
+ * @param {{ latitude: number, longitude: number }} from
+ * @param {{ latitude: number, longitude: number }} to
+ * @param {number} radiusMeters
+ */
+export function isWithinRadius(from, to, radiusMeters) {
+  return distanceMeters(from, to) <= radiusMeters;
+}
+
+/** @param {number} radiusMeters */
+export function radiusKilometersLabel(radiusMeters) {
+  return `${radiusMeters / 1000}km`;
 }
 
 /** @param {unknown} value */
