@@ -101,6 +101,19 @@ class SchemaMigrationTests(unittest.TestCase):
                 migration,
             )
 
+    def test_detail_mapping_evidence_is_service_role_only(self) -> None:
+        migration = (
+            MIGRATIONS / "20261002091648_verified_ambiguous_location_mapping.sql"
+        ).read_text(encoding="utf-8").lower()
+        self.assertIn("add column detail_org_id text", migration)
+        self.assertIn("create table public.storage_location_detail_mappings", migration)
+        self.assertIn("primary key (item_source_code, normalized_raw_storage_name, detail_org_id)", migration)
+        self.assertIn("enable row level security", migration)
+        self.assertIn("from public, anon, authenticated", migration)
+        self.assertIn("create trigger found_items_resolve_verified_detail", migration)
+        self.assertIn("security invoker set search_path = ''", migration)
+        self.assertIn("new.raw_storage_name is distinct from old.raw_storage_name", migration)
+
 
 if __name__ == "__main__":
     unittest.main()

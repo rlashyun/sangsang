@@ -3,8 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 import unicodedata
-from collections.abc import Iterable
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Iterable
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -20,6 +25,10 @@ from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 
 
 SOURCE_ORDER = ("partner", "police")
+DETAIL_ENDPOINTS = {
+    "partner_api": "LosPtfundInfoInqireService/getPtLosfundDetailInfo",
+    "police_api": "LosfundInfoInqireService/getLosfundDetailInfo",
+}
 
 
 def _normalize_key(value: Any) -> str:
@@ -71,6 +80,38 @@ def _resolve_location(
     return None, "unmatched"
 
 
+def _fetch_detail(
+    source_code: str, service_key: str, atc_id: str, found_sequence: str
+) -> dict[str, str]:
+    """PRD 4.5 — 상세 기관 코드와 전화번호를 원본 API에서 읽습니다."""
+    url = "https://apis.data.go.kr/1320000/" + DETAIL_ENDPOINTS[source_code]
+    url += "?" + urllib.parse.urlencode(
+        {"serviceKey": service_key, "ATC_ID": atc_id, "FD_SN": found_sequence}
+    )
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                root = ET.fromstring(response.read())
+            if root.findtext("./header/resultCode") != "00":
+                raise ValueError("상세 API 오류")
+            item = root.find("./body/item")
+            if item is None:
+                item = root.find("./body/items/item")
+            if item is None:
+                raise ValueError("상세 API 물품 없음")
+            return {
+                "detail_org_id": (item.findtext("orgId") or "").strip(),
+                "detail_org_name": (item.findtext("orgNm") or "").strip(),
+                "detail_department": (item.findtext("depPlace") or "").strip(),
+                "detail_phone": (item.findtext("tel") or "").strip(),
+            }
+        except (urllib.error.URLError, TimeoutError, ET.ParseError, ValueError):
+            if attempt == 1:
+                raise
+            time.sleep(2**attempt)
+    raise AssertionError("도달할 수 없는 코드")
+
+
 def _build_database_rows(
     selected_rows: list[dict[str, str]],
     *,
@@ -78,9 +119,16 @@ def _build_database_rows(
     category_ids: dict[str, int],
     aliases: dict[str, int],
     locations: list[LocationReference],
-) -> tuple[list[dict[str, Any]], int]:
+    detail_mappings: dict[tuple[str, str], int],
+    detail_evidence: dict[tuple[str, str], dict[str, Any]],
+    detail_service_key: str,
+    detail_fetcher: Callable[[str, str, str, str], dict[str, str]] = _fetch_detail,
+    detail_deadline: float | None = None,
+) -> tuple[list[dict[str, Any]], int, int]:
     database_rows: list[dict[str, Any]] = []
     unmatched_count = 0
+    detail_errors = 0
+    active_ids = {location.id for location in locations}
     for row in selected_rows:
         normalized_category = _normalize_key(row["raw_category_name"])
         category_id = category_ids.get(normalized_category)
@@ -91,6 +139,25 @@ def _build_database_rows(
         location_id, match_status = _resolve_location(
             row["raw_storage_name"], aliases, locations
         )
+        evidence = detail_evidence.get((row["atc_id"], row["found_sequence"]))
+        if evidence and _normalize_key(evidence["raw_storage_name"]) != _normalize_key(row["raw_storage_name"]):
+            evidence = None
+        if (match_status == "ambiguous" and not evidence and detail_errors < 3
+                and (detail_deadline is None or time.monotonic() < detail_deadline)):
+            try:
+                evidence = detail_fetcher(
+                    source_code, detail_service_key, row["atc_id"], row["found_sequence"]
+                )
+                evidence["detail_checked_at"] = datetime.now().astimezone().isoformat()
+                time.sleep(0.35)
+            except (urllib.error.URLError, TimeoutError, ET.ParseError, ValueError):
+                detail_errors += 1
+        if match_status == "ambiguous" and evidence:
+            candidate = detail_mappings.get(
+                (_normalize_key(row["raw_storage_name"]), str(evidence.get("detail_org_id") or ""))
+            )
+            if candidate in active_ids:
+                location_id, match_status = candidate, "matched"
         if match_status != "matched":
             unmatched_count += 1
         try:
@@ -114,9 +181,14 @@ def _build_database_rows(
                 "registered_on": row["registered_on"],
                 "normalized_search_text": row["normalized_search_text"],
                 "raw_payload": raw_payload,
+                "detail_org_id": (evidence or {}).get("detail_org_id") or None,
+                "detail_org_name": (evidence or {}).get("detail_org_name") or None,
+                "detail_department": (evidence or {}).get("detail_department") or None,
+                "detail_phone": (evidence or {}).get("detail_phone") or None,
+                "detail_checked_at": (evidence or {}).get("detail_checked_at"),
             }
         )
-    return database_rows, unmatched_count
+    return database_rows, unmatched_count, detail_errors
 
 
 def _safe_error(error: BaseException, secrets: Iterable[str] = ()) -> str:
@@ -139,6 +211,43 @@ def _empty_result(source_code: str, status: str) -> dict[str, Any]:
         "unmatched": 0,
         "invalid": 0,
     }
+
+
+def resolve_existing_ambiguous(
+    store: SupabaseIngestionStore,
+    source_code: str,
+    service_key: str,
+    *,
+    detail_limit: int = 20,
+    detail_deadline: float | None = None,
+) -> dict[str, int]:
+    """PRD 4.5 — 기존 증거에 새 규칙을 적용하고 누락된 상세정보를 재시도합니다."""
+    mappings = store.load_detail_mappings(source_code)
+    active_ids = {location.id for location in store.load_locations(source_code)}
+    result = {"resolved": 0, "fetched": 0, "errors": 0}
+    for item in store.load_ambiguous_items(source_code):
+        values: dict[str, Any] = {}
+        if (not item["detail_checked_at"] and result["fetched"] < detail_limit
+                and result["errors"] < 3
+                and (detail_deadline is None or time.monotonic() < detail_deadline)):
+            try:
+                values = _fetch_detail(
+                    source_code, service_key, item["atc_id"], item["found_sequence"]
+                )
+                values["detail_checked_at"] = datetime.now().astimezone().isoformat()
+                result["fetched"] += 1
+                time.sleep(0.35)
+            except (urllib.error.URLError, TimeoutError, ET.ParseError, ValueError):
+                result["errors"] += 1
+                continue
+        org_id = str(values.get("detail_org_id") or item["detail_org_id"] or "")
+        location_id = mappings.get((_normalize_key(item["raw_storage_name"]), org_id))
+        if location_id in active_ids:
+            values.update(storage_location_id=location_id, location_match_status="matched")
+            result["resolved"] += 1
+        if values:
+            store.update_ambiguous_item(int(item["id"]), values)
+    return result
 
 
 def _sync_source(
@@ -181,6 +290,7 @@ def _sync_source(
         category_ids = store.load_category_ids(source_code)
         aliases = store.load_aliases(source_code)
         locations = store.load_locations(source_code)
+        detail_mappings = store.load_detail_mappings(source_code)
         if not category_ids:
             raise RuntimeError(f"활성 카테고리 매핑이 없습니다: {source_code}")
 
@@ -196,14 +306,26 @@ def _sync_source(
         result["selected"] = fetch_summary["selected_count"]
         result["invalid"] = fetch_summary["invalid_count"]
 
-        database_rows, unmatched_count = _build_database_rows(
+        # PRD 5 — 상세 API 지연이 목록 저장과 Vercel 300초 제한을 막지 않게 합니다.
+        detail_deadline = time.monotonic() + 20
+        result["backlog"] = resolve_existing_ambiguous(
+            store, source_code, client.service_key, detail_deadline=detail_deadline
+        )
+        detail_evidence = store.load_detail_evidence(source_code)
+
+        database_rows, unmatched_count, detail_errors = _build_database_rows(
             selected_rows,
             source_code=source_code,
             category_ids=category_ids,
             aliases=aliases,
             locations=locations,
+            detail_mappings=detail_mappings,
+            detail_evidence=detail_evidence,
+            detail_service_key=client.service_key,
+            detail_deadline=detail_deadline,
         )
         result["unmatched"] = unmatched_count
+        result["detail_errors"] = detail_errors
         existing = store.existing_identities(source_code)
         incoming = {(row["atc_id"], row["found_sequence"]) for row in database_rows}
         result["updated"] = len(incoming & existing)
@@ -257,6 +379,8 @@ def _audit_values(
             {
                 "api_total_count": fetch_summary["api_total_count"],
                 "outside_range_count": fetch_summary["outside_range_count"],
+                "detail_errors": result.get("detail_errors", 0),
+                "backlog": result.get("backlog", {}),
             }
         )
     return {
@@ -343,7 +467,20 @@ def main() -> int:
         choices=SOURCE_ORDER,
         help="한 출처만 당일 증분 동기화합니다.",
     )
+    parser.add_argument("--resolve-ambiguous", action="store_true")
+    parser.add_argument("--detail-limit", type=int, default=100)
     args = parser.parse_args()
+    if args.resolve_ambiguous:
+        if not args.source or args.detail_limit < 0:
+            parser.error("--resolve-ambiguous에는 --source와 0 이상의 --detail-limit이 필요합니다.")
+        result = resolve_existing_ambiguous(
+            SupabaseIngestionStore.from_environment(),
+            SOURCE_CODES[args.source],
+            create_source_client(args.source).service_key,
+            detail_limit=args.detail_limit,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     target_date = date.fromisoformat(args.today) if args.today else None
     result = (
         run_incremental_sync(args.source, target_date)
