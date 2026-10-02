@@ -244,6 +244,49 @@ class SupabaseIngestionStore:
             for row in rows
         ]
 
+    def load_detail_mappings(self, source_code: str) -> dict[tuple[str, str], int]:
+        rows = self._fetch_all(
+            "storage_location_detail_mappings",
+            "normalized_raw_storage_name,detail_org_id,storage_location_id",
+            filters=[("item_source_code", f"eq.{source_code}")],
+        )
+        return {
+            (str(row["normalized_raw_storage_name"]), str(row["detail_org_id"])):
+            int(row["storage_location_id"])
+            for row in rows
+        }
+
+    def load_detail_evidence(self, source_code: str) -> dict[tuple[str, str], dict[str, Any]]:
+        rows = self._fetch_all(
+            "found_items",
+            "atc_id,found_sequence,raw_storage_name,detail_org_id,detail_org_name,detail_department,detail_phone,detail_checked_at",
+            filters=[
+                ("item_source_code", f"eq.{source_code}"),
+                ("detail_checked_at", "not.is.null"),
+            ],
+        )
+        return {(str(row["atc_id"]), str(row["found_sequence"])): row for row in rows}
+
+    def load_ambiguous_items(self, source_code: str) -> list[dict[str, Any]]:
+        return self._fetch_all(
+            "found_items",
+            "id,atc_id,found_sequence,raw_storage_name,detail_org_id,detail_org_name,detail_department,detail_phone,detail_checked_at",
+            filters=[
+                ("item_source_code", f"eq.{source_code}"),
+                ("location_match_status", "eq.ambiguous"),
+                ("order", "id.asc"),
+            ],
+        )
+
+    def update_ambiguous_item(self, item_id: int, values: dict[str, Any]) -> None:
+        self._request(
+            "PATCH",
+            "found_items",
+            query=[("id", f"eq.{item_id}"), ("location_match_status", "eq.ambiguous")],
+            payload=values,
+            prefer="return=minimal",
+        )
+
     def existing_identities(self, source_code: str) -> set[tuple[str, str]]:
         rows = self._fetch_all(
             "found_items",
