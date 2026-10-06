@@ -237,11 +237,12 @@ def content_security_policy() -> str:
     return "; ".join(
         [
             "default-src 'self'",
-            "script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net http://t1.daumcdn.net",
-            "style-src 'self' 'unsafe-inline' https://t1.daumcdn.net http://t1.daumcdn.net",
+            # PRD 5 — 카카오맵의 새 CDN 하위 호스트도 허용한다 (공식 CSP 공지 2026-07-07).
+            "script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
+            "style-src 'self' 'unsafe-inline' https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
             # PRD 3.2-2 — 습득물 사진(image_url) 원본 호스트. 이미지로만 허용한다
             "img-src 'self' data: blob: https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net https://minwon24.police.go.kr",
-            "connect-src 'self' https://dapi.kakao.com https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com",
+            "connect-src 'self' https://dapi.kakao.com https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net",
             "font-src 'self' data:",
             "frame-src https://map.kakao.com",
         ]

@@ -217,7 +217,12 @@ class SupabaseIngestionStore:
         rows = self._fetch_all(
             "storage_location_aliases",
             "normalized_alias,storage_location_id,region_code",
-            filters=[("item_source_code", f"eq.{source_code}")],
+            filters=[
+                ("item_source_code", f"eq.{source_code}"),
+                ("match_method", "eq.manual"),
+                ("verified", "eq.true"),
+                ("region_code", "eq."),
+            ],
         )
         return {
             str(row["normalized_alias"]): int(row["storage_location_id"])
