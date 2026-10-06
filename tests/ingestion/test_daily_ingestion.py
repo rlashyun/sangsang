@@ -189,6 +189,40 @@ class DailyIngestionTests(unittest.TestCase):
             (None, "ambiguous"),
         )
 
+    def test_full_name_precedes_parenthesis_base_and_retains_real_ambiguity(self) -> None:
+        locations = [LocationReference(1, "비발디파크", "비발디파크"),
+                     LocationReference(2, "비발디파크(오크동)", "비발디파크오크동")]
+        resolver = daily_ingestion._LocationResolver({}, locations)
+        self.assertEqual(resolver.resolve("비발디파크"), (1, "matched"))
+        self.assertEqual(resolver.resolve("비발디파크(오크동)"), (2, "matched"))
+        self.assertEqual(resolver.resolve("비발디"), (None, "unmatched"))
+        locations.append(LocationReference(3, "비발디파크", "비발디파크"))
+        self.assertEqual(daily_ingestion._resolve_location("비발디파크", {}, locations),
+                         (None, "ambiguous"))
+
+    def test_base_and_suffix_fallbacks_and_active_manual_exception(self) -> None:
+        locations = [LocationReference(1, "서울테스트역(안내소)", "서울테스트역안내소"),
+                     LocationReference(2, "다른역", "다른역")]
+        resolver = daily_ingestion._LocationResolver({"다른역": 1, "폐쇄기관": 999}, locations)
+        self.assertEqual(resolver.resolve("서울테스트역"), (1, "matched"))
+        self.assertEqual(resolver.resolve("테스트역안내소"), (1, "matched"))
+        self.assertEqual(resolver.resolve("다른역"), (1, "matched"))
+        self.assertEqual(resolver.resolve("폐쇄기관"), (None, "unmatched"))
+        self.assertEqual(resolver.resolve(""), (None, "unmatched"))
+
+    def test_repeated_names_do_not_rescan_location_catalog(self) -> None:
+        class SinglePass(list):
+            def __iter__(self):
+                if getattr(self, "consumed", False):
+                    raise AssertionError("기관 원장을 반복 조회함")
+                self.consumed = True
+                return super().__iter__()
+
+        resolver = daily_ingestion._LocationResolver({}, [LocationReference(1, "서울테스트역", "서울테스트역")])
+        resolver.suffix = SinglePass(resolver.suffix)
+        for _ in range(100):
+            self.assertEqual(resolver.resolve("테스트역"), (1, "matched"))
+
     @patch.object(daily_ingestion, "time")
     def test_verified_detail_rule_resolves_only_matching_org(self, clock) -> None:
         locations = [

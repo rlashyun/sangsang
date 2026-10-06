@@ -237,6 +237,24 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertIn("http://t1.daumcdn.net", policy)
         self.assertIn("http://*.daumcdn.net", policy)
 
+    def test_csp_allows_new_kakao_cdn_for_sdk_and_resources(self) -> None:
+        directives = _csp_directives(_content_security_policy())
+
+        for name in ("script-src", "style-src", "img-src", "connect-src"):
+            self.assertIn("https://*.kakaocdn.net", directives[name], name)
+        self.assertNotIn("*", directives["script-src"])
+        self.assertNotIn("https:", directives["script-src"])
+        self.assertNotIn("'unsafe-inline'", directives["script-src"])
+        self.assertNotIn("'unsafe-eval'", directives["script-src"])
+
+    def test_http_response_applies_updated_csp(self) -> None:
+        client = TestClient(create_app(KakaoLocalClient("test-rest-key"), "test-js-key"))
+
+        response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Content-Security-Policy"], _content_security_policy())
+
     # PRD 3.2-2 — 습득물 사진(image_url)은 전부 minwon24.police.go.kr에서 온다 (운영 DB 2026-09-27 확인)
     def test_csp_allows_police_item_photos_as_images(self) -> None:
         directives = _csp_directives(_content_security_policy())

@@ -41,43 +41,58 @@ def _base_name(value: Any) -> str:
     return _normalize_key(without_notes)
 
 
+class _LocationResolver:
+    """한 수집 배치에서 기관 색인과 장소명별 결과를 재사용합니다."""
+
+    def __init__(self, aliases: dict[str, int], locations: list[LocationReference]):
+        active_ids = {location.id for location in locations}
+        self.aliases = {key: value for key, value in aliases.items() if value in active_ids}
+        self.exact: dict[str, set[int]] = {}
+        self.base: dict[str, set[int]] = {}
+        self.suffix: list[tuple[str, int]] = []
+        self.cache: dict[str, tuple[int | None, str]] = {}
+        for location in locations:
+            for key in {_normalize_key(location.name), _normalize_key(location.normalized_name)}:
+                if key:
+                    self.exact.setdefault(key, set()).add(location.id)
+            base = _base_name(location.name)
+            if base:
+                self.base.setdefault(base, set()).add(location.id)
+            key = _normalize_key(location.normalized_name)
+            if key:
+                self.suffix.append((key, location.id))
+
+    @staticmethod
+    def _result(candidates: set[int]) -> tuple[int | None, str]:
+        if len(candidates) == 1:
+            return next(iter(candidates)), "matched"
+        return None, "ambiguous" if candidates else "unmatched"
+
+    def resolve(self, raw_storage_name: str) -> tuple[int | None, str]:
+        normalized = _normalize_key(raw_storage_name)
+        if not normalized:
+            return None, "unmatched"
+        if normalized in self.cache:
+            return self.cache[normalized]
+        if normalized in self.aliases:
+            result = self.aliases[normalized], "matched"
+        elif normalized in self.exact:
+            result = self._result(self.exact[normalized])
+        elif normalized in self.base:
+            result = self._result(self.base[normalized])
+        else:
+            result = self._result({
+                location_id for key, location_id in self.suffix
+                if key.endswith(normalized) or normalized.endswith(key)
+            })
+        self.cache[normalized] = result
+        return result
+
+
 def _resolve_location(
-    raw_storage_name: str,
-    aliases: dict[str, int],
-    locations: list[LocationReference],
+    raw_storage_name: str, aliases: dict[str, int], locations: list[LocationReference],
 ) -> tuple[int | None, str]:
-    normalized = _normalize_key(raw_storage_name)
-    if not normalized:
-        return None, "unmatched"
-    if normalized in aliases:
-        return aliases[normalized], "matched"
-
-    exact_candidates = {
-        location.id
-        for location in locations
-        if normalized
-        in {
-            _normalize_key(location.normalized_name),
-            _normalize_key(location.name),
-            _base_name(location.name),
-        }
-    }
-    if len(exact_candidates) == 1:
-        return next(iter(exact_candidates)), "matched"
-    if len(exact_candidates) > 1:
-        return None, "ambiguous"
-
-    suffix_candidates = {
-        location.id
-        for location in locations
-        if _normalize_key(location.normalized_name).endswith(normalized)
-        or normalized.endswith(_normalize_key(location.normalized_name))
-    }
-    if len(suffix_candidates) == 1:
-        return next(iter(suffix_candidates)), "matched"
-    if suffix_candidates:
-        return None, "ambiguous"
-    return None, "unmatched"
+    return _LocationResolver(aliases, locations).resolve(raw_storage_name)
 
 
 def _fetch_detail(
@@ -129,6 +144,7 @@ def _build_database_rows(
     unmatched_count = 0
     detail_errors = 0
     active_ids = {location.id for location in locations}
+    resolver = _LocationResolver(aliases, locations)
     for row in selected_rows:
         normalized_category = _normalize_key(row["raw_category_name"])
         category_id = category_ids.get(normalized_category)
@@ -136,9 +152,7 @@ def _build_database_rows(
             raise RuntimeError(
                 f"DB 카테고리 매핑이 없습니다: {source_code}/{row['raw_category_name']}"
             )
-        location_id, match_status = _resolve_location(
-            row["raw_storage_name"], aliases, locations
-        )
+        location_id, match_status = resolver.resolve(row["raw_storage_name"])
         evidence = detail_evidence.get((row["atc_id"], row["found_sequence"]))
         if evidence and _normalize_key(evidence["raw_storage_name"]) != _normalize_key(row["raw_storage_name"]):
             evidence = None
