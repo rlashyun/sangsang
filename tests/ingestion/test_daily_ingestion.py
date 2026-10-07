@@ -74,21 +74,23 @@ class FakeStore:
         return [LocationReference(123, "테스트역", "테스트역")]
 
     def load_detail_mappings(self, source_code: str) -> dict[tuple[str, str], int]:
-        return {}
+        raise AssertionError("ingestion must leave verified detail mapping to the DB")
 
     def load_detail_evidence(self, source_code: str) -> dict[tuple[str, str], dict]:
-        return {}
+        raise RuntimeError("57014: canceling statement due to statement timeout")
 
     def load_ambiguous_items(self, source_code: str) -> list[dict]:
-        return []
+        raise AssertionError("ingestion must not automatically process the old backlog")
 
-    def existing_identities(self, source_code: str) -> set[tuple[str, str]]:
-        return {("OLD", "1")}
+    def existing_identities(self, source_code: str, identities: set[tuple[str, str]]) -> set[tuple[str, str]]:
+        self.requested_identities = identities
+        return {("OLD", "1")} & identities
 
-    def upsert_found_items(self, rows: list[dict]) -> None:
+    def upsert_found_items(self, rows: list[dict]) -> int:
         if self.fail_upsert:
             raise RuntimeError("upsert failed")
         self.upserted.extend(rows)
+        return sum(row["location_match_status"] != "matched" for row in rows)
 
     def delete_expired(self, source_code: str) -> int:
         self.deleted = True
@@ -223,57 +225,48 @@ class DailyIngestionTests(unittest.TestCase):
         for _ in range(100):
             self.assertEqual(resolver.resolve("테스트역"), (1, "matched"))
 
-    @patch.object(daily_ingestion, "time")
-    def test_verified_detail_rule_resolves_only_matching_org(self, clock) -> None:
-        locations = [
-            LocationReference(1, "서울중앙지구대", "서울중앙지구대"),
-            LocationReference(2, "충주중앙지구대", "충주중앙지구대"),
-        ]
-        calls = []
-
-        def detail(source, key, atc, sequence):
-            calls.append(atc)
-            return {"detail_org_id": "O0001223", "detail_phone": "043-843-0021"}
-
-        kwargs = dict(
+    @patch("urllib.request.urlopen", side_effect=AssertionError("detail API must not run"))
+    def test_unresolved_name_never_fetches_details_and_unique_name_still_matches(self, network) -> None:
+        rows = daily_ingestion._build_database_rows(
+            [selected_row(storage="중앙지구대"), selected_row(atc_id="A2", storage="서울중앙지구대")],
             source_code="police_api",
-            category_ids={"지갑남성용지갑": 4},
-            aliases={},
-            locations=locations,
-            detail_evidence={},
-            detail_service_key="test-key",
-            detail_fetcher=detail,
+            category_ids={"지갑남성용지갑": 4}, aliases={},
+            locations=[LocationReference(1, "서울중앙지구대", "서울중앙지구대"),
+                       LocationReference(2, "충주중앙지구대", "충주중앙지구대")],
         )
-        rows, unresolved, errors = daily_ingestion._build_database_rows(
-            [selected_row(storage="중앙지구대")],
-            detail_mappings={("중앙지구대", "O0001223"): 2},
-            **kwargs,
-        )
-        self.assertEqual((rows[0]["storage_location_id"], unresolved, errors), (2, 0, 0))
-        self.assertEqual(calls, ["A1"])
+        self.assertIsNone(rows[0]["storage_location_id"])
+        self.assertEqual(rows[0]["location_match_status"], "ambiguous")
+        self.assertIsNone(rows[0]["detail_org_id"])
+        self.assertEqual(rows[1]["storage_location_id"], 1)
+        self.assertEqual(rows[1]["location_match_status"], "matched")
+        network.assert_not_called()
 
-        rows, unresolved, errors = daily_ingestion._build_database_rows(
-            [selected_row(storage="중앙지구대")], detail_mappings={}, **kwargs
-        )
-        self.assertEqual((rows[0]["storage_location_id"], unresolved, errors), (None, 1, 0))
+    @patch.object(daily_ingestion, "collect_selected_rows")
+    @patch.object(daily_ingestion, "create_source_client")
+    def test_removed_detail_timeout_cannot_block_daily_sync(self, create_client, collect_rows) -> None:
+        # FakeStore raises today's 57014 if the removed full-table detail lookup is called.
+        store = FakeStore()
+        collect_rows.return_value = ([selected_row()], {
+            "fetched_count": 1, "selected_count": 1, "invalid_count": 0,
+            "outside_range_count": 0, "api_total_count": 1,
+        })
+        result = daily_ingestion._sync_source(store, source="partner", today=date(2026, 10, 7))
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual(store.requested_identities, {("A1", "1")})
+        self.assertTrue(store.deleted)
 
-        kwargs["detail_evidence"] = {("A1", "1"): {
-            "raw_storage_name": "중앙지구대", "detail_org_id": "O0001223",
-            "detail_checked_at": "2026-10-02T00:00:00+00:00",
-        }}
-        calls.clear()
-        rows, unresolved, errors = daily_ingestion._build_database_rows(
-            [selected_row(storage="중앙지구대")],
-            detail_mappings={("중앙지구대", "O0001223"): 2}, **kwargs,
-        )
-        self.assertEqual((rows[0]["storage_location_id"], unresolved, calls), (2, 0, []))
-
-        # 기관이 비활성화되면 캐시된 상세정보가 있어도 지도에 연결하지 않습니다.
-        rows, unresolved, errors = daily_ingestion._build_database_rows(
-            [selected_row(storage="중앙지구대")],
-            detail_mappings={("중앙지구대", "O0001223"): 999}, **kwargs,
-        )
-        self.assertEqual((rows[0]["storage_location_id"], unresolved), (None, 1))
+    @patch.object(daily_ingestion, "collect_selected_rows")
+    @patch.object(daily_ingestion, "create_source_client")
+    def test_audit_counts_final_db_matches(self, create_client, collect_rows) -> None:
+        store = FakeStore()
+        store.upsert_found_items = lambda rows: 0  # Verified DB trigger resolves the incoming row.
+        collect_rows.return_value = ([selected_row(storage="unknown")], {
+            "fetched_count": 1, "selected_count": 1, "invalid_count": 0,
+            "outside_range_count": 0, "api_total_count": 1,
+        })
+        result = daily_ingestion._sync_source(store, source="partner", today=date(2026, 10, 7))
+        self.assertEqual(result["unmatched"], 0)
+        self.assertEqual(store.finished[0]["unmatched_count"], 0)
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")

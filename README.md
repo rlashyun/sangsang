@@ -145,12 +145,14 @@ DELETE로 지우면 `found_items`가 커졌을 때 Postgres `statement_timeout`�
 ```powershell
 uv run sync-found-items
 uv run sync-found-items --today 2026-08-28
-uv run sync-found-items --source police --resolve-ambiguous --detail-limit 100
 ```
 
-동명 기관은 상세 API의 기관 코드와 검증된 연결 규칙으로만 매칭합니다. 마지막 명령은
-기존 `ambiguous` 물품의 상세정보를 최대 100건 보충하고 새 규칙을 다시 적용합니다.
-상세 API가 실패하거나 대상 기관의 좌표가 검증되지 않았다면 연결하지 않습니다.
+동기화 중 상세 API를 자동 호출하거나 과거 물품의 상세정보를 전량 조회하지 않습니다.
+기존 물품의 상세정보 보존과 검증된 동명 기관 규칙 적용은 DB 트리거가 처리합니다.
+기관 코드가 없거나 규칙으로 해결되지 않는 물품은 `unmatched` 및 위치 NULL로 저장하고,
+사람이 원문과 실제 기관을 확인한 뒤 검증된 별칭·기관 코드 규칙 또는 개별 물품을 수정합니다.
+신규·갱신 건수는 이번 수집 물품 ID만 100개씩 조회하며, `unmatched_count`는
+DB 트리거 적용 이후 최종 저장 결과를 기준으로 기록합니다.
 
 동시 실행은 `ingestion_runs_one_running_per_source` 인덱스로 차단하며 실행 결과는
 `ingestion_runs`에 기록됩니다. Vercel은 [vercel.json](./vercel.json)의
