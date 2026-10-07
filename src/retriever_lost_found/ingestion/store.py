@@ -17,6 +17,7 @@ SOURCE_LOCATION_CODES = {
     "police_api": "esri_police",
 }
 UPSERT_BATCH_SIZE = 250
+IDENTITY_BATCH_SIZE = 100
 # PRD 4.5 — 보존기간 삭제를 Postgres statement_timeout 안에서 끝내기 위한 배치 크기.
 # 전량 단일 DELETE는 found_items가 커지면 57014로 취소되어 삭제가 0건이 된다.
 DELETE_BATCH_SIZE = 5000
@@ -249,56 +250,26 @@ class SupabaseIngestionStore:
             for row in rows
         ]
 
-    def load_detail_mappings(self, source_code: str) -> dict[tuple[str, str], int]:
-        rows = self._fetch_all(
-            "storage_location_detail_mappings",
-            "normalized_raw_storage_name,detail_org_id,storage_location_id",
-            filters=[("item_source_code", f"eq.{source_code}")],
-        )
-        return {
-            (str(row["normalized_raw_storage_name"]), str(row["detail_org_id"])):
-            int(row["storage_location_id"])
-            for row in rows
-        }
-
-    def load_detail_evidence(self, source_code: str) -> dict[tuple[str, str], dict[str, Any]]:
-        rows = self._fetch_all(
-            "found_items",
-            "atc_id,found_sequence,raw_storage_name,detail_org_id,detail_org_name,detail_department,detail_phone,detail_checked_at",
-            filters=[
-                ("item_source_code", f"eq.{source_code}"),
-                ("detail_checked_at", "not.is.null"),
-            ],
-        )
-        return {(str(row["atc_id"]), str(row["found_sequence"])): row for row in rows}
-
-    def load_ambiguous_items(self, source_code: str) -> list[dict[str, Any]]:
-        return self._fetch_all(
-            "found_items",
-            "id,atc_id,found_sequence,raw_storage_name,detail_org_id,detail_org_name,detail_department,detail_phone,detail_checked_at",
-            filters=[
-                ("item_source_code", f"eq.{source_code}"),
-                ("location_match_status", "eq.ambiguous"),
-                ("order", "id.asc"),
-            ],
-        )
-
-    def update_ambiguous_item(self, item_id: int, values: dict[str, Any]) -> None:
-        self._request(
-            "PATCH",
-            "found_items",
-            query=[("id", f"eq.{item_id}"), ("location_match_status", "eq.ambiguous")],
-            payload=values,
-            prefer="return=minimal",
-        )
-
-    def existing_identities(self, source_code: str) -> set[tuple[str, str]]:
-        rows = self._fetch_all(
-            "found_items",
-            "atc_id,found_sequence",
-            filters=[("item_source_code", f"eq.{source_code}")],
-        )
-        return {(str(row["atc_id"]), str(row["found_sequence"])) for row in rows}
+    def existing_identities(
+        self, source_code: str, identities: set[tuple[str, str]]
+    ) -> set[tuple[str, str]]:
+        # PRD 4.5 — query incoming identities through the existing unique index.
+        # Downloading every retained identity makes daily ingestion grow with table size.
+        atc_ids = sorted({atc_id for atc_id, _ in identities})
+        existing: set[tuple[str, str]] = set()
+        for start in range(0, len(atc_ids), IDENTITY_BATCH_SIZE):
+            batch = atc_ids[start : start + IDENTITY_BATCH_SIZE]
+            rows = self._fetch_all(
+                "found_items",
+                "atc_id,found_sequence",
+                filters=[
+                    ("item_source_code", f"eq.{source_code}"),
+                    ("atc_id", "in.(" + ",".join(json.dumps(value) for value in batch) + ")"),
+                    ("order", "atc_id.asc,found_sequence.asc"),
+                ],
+            )
+            existing.update((str(row["atc_id"]), str(row["found_sequence"])) for row in rows)
+        return existing & identities
 
     def latest_registered_on(self, source_code: str) -> date | None:
         rows = self._request(
@@ -317,15 +288,42 @@ class SupabaseIngestionStore:
             return None
         return date.fromisoformat(str(rows[0]["registered_on"]))
 
-    def upsert_found_items(self, rows: list[dict[str, Any]]) -> None:
+    def upsert_found_items(self, rows: list[dict[str, Any]]) -> int:
+        """Save rows, preserve verified DB mappings and return the final unmatched count."""
+        unmatched = 0
         for batch in chunks(rows, UPSERT_BATCH_SIZE):
-            self._request(
+            saved = self._request(
                 "POST",
                 "found_items",
-                query=[("on_conflict", "item_source_code,atc_id,found_sequence")],
+                query=[
+                    ("on_conflict", "item_source_code,atc_id,found_sequence"),
+                    ("select", "id,location_match_status"),
+                ],
                 payload=batch,
-                prefer="resolution=merge-duplicates,return=minimal",
+                prefer="resolution=merge-duplicates,return=representation",
             )
+            if not isinstance(saved, list) or len(saved) != len(batch):
+                raise SupabaseRequestError("습득물 저장 결과를 확인하지 못했습니다.")
+            # PRD 4.5 — ambiguous is only an input to the existing verified-detail trigger.
+            # The user chose manual review for every item still unresolved after that trigger.
+            unresolved_ids = [str(int(row["id"])) for row in saved
+                              if row["location_match_status"] == "ambiguous"]
+            if unresolved_ids:
+                updated = self._request(
+                    "PATCH",
+                    "found_items",
+                    query=[
+                        ("id", "in.(" + ",".join(unresolved_ids) + ")"),
+                        ("location_match_status", "eq.ambiguous"),
+                        ("select", "id"),
+                    ],
+                    payload={"location_match_status": "unmatched"},
+                    prefer="return=representation",
+                )
+                if not isinstance(updated, list) or len(updated) != len(unresolved_ids):
+                    raise SupabaseRequestError("미매칭 물품의 수동 검토 상태를 확인하지 못했습니다.")
+            unmatched += sum(row["location_match_status"] != "matched" for row in saved)
+        return unmatched
 
     def delete_expired(self, source_code: str) -> int:
         """만료 데이터를 배치로 나눠 삭제하고 지운 총 건수를 반환합니다.

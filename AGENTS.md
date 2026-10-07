@@ -70,6 +70,8 @@ GET /api/found-items?location_ids=...&q=...
 NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 ```
 
+**2026-10-07 사용자 결정** — 수집 중 상세 API 자동 호출과 과거 물품 상세정보 전량 조회를 하지 않는다. `ambiguous`는 기존 DB 트리거의 검증된 기관 코드 규칙을 적용하기 위한 내부 상태다. 규칙 적용 후에도 해결되지 않은 이번 물품은 `unmatched` 및 위치 NULL로 저장하고 사람이 확인·수정한다. 기존 상세정보 보존과 규칙 적용은 DB 트리거에 맡긴다. 감사 로그의 미매칭 건수는 최종 저장 상태 기준이다.
+
 구현: `_resolve_location()` — `src/retriever_lost_found/ingestion/service.py`
 
 ---
