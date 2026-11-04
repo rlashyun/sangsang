@@ -172,8 +172,7 @@ src/retriever_lost_found/
 ├─ web/                      웹 앱·Cron·정적 UI
 ├─ integrations/             Kakao·Supabase·경찰청 API 연동
 ├─ ingestion/                카테고리 선별·수집·저장·동기화
-├─ search/                   퍼지 검색과 순위화
-└─ tools/                    좌표 생성·갱신용 명령줄 도구
+└─ search/                   퍼지 검색과 순위화
 supabase/migrations/         재현 가능한 DB 스키마
 tests/                       기능 영역별 테스트
 ```
