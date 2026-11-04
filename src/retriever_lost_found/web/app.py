@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import re
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,8 @@ from ..search.fuzzy import rank_found_items
 
 
 DEFAULT_STATIC_DIR = Path(__file__).with_name("static")
+# PRD 3.3 · 5 — 검색어 없는 목록 한 페이지 크기. 화면의 "물품 더 보기"가 이만큼씩 늘린다.
+FOUND_ITEM_PAGE_LIMIT = 50
 
 
 def create_app(
@@ -149,7 +153,7 @@ def create_app(
         )
 
     @app.get("/api/found-items")
-    def found_items(location_ids: str = "", q: str = "") -> JSONResponse:
+    def found_items(location_ids: str = "", q: str = "", cursor: str = "") -> JSONResponse:
         if found_item_client is None:
             return JSONResponse(
                 status_code=503,
@@ -160,6 +164,29 @@ def create_app(
         # PRD 3.3 · D3 — 습득물 검색어 상한 30자 (장소 검색칸 200자와는 별개)
         if len(search_query) > 30:
             raise ValueError("습득물 검색어는 30자 이하여야 합니다.")
+        if not search_query:
+            # PRD 3.3 · 5 — 검색어 없는 목록은 최신순 한 페이지만 보낸다.
+            # 반경 안 후보 전체(3km 3.7만 건)를 넘기던 방식이 16~26초 지연의 원인이었다.
+            page = found_item_client.fetch_item_page(
+                validated_ids,
+                limit=FOUND_ITEM_PAGE_LIMIT,
+                before=parse_found_item_cursor(cursor),
+            )
+            items = page["items"]
+            return JSONResponse(
+                content={
+                    "items": items,
+                    "query": search_query,
+                    # 첫 페이지에서만 숫자, 다음 페이지부터는 null
+                    "total_count": page["total_count"],
+                    "next_cursor": (
+                        found_item_cursor(items[-1]) if page["has_more"] and items else None
+                    ),
+                }
+            )
+        if cursor.strip():
+            raise ValueError("검색어 결과는 페이지로 나눠 받지 않습니다.")
+        # PRD 4.5 — 퍼지 점수는 후보 전체를 봐야 매길 수 있어 검색어가 있으면 전체를 읽는다.
         candidates = found_item_client.fetch_items(validated_ids)
         matched_items = rank_found_items(candidates, search_query)
         return JSONResponse(
@@ -168,6 +195,7 @@ def create_app(
                 "candidate_count": len(candidates),
                 "match_count": len(matched_items),
                 "query": search_query,
+                "next_cursor": None,
             }
         )
 
@@ -204,6 +232,29 @@ def create_runtime_app() -> FastAPI:
     app.state.location_source = "supabase"
     app.state.item_counts_available = True
     return app
+
+
+FOUND_ITEM_CURSOR_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2}):([1-9]\d{0,17})")  # bigint 범위 안
+
+
+def found_item_cursor(item: dict[str, Any]) -> str:
+    """목록 마지막 행의 (등록일, id)를 다음 페이지 커서로 만듭니다."""
+    return f"{item['registered_on']}:{item['id']}"
+
+
+def parse_found_item_cursor(value: str) -> tuple[str, int] | None:
+    value = value.strip()
+    if not value:
+        return None
+    match = FOUND_ITEM_CURSOR_PATTERN.fullmatch(value)
+    if match is None:
+        raise ValueError("목록 페이지 위치가 올바르지 않습니다.")
+    registered_on, item_id = match.groups()
+    try:
+        date.fromisoformat(registered_on)
+    except ValueError:
+        raise ValueError("목록 페이지 위치가 올바르지 않습니다.") from None
+    return registered_on, int(item_id)
 
 
 def optional_float(value: str, name: str) -> float | None:

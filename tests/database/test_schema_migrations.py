@@ -114,6 +114,34 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("security invoker set search_path = ''", migration)
         self.assertIn("new.raw_storage_name is distinct from old.raw_storage_name", migration)
 
+    def test_found_items_page_rpc_reads_newest_rows_per_location_and_is_service_role_only(
+        self,
+    ) -> None:
+        # PRD 3.3 · 5 — 3km 후보 3.7만 건(26MB)을 1,000건씩 38번 받던 조회를 한 페이지로 줄인다.
+        migration = " ".join(
+            (MIGRATIONS / "20261105090000_paged_found_items_rpc.sql")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+        signature = "public.found_items_page(bigint[], integer, date, bigint, boolean)"
+
+        # 기관별 최신순 인덱스가 있어야 기관마다 앞쪽 몇 건만 읽고 멈출 수 있다.
+        self.assertIn(
+            "on public.found_items (storage_location_id, registered_on desc, id desc)",
+            migration,
+        )
+        self.assertIn("create or replace function public.found_items_page(", migration)
+        # 기관마다 limit만큼만 읽은 뒤 합친다 — 전체 후보를 정렬하지 않는다.
+        self.assertIn("cross join lateral", migration)
+        self.assertIn("(item.registered_on, item.id) < (p_before_registered_on, p_before_id)", migration)
+        self.assertIn("security invoker", migration)
+        self.assertIn(
+            f"revoke all on function {signature} from public, anon, authenticated",
+            migration,
+        )
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
 
 if __name__ == "__main__":
     unittest.main()

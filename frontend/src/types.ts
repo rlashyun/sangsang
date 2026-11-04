@@ -49,7 +49,12 @@ export interface FoundItem {
 
 export interface FoundItemsPayload {
   items?: FoundItem[];
-  candidate_count: number;
+  /** 검색어가 있을 때만 — 퍼지 점수를 매긴 후보 전체 수 */
+  candidate_count?: number;
+  /** 검색어가 없을 때 첫 페이지에서만 — 선택 기관의 보관 물품 총수. 다음 페이지부터는 null */
+  total_count?: number | null;
+  /** 검색어가 없을 때 다음 50건을 받을 커서. 마지막 페이지이거나 검색어가 있으면 null */
+  next_cursor?: string | null;
   query?: string;
 }
 
