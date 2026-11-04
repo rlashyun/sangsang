@@ -178,11 +178,9 @@ export function FoundItemBrowser({
       <ol className="found-items" aria-label="습득물 목록">
         {items.map((item, index) => {
           const color = item.color_name ? ` · ${item.color_name}` : "";
-          const score = Number.isFinite(Number(item.match_score))
-            ? Math.round(Number(item.match_score) * 100)
-            : null;
+          // PRD 3.1-6 · 4.5 · D2 — 유사도 %는 화면에 노출하지 않는다(match_score는 내부 평가용).
           return (
-            <li className="found-item-card" key={`${item.item_name}:${item.registered_on}:${index}`}>
+            <li className="found-item-card" key={item.id ?? `${item.item_name}:${item.registered_on}:${index}`}>
               <div className="item-placeholder" aria-hidden="true">
                 <span>{categoryIcon(item.raw_category_name)}</span>
                 <small>{sourceLabel(item.item_source_code)}</small>
@@ -190,7 +188,6 @@ export function FoundItemBrowser({
               <div className="item-card-body">
                 <div className="item-card-top">
                   <span className="item-category">{item.raw_category_name}</span>
-                  {score !== null && <span className="match-score">유사도 {score}%</span>}
                 </div>
                 <strong className="item-name">{item.item_name || "이름 미상"}{color}</strong>
                 {item.description && <p className="item-description">{item.description}</p>}

@@ -36,6 +36,7 @@ export interface KakaoPlaceDocument {
 }
 
 export interface FoundItem {
+  id?: number;
   item_source_code?: string;
   item_name?: string;
   raw_category_name?: string;
@@ -55,8 +56,7 @@ export interface FoundItemsPayload {
 export interface InstitutionPayload {
   institutions?: Institution[];
   counts_available?: boolean;
-  count_error?: string | null;
-}
+  count_error?: string | null;}
 
 export interface PlacesPayload {
   documents?: KakaoPlaceDocument[];
