@@ -38,9 +38,12 @@ as $$
             select item.id, item.registered_on
             from public.found_items as item
             where item.storage_location_id = scope.storage_location_id
-              and (
-                  p_before_registered_on is null
-                  or (item.registered_on, item.id) < (p_before_registered_on, p_before_id)
+              -- 첫 페이지는 커서가 없으므로 끝없는 값으로 바꿔 모든 행을 통과시킨다.
+              -- "커서 is null or ..."로 쓰면 함수의 일반 계획에서 인덱스 조건이 아니라 필터가 되어
+              -- 뒤 페이지일수록 앞쪽 행을 전부 훑는다.
+              and (item.registered_on, item.id) < (
+                  coalesce(p_before_registered_on, 'infinity'::date),
+                  coalesce(p_before_id, 9223372036854775807)
               )
             order by item.registered_on desc, item.id desc
             limit greatest(1, least(p_limit, 201))

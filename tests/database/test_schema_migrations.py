@@ -134,7 +134,13 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("create or replace function public.found_items_page(", migration)
         # 기관마다 limit만큼만 읽은 뒤 합친다 — 전체 후보를 정렬하지 않는다.
         self.assertIn("cross join lateral", migration)
-        self.assertIn("(item.registered_on, item.id) < (p_before_registered_on, p_before_id)", migration)
+        # 커서 조건에 "p_before_registered_on is null or ..."를 쓰면 함수의 일반 계획에서
+        # 인덱스 조건이 아니라 필터가 되어, 뒤 페이지일수록 앞쪽 행을 다 훑는다(2026-11-05 로컬 계획 확인).
+        self.assertIn(
+            "(item.registered_on, item.id) < ( coalesce(p_before_registered_on, 'infinity'::date),",
+            migration,
+        )
+        self.assertNotIn("p_before_registered_on is null", migration)
         self.assertIn("security invoker", migration)
         self.assertIn(
             f"revoke all on function {signature} from public, anon, authenticated",
