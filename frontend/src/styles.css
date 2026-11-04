@@ -632,15 +632,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.match-score {
-  flex: 0 0 auto;
-  padding: 3px 6px;
-  border-radius: 999px;
-  color: var(--color-action);
-  background: var(--color-bg-score);
-  font-size: 10px;
-  font-weight: 800;
-}
 .item-name {
   display: block;
   margin-top: 4px;
