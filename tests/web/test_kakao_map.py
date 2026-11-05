@@ -50,7 +50,32 @@ class FakeResponse:
 
 
 class FakeFoundItemClient:
+    def __init__(self, *, page_has_more: bool = False) -> None:
+        self.page_has_more = page_has_more
+        self.fetch_items_calls: list[list[int]] = []
+        self.page_calls: list[dict] = []
+
+    def fetch_item_page(
+        self,
+        location_ids: list[int],
+        *,
+        limit: int,
+        before: tuple[str, int] | None = None,
+    ) -> dict:
+        self.page_calls.append(
+            {"location_ids": location_ids, "limit": limit, "before": before}
+        )
+        return {
+            "items": [
+                {"id": 12, "storage_location_id": location_ids[0], "item_name": "검정 지갑", "registered_on": "2026-08-26"},
+                {"id": 11, "storage_location_id": location_ids[0], "item_name": "파란 우산", "registered_on": "2026-08-25"},
+            ],
+            "has_more": self.page_has_more,
+            "total_count": 120 if before is None else None,
+        }
+
     def fetch_items(self, location_ids: list[int]) -> list[dict]:
+        self.fetch_items_calls.append(location_ids)
         return [{
             "id": 1,
             "storage_location_id": location_ids[0],
@@ -309,6 +334,63 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(params["storage_location_id"], ["in.(77,88)"])
         self.assertEqual(request.headers["Authorization"], "Bearer server-secret")
 
+    # PRD 3.3 · 5 — 검색어 없는 목록은 후보 전체 대신 한 페이지만 받는다.
+    @patch("urllib.request.urlopen")
+    def test_found_item_first_page_asks_one_extra_row_and_total(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse({
+            "items": [
+                {"id": 3, "registered_on": "2026-08-27"},
+                {"id": 2, "registered_on": "2026-08-26"},
+                {"id": 1, "registered_on": "2026-08-25"},
+            ],
+            "total_count": 120,
+        })
+        client = SupabaseFoundItemClient("https://example.supabase.co", "server-secret")
+
+        page = client.fetch_item_page([88, 77, 77], limit=2)
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "https://example.supabase.co/rest/v1/rpc/found_items_page",
+        )
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.headers["Authorization"], "Bearer server-secret")
+        self.assertEqual(json.loads(request.data), {
+            "p_location_ids": [77, 88],
+            "p_limit": 3,
+            "p_before_registered_on": None,
+            "p_before_id": None,
+            "p_include_total": True,
+        })
+        self.assertEqual([item["id"] for item in page["items"]], [3, 2])
+        self.assertTrue(page["has_more"])
+        self.assertEqual(page["total_count"], 120)
+
+    @patch("urllib.request.urlopen")
+    def test_found_item_last_page_has_no_more_and_skips_total(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse({
+            "items": [{"id": 1, "registered_on": "2026-08-25"}],
+            "total_count": None,
+        })
+        client = SupabaseFoundItemClient("https://example.supabase.co", "server-secret")
+
+        page = client.fetch_item_page([77], limit=2, before=("2026-08-26", 2))
+
+        body = json.loads(urlopen.call_args.args[0].data)
+        self.assertEqual(body["p_before_registered_on"], "2026-08-26")
+        self.assertEqual(body["p_before_id"], 2)
+        self.assertFalse(body["p_include_total"])
+        self.assertEqual([item["id"] for item in page["items"]], [1])
+        self.assertFalse(page["has_more"])
+        self.assertIsNone(page["total_count"])
+
+    def test_found_item_page_rejects_more_than_300_locations(self) -> None:
+        client = SupabaseFoundItemClient("https://example.supabase.co", "server-secret")
+
+        with self.assertRaises(ValueError):
+            client.fetch_item_page(list(range(1, 302)), limit=50)
+
     def test_fuzzy_search_matches_korean_typo_and_rejects_unrelated_item(self) -> None:
         phone = {
             "id": 1,
@@ -401,6 +483,121 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(
             response.json()["error"],
             "습득물 검색어는 30자 이하여야 합니다.",
+        )
+
+    # PRD 3.3 · 5 — 검색어 없는 목록은 50건씩 나눠 보내고, 다음 페이지 커서를 준다.
+    def test_found_item_endpoint_without_query_returns_first_page_and_cursor(self) -> None:
+        found_item_client = FakeFoundItemClient(page_has_more=True)
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=found_item_client,
+        )
+
+        response = TestClient(app).get("/api/found-items", params={"location_ids": "77,88"})
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["id"] for item in payload["items"]], [12, 11])
+        self.assertEqual(payload["total_count"], 120)
+        self.assertEqual(payload["next_cursor"], "2026-08-25:11")
+        self.assertEqual(
+            found_item_client.page_calls,
+            [{"location_ids": [77, 88], "limit": 50, "before": None}],
+        )
+        # 후보 전체 조회(1,000건씩 반복)는 타지 않는다.
+        self.assertEqual(found_item_client.fetch_items_calls, [])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_found_item_endpoint_last_page_has_no_cursor(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=FakeFoundItemClient(page_has_more=False),
+        )
+
+        response = TestClient(app).get("/api/found-items", params={"location_ids": "77"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["items"]), 2)
+        self.assertIsNone(response.json()["next_cursor"])
+
+    def test_found_item_endpoint_passes_cursor_to_next_page(self) -> None:
+        found_item_client = FakeFoundItemClient(page_has_more=True)
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=found_item_client,
+        )
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "cursor": "2026-08-25:11"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(found_item_client.page_calls[0]["before"], ("2026-08-25", 11))
+        self.assertIsNone(response.json()["total_count"])
+
+    def test_found_item_endpoint_rejects_malformed_cursor(self) -> None:
+        found_item_client = FakeFoundItemClient()
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=found_item_client,
+        )
+
+        for cursor in ("2026-08-25", "2026-13-01:11", "2026-08-25:abc", "2026-08-25:-1"):
+            with self.subTest(cursor=cursor):
+                response = TestClient(app).get(
+                    "/api/found-items",
+                    params={"location_ids": "77", "cursor": cursor},
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["error"], "목록 페이지 위치가 올바르지 않습니다.")
+        self.assertEqual(found_item_client.page_calls, [])
+
+    def test_found_item_endpoint_with_query_still_ranks_all_candidates(self) -> None:
+        # PRD 4.5 — 검색어가 있으면 퍼지 점수를 위해 후보 전체를 본다. 페이지로 자르지 않는다.
+        found_item_client = FakeFoundItemClient(page_has_more=True)
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=found_item_client,
+        )
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "q": "아이퐁"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(found_item_client.fetch_items_calls, [[77]])
+        self.assertEqual(found_item_client.page_calls, [])
+        self.assertIsNone(response.json()["next_cursor"])
+
+    def test_found_item_endpoint_rejects_cursor_with_query(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            institutions=[],
+            found_item_client=FakeFoundItemClient(),
+        )
+
+        response = TestClient(app).get(
+            "/api/found-items",
+            params={"location_ids": "77", "q": "지갑", "cursor": "2026-08-25:11"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["error"],
+            "검색어 결과는 페이지로 나눠 받지 않습니다.",
         )
 
     def test_institution_endpoint_uses_database_locations_and_vercel_cdn_cache(self) -> None:

@@ -243,7 +243,7 @@
 
 | 영역 | 요구사항 |
 | --- | --- |
-| **성능** | `/api/institutions` CDN 5분 캐시 + gzip. `/api/found-items` 무캐시, 1,000건 단위 페이징. 조회 p95 목표 1.5초. 동기화 함수 최대 300초 |
+| **성능** | `/api/institutions` CDN 5분 캐시 + gzip. `/api/found-items` 무캐시. 검색어 없는 목록은 최신순 50건씩 커서 페이징(RPC `found_items_page`), 검색어가 있으면 후보 전체를 1,000건 단위로 읽어 랭킹. 조회 p95 목표 1.5초. 동기화 함수 최대 300초 |
 | **보안** | 카카오 REST 키·Supabase secret 키는 서버 전용(브라우저 미전달). 전 테이블 RLS 활성 + `anon`/`authenticated` 권한 전면 회수, `service_role`만 접근. CSP·`X-Content-Type-Options`·`Cache-Control` 헤더 기본 적용. 크론은 `Authorization: Bearer $CRON_SECRET` 필수. Preview 환경이 운영 Supabase에 연결되지 않도록 환경 분리 |
 | **접근성** | `aria-live` 상태 영역, `sr-only` 레이블, 시맨틱 목록 구조 적용됨. |
 | **플랫폼** | 모바일·데스크톱 웹(반응형). 카카오맵 JS SDK 허용 도메인 등록 필요. 네이티브 앱 없음 |

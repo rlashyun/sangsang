@@ -88,14 +88,50 @@ class SupabaseFoundItemClient:
         if not self.url or not self.secret_key:
             raise ValueError("Supabase URL과 서버 전용 secret key가 필요합니다.")
 
+    def fetch_item_page(
+        self,
+        location_ids: list[int],
+        *,
+        limit: int,
+        before: tuple[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """PRD 3.3 · 5 — 선택 기관의 습득물을 최신순으로 한 페이지만 읽습니다.
+
+        다음 페이지가 있는지 알기 위해 limit보다 1건 더 요청하고, 총 건수는 첫 페이지에서만 셉니다.
+        """
+        unique_ids = _unique_location_ids(location_ids)
+        if not unique_ids:
+            return {"items": [], "has_more": False, "total_count": 0 if before is None else None}
+        before_registered_on, before_id = before if before is not None else (None, None)
+        request = urllib.request.Request(
+            f"{self.url}/rest/v1/rpc/found_items_page",
+            data=json.dumps(
+                {
+                    "p_location_ids": unique_ids,
+                    "p_limit": limit + 1,
+                    "p_before_registered_on": before_registered_on,
+                    "p_before_id": before_id,
+                    "p_include_total": before is None,
+                }
+            ).encode("utf-8"),
+            method="POST",
+            headers=_headers(self.secret_key, content_type=True),
+        )
+        payload = _request_json(request, self.timeout, "Supabase 물품 API")
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise RuntimeError("Supabase 물품 API 응답 형식이 올바르지 않습니다.")
+        rows = [row for row in payload["items"] if isinstance(row, dict)]
+        total_count = payload.get("total_count")
+        return {
+            "items": rows[:limit],
+            "has_more": len(rows) > limit,
+            "total_count": int(total_count) if total_count is not None else None,
+        }
+
     def fetch_items(self, location_ids: list[int]) -> list[dict[str, Any]]:
-        unique_ids = sorted(set(location_ids))
+        unique_ids = _unique_location_ids(location_ids)
         if not unique_ids:
             return []
-        if len(unique_ids) > MAX_FOUND_ITEM_LOCATION_IDS:
-            raise ValueError(
-                f"한 번에 조회할 수 있는 보관기관은 {MAX_FOUND_ITEM_LOCATION_IDS}곳까지입니다."
-            )
 
         items: list[dict[str, Any]] = []
         offset = 0
@@ -193,6 +229,15 @@ def validate_location_ids(raw_value: str) -> list[int]:
     if any(value <= 0 for value in location_ids):
         raise ValueError("보관기관 ID는 양수여야 합니다.")
     return sorted(set(location_ids))
+
+
+def _unique_location_ids(location_ids: list[int]) -> list[int]:
+    unique_ids = sorted(set(location_ids))
+    if len(unique_ids) > MAX_FOUND_ITEM_LOCATION_IDS:
+        raise ValueError(
+            f"한 번에 조회할 수 있는 보관기관은 {MAX_FOUND_ITEM_LOCATION_IDS}곳까지입니다."
+        )
+    return unique_ids
 
 
 def _headers(secret_key: str, *, content_type: bool = False) -> dict[str, str]:
