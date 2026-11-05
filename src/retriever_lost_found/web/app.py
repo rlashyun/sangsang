@@ -187,7 +187,8 @@ def create_app(
         if cursor.strip():
             raise ValueError("검색어 결과는 페이지로 나눠 받지 않습니다.")
         # PRD 4.5 — 퍼지 점수는 후보 전체를 봐야 매길 수 있어 검색어가 있으면 전체를 읽는다.
-        candidates = found_item_client.fetch_items(validated_ids)
+        # PRD 3.3 · 5 — 다만 1,000건씩 반복하지 않고 RPC 한 번으로 받는다.
+        candidates = found_item_client.fetch_search_candidates(validated_ids)
         matched_items = rank_found_items(candidates, search_query)
         return JSONResponse(
             content={

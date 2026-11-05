@@ -9,7 +9,6 @@ from typing import Any
 
 SUPABASE_RPC_PAGE_SIZE = 1_000
 MAX_FOUND_ITEM_LOCATION_IDS = 300
-FOUND_ITEM_PAGE_SIZE = 1_000
 
 
 class SupabaseMapLocationClient:
@@ -128,35 +127,38 @@ class SupabaseFoundItemClient:
             "total_count": int(total_count) if total_count is not None else None,
         }
 
-    def fetch_items(self, location_ids: list[int]) -> list[dict[str, Any]]:
+    def fetch_search_candidates(self, location_ids: list[int]) -> list[dict[str, Any]]:
+        """PRD 3.3 · 5 — 검색어 순위 계산용 후보 전체를 RPC 한 번으로 받습니다.
+
+        예전에는 Data API를 1,000건씩 offset으로 반복해 서울역 5km에서 40번 왕복·28MB·32초였고,
+        3km에서는 첫 페이지부터 statement timeout이 났다(2026-11-05 운영 실측).
+        DB는 정렬하지 않고 보내고(정렬이 디스크로 흘러 느렸다), 여기서 기존과 같은 등록일·id
+        내림차순으로 맞춘다. 같은 점수끼리의 결과 순서가 그대로 유지된다(안정 정렬).
+        """
         unique_ids = _unique_location_ids(location_ids)
         if not unique_ids:
             return []
-
-        items: list[dict[str, Any]] = []
-        offset = 0
-        id_filter = f"in.({','.join(str(value) for value in unique_ids)})"
-        while True:
-            query = urllib.parse.urlencode(
-                {
-                    "select": self.SELECT_FIELDS,
-                    "storage_location_id": id_filter,
-                    "order": "registered_on.desc,id.desc",
-                    "limit": FOUND_ITEM_PAGE_SIZE,
-                    "offset": offset,
-                }
-            )
-            request = urllib.request.Request(
-                f"{self.url}/rest/v1/found_items?{query}",
-                headers=_headers(self.secret_key),
-            )
-            payload = _request_json(request, self.timeout, "Supabase 물품 API")
-            if not isinstance(payload, list):
-                raise RuntimeError("Supabase 물품 API 응답 형식이 올바르지 않습니다.")
-            items.extend(row for row in payload if isinstance(row, dict))
-            if len(payload) < FOUND_ITEM_PAGE_SIZE:
-                return items
-            offset += FOUND_ITEM_PAGE_SIZE
+        request = urllib.request.Request(
+            f"{self.url}/rest/v1/rpc/found_items_candidates",
+            data=json.dumps({"p_location_ids": unique_ids}).encode("utf-8"),
+            method="POST",
+            headers=_headers(self.secret_key, content_type=True),
+        )
+        payload = _request_json(request, self.timeout, "Supabase 물품 API")
+        columns = self.SELECT_FIELDS.split(",")
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("columns") != columns
+            or not isinstance(rows, list)
+            or any(not isinstance(row, list) or len(row) != len(columns) for row in rows)
+        ):
+            # 열 순서가 어긋나거나 행이 잘리면 값이 다른 키에 들어가거나 물품이 빠진다 — 조용히 넘기지 않는다.
+            raise RuntimeError("Supabase 물품 API 응답 형식이 올바르지 않습니다.")
+        registered_on, item_id = columns.index("registered_on"), columns.index("id")
+        # registered_on은 NOT NULL인 ISO 날짜 문자열이라 문자열 순서가 날짜 순서와 같다.
+        rows.sort(key=lambda row: (row[registered_on], row[item_id]), reverse=True)
+        return [dict(zip(columns, row)) for row in rows]
 
 
 def map_location_from_rpc(row: Any) -> dict[str, Any] | None:

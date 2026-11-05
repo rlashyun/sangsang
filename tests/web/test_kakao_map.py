@@ -52,7 +52,7 @@ class FakeResponse:
 class FakeFoundItemClient:
     def __init__(self, *, page_has_more: bool = False) -> None:
         self.page_has_more = page_has_more
-        self.fetch_items_calls: list[list[int]] = []
+        self.candidate_calls: list[list[int]] = []
         self.page_calls: list[dict] = []
 
     def fetch_item_page(
@@ -74,8 +74,8 @@ class FakeFoundItemClient:
             "total_count": 120 if before is None else None,
         }
 
-    def fetch_items(self, location_ids: list[int]) -> list[dict]:
-        self.fetch_items_calls.append(location_ids)
+    def fetch_search_candidates(self, location_ids: list[int]) -> list[dict]:
+        self.candidate_calls.append(location_ids)
         return [{
             "id": 1,
             "storage_location_id": location_ids[0],
@@ -317,22 +317,63 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(enriched[0]["storage_location_id"], 77)
         self.assertNotIn("item_count", locations[0])
 
+    # PRD 3.3 · 5 — 검색어 순위 계산용 후보는 1,000건 offset 반복(3km 38번 왕복) 대신 RPC 한 번으로 받는다.
     @patch("urllib.request.urlopen")
-    def test_found_items_are_filtered_by_selected_location_ids(self, urlopen) -> None:
-        urlopen.return_value = FakeResponse([{
-            "id": 1,
-            "storage_location_id": 77,
-            "item_name": "검정 지갑",
-        }])
+    def test_search_candidates_are_read_with_one_rpc_call_for_selected_locations(
+        self, urlopen
+    ) -> None:
+        columns = SupabaseFoundItemClient.SELECT_FIELDS.split(",")
+        first = [12, 77, "police_api", "F1", 1, "지갑 > 남성용 지갑", "검정", "검정 지갑",
+                 "가죽", "https://example/img.jpg", "서울역", "2026-08-26", "검정 지갑 가죽"]
+        second = [11, 88, "partner_api", "F2", 2, "가방 > 백팩", None, "백팩",
+                  None, None, "시청역", "2026-08-25", "백팩"]
+        third = [9, 88, "partner_api", "F3", 1, "카드", None, "교통카드",
+                 None, None, "시청역", "2026-08-25", "교통카드"]
+        # DB는 정렬하지 않고 보낸다 — 클라이언트가 등록일·id 내림차순으로 맞춘다.
+        urlopen.return_value = FakeResponse(
+            {"columns": columns, "rows": [third, first, second]}
+        )
         client = SupabaseFoundItemClient("https://example.supabase.co", "server-secret")
 
-        items = client.fetch_items([88, 77, 77])
+        items = client.fetch_search_candidates([88, 77, 77])
 
-        self.assertEqual(items[0]["storage_location_id"], 77)
+        self.assertEqual(urlopen.call_count, 1)
         request = urlopen.call_args.args[0]
-        params = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)
-        self.assertEqual(params["storage_location_id"], ["in.(77,88)"])
+        self.assertEqual(
+            request.full_url,
+            "https://example.supabase.co/rest/v1/rpc/found_items_candidates",
+        )
+        self.assertEqual(request.get_method(), "POST")
         self.assertEqual(request.headers["Authorization"], "Bearer server-secret")
+        self.assertEqual(json.loads(request.data), {"p_location_ids": [77, 88]})
+        # 응답 항목은 기존 Data API 행과 같은 키·순서의 dict이고, 기존과 같은 등록일·id 내림차순이다.
+        # 같은 점수끼리는 이 순서가 그대로 남으므로(안정 정렬) 검색 결과 순서가 바뀌지 않는다.
+        self.assertEqual(
+            items,
+            [dict(zip(columns, first)), dict(zip(columns, second)), dict(zip(columns, third))],
+        )
+        self.assertEqual(list(items[0]), columns)
+
+    @patch("urllib.request.urlopen")
+    def test_search_candidates_skip_request_without_locations(self, urlopen) -> None:
+        client = SupabaseFoundItemClient("https://example.supabase.co", "server-secret")
+
+        self.assertEqual(client.fetch_search_candidates([]), [])
+        urlopen.assert_not_called()
+        with self.assertRaises(ValueError):
+            client.fetch_search_candidates(list(range(1, 302)))
+        urlopen.assert_not_called()
+
+    @patch("urllib.request.urlopen")
+    def test_search_candidates_reject_column_order_that_differs_from_client(self, urlopen) -> None:
+        # SQL과 Python의 열 순서가 어긋나면 값이 엉뚱한 키에 들어간다 — 조용히 넘기지 않는다.
+        columns = SupabaseFoundItemClient.SELECT_FIELDS.split(",")
+        swapped = [columns[1], columns[0], *columns[2:]]
+        urlopen.return_value = FakeResponse({"columns": swapped, "rows": []})
+        client = SupabaseFoundItemClient("https://example.supabase.co", "server-secret")
+
+        with self.assertRaises(RuntimeError):
+            client.fetch_search_candidates([77])
 
     # PRD 3.3 · 5 — 검색어 없는 목록은 후보 전체 대신 한 페이지만 받는다.
     @patch("urllib.request.urlopen")
@@ -506,8 +547,8 @@ class KakaoLocalClientTests(unittest.TestCase):
             found_item_client.page_calls,
             [{"location_ids": [77, 88], "limit": 50, "before": None}],
         )
-        # 후보 전체 조회(1,000건씩 반복)는 타지 않는다.
-        self.assertEqual(found_item_client.fetch_items_calls, [])
+        # 검색어 순위용 후보 전체 조회는 타지 않는다.
+        self.assertEqual(found_item_client.candidate_calls, [])
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_found_item_endpoint_last_page_has_no_cursor(self) -> None:
@@ -577,8 +618,9 @@ class KakaoLocalClientTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(found_item_client.fetch_items_calls, [[77]])
+        self.assertEqual(found_item_client.candidate_calls, [[77]])
         self.assertEqual(found_item_client.page_calls, [])
+        self.assertEqual([item["id"] for item in response.json()["items"]], [1])
         self.assertIsNone(response.json()["next_cursor"])
 
     def test_found_item_endpoint_rejects_cursor_with_query(self) -> None:
