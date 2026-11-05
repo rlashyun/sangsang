@@ -9,6 +9,7 @@ description = "경찰청 습득물 데이터 수집 및 자연어 검색 백엔�
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi[standard]>=0.116,<1",
+    "rapidfuzz>=3.9,<4",
 ]
 
 [project.scripts]
