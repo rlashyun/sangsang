@@ -53,7 +53,7 @@
 ### ① 검색을 DB로 — 권희준
 
 - **현재:** 검색어가 있으면 `SupabaseFoundItemClient.fetch_items()`가 반경 안 후보를 **전부** 받는다. 그다음 `search/fuzzy.py`의 `rank_found_items()`가 Python에서 순위를 매긴다(`web/app.py` `found_items()`). 3km 반경이면 후보가 약 3.7만 건이다.
-- 검색어 없는 목록은 PR #28에서 RPC `found_items_page` 50건 커서 페이징으로 1단계를 진행했다. **운영 마이그레이션을 적용하기 전에는 병합하지 않는다.**
+- 검색어 없는 목록은 PR #28에서 RPC `found_items_page` 50건 커서 페이징으로 1단계를 진행했다. 마이그레이션은 2026-11-05 운영에 적용했다.
 - **목표:** 순위 매기기와 자르기를 DB에서 끝내고 상위 결과만 받는다. 응답 시간은 p95 1.5초(PRD 2.5-1)다.
 - **지켜야 할 것:**
   - 검색은 언제나 `location_ids` 범위 안에서만 한다(PRD 4.1).
