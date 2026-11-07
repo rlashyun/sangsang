@@ -253,7 +253,7 @@ supabase/migrations/         재현 가능한 DB 스키마
 tests/                       기능 영역별 테스트
 ```
 
-**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/cron/{partner,police}-sync`(Bearer 인증)
+**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/alerts`·`/api/alerts/{summary,confirm,extend,cancel}`(무캐시, ③ 스케줄러) · `/api/cron/{partner,police}-sync` · `/api/cron/alert-send`(Bearer 인증)
 
 ---
 
@@ -423,3 +423,4 @@ PRD 7.1의 마일스톤은 **날짜가 고정되어 있지 않다("유동적으�
 | 2026-11-05 | **영역별 역할 분담표를 폐지하고 이번 스프린트 작업별 담당으로 대체**(6장, `docs/team-roles.md`). "스케줄러"(분실물 알림 예약)와 "UI/UX"(디자인 개편)의 뜻을 명시하고, 2장에 10번 부연을 추가하고, 9.3 담당을 갱신했다(크론 실패 알림은 권희준). 스프린트 밖 할 일은 `docs/backlog.md`로 정리하고 8장 문서 지도에 등록. 9.1 D5의 README `tools/` 서술을 정정 |
 | 2026-11-05 | 검색어 없는 습득물 목록을 RPC `found_items_page` 50건 커서 페이징으로 전환(1단계). 3장 탐색 흐름과 9.3 성능 행에 반영. 마이그레이션은 같은 날 운영에 적용·검증 |
 | 2026-11-05 | **정량 결과는 모두 `docs/measurements.md`에 기록하기로 함**(6장 문서 보관 규칙의 예외, 세션 완료 조건 ⑤, 8장 문서 지도). 9.3에 PR #28 배포 후 실측과 검색어 경로 작업 보류를 반영 |
+| 2026-11-06 | 8장 엔드포인트에 알림 예약 API(`/api/alerts*`)와 발송 크론(`/api/cron/alert-send`) 추가 |

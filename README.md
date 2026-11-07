@@ -162,6 +162,44 @@ DB 트리거 적용 이후 최종 저장 결과를 기준으로 기록합니다.
 요청은 `Authorization: Bearer $CRON_SECRET`이 일치해야 실행됩니다. Vercel Hobby
 요금제에서는 지정한 한 시간 안에서 실행 시각이 지연될 수 있습니다.
 
+## 분실물 알림 메일(스케줄러)
+
+검색 조건과 이메일로 알림을 예약하면, 1주일 동안 매일 새로 들어온 습득물 중 유사한 물품을
+메일로 알립니다(PRD 2.1-4, 4.2 P1). 설계와 구현 계획은 `docs/alert-scheduler/`에 있습니다.
+
+- 매칭: 수집 크론(`partner-sync`·`police-sync`)이 끝날 때 그 출처의 새 물품만 비교합니다.
+  유사 판정은 ⑥ 검색 방식 결론 뒤에 연결합니다.
+- 발송: `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 돕니다.
+  최근 24시간 450통까지 보냅니다.
+- 메일 설정이 하나라도 없으면 알림 예약 API(`/api/alerts*`)는 503을 돌려줍니다.
+  Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
+
+서버 전용 환경 변수입니다. 브라우저로 전달하지 않습니다.
+
+- `MAIL_SMTP_HOST` — `smtp.gmail.com`
+- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS)
+- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소
+- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리(공백 없이)
+- `MAIL_FROM` — `리트리버 <서비스 Gmail 주소>`
+- `PUBLIC_BASE_URL` — 메일 속 링크 주소의 앞부분. 로컬은 `http://127.0.0.1:8000`
+- `ALERT_SECRET` — 링크 토큰과 IP 해시에 쓰는 무작위 문자열
+- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본 450
+
+앱 비밀번호는 Google 계정에 2단계 인증을 켠 뒤 https://myaccount.google.com/apppasswords
+에서 만듭니다. 계정 비밀번호를 바꾸면 앱 비밀번호가 무효가 되어 메일이 멈춥니다.
+`ALERT_SECRET`은 다음 명령으로 만듭니다. 값을 바꾸면 이미 보낸 메일의 링크가 모두 무효가 됩니다.
+
+```powershell
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+배포 전에는 DB 없이 메일 한 통만 보내 Gmail 연결과 스팸함 분류를 확인합니다.
+실제 메일이 나가므로 받는 주소를 확인한 뒤 실행합니다.
+
+```powershell
+uv run python -m retriever_lost_found.alerts.send_test --to 받을주소@example.com
+```
+
 ## 프로젝트 구조
 
 ```text

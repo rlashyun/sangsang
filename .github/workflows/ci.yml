@@ -24,6 +24,14 @@ jobs:
       KAKAO_JAVASCRIPT_KEY: test-kakao-js-key
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_SECRET_KEY: test-supabase-secret
+      # ③ 스케줄러 메일 설정 — 더미 값. 테스트는 가짜 발송기를 써서 실제로 보내지 않는다.
+      MAIL_SMTP_HOST: smtp.example.com
+      MAIL_SMTP_PORT: "465"
+      MAIL_SMTP_USERNAME: sender@example.com
+      MAIL_SMTP_PASSWORD: test-mail-password
+      MAIL_FROM: "리트리버 <sender@example.com>"
+      PUBLIC_BASE_URL: https://retriever.example
+      ALERT_SECRET: test-alert-secret
 
     steps:
       - name: Check out repository
