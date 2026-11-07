@@ -40,3 +40,37 @@ def reservation_row(**overrides: Any) -> dict[str, Any]:
     }
     row.update(overrides)
     return row
+
+
+from retriever_lost_found.alerts.sender import OutgoingEmail, SendError  # noqa: E402
+
+
+class FakeEmailSender:
+    """보낸 메일을 기록한다. failures[수신자]에 넣은 오류를 차례로 하나씩 던진다."""
+
+    def __init__(
+        self,
+        *,
+        failures: dict[str, list[SendError]] | None = None,
+        open_error: SendError | None = None,
+    ) -> None:
+        self.sent: list[OutgoingEmail] = []
+        self.failures = {address: list(errors) for address, errors in (failures or {}).items()}
+        self.open_error = open_error
+        self.open_count = 0
+        self.closed = 0
+
+    def open(self) -> "FakeEmailSender":
+        if self.open_error is not None:
+            raise self.open_error
+        self.open_count += 1
+        return self
+
+    def send(self, email: OutgoingEmail) -> None:
+        queued = self.failures.get(email.to)
+        if queued:
+            raise queued.pop(0)
+        self.sent.append(email)
+
+    def close(self) -> None:
+        self.closed += 1
