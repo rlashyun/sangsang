@@ -400,3 +400,21 @@ PK `(reservation_id, found_item_id)` — 한 번 알린 물품은 다시 들어�
 | 429 코드 추가, 응답 필드 이름 | 강지현 |
 | 링크 페이지 경로, `/alerts/*`에서 `index.html`을 내보내는 서버 변경의 담당 | 강지현 |
 | ⑥ 결론 시점(이번 스프린트 안 발송 가능 여부가 달림) | 김성현 |
+
+---
+
+## 14. 구현 계획에서 정한 세부 (2026-11-06)
+
+구현 계획(`2026-11-06-email-scheduler-plan.md`)을 쓰면서 앞 절보다 구체적으로 정한 것이다. 앞 절과 다르면 이 절을 따른다.
+
+| 항목 | 정한 것 | 이유 |
+| --- | --- | --- |
+| 예약 위치 | 4.1의 `position` geography 컬럼 대신 `latitude`·`longitude` 숫자 컬럼. 비교할 때 DB 함수에서 geography로 만든다 | REST가 geography 값을 읽기 쉬운 모양으로 돌려주지 않는다 |
+| 인덱스 추가 | `found_items (item_source_code, first_seen_at)`, `alert_notified_items (found_item_id)` | 예약마다 반경 안 물품 전체를 훑지 않게 하고, 보존기간 삭제가 cascade로 이 표를 찾을 때 느려지지 않게 한다 |
+| DB 함수 | 4.6의 7개에 `confirm_alert_reservation`·`extend_alert_reservation`·`alert_match_queue`·`alert_message_payload`·`finish_alert_message`를 더해 12개 | 24시간·연장 조건과 발송 시각을 DB 시계 하나로 판단한다 |
+| `alert_runs` 상태 | `skipped` 없음(`running`·`succeeded`·`partial`·`failed`) | 건너뛸 때는 DB를 부르지 않는다(6.1) |
+| 일시 오류 재시도 | 같은 실행에서 다시 보내지 않고 다음 실행에서 보낸다. 세 번째 시도에서 실패 | 같은 실행에서 바로 다시 보내면 같은 오류가 반복된다 |
+| 링크 API 응답 | 업무 결과는 200 + `result` 코드(`confirmed`·`already_active`·`link_expired`·`ended`·`extended`·`limit_reached`·`cancelled`·`already_ended`)와 한국어 `message`. 토큰이 틀릴 때만 400 | 프런트가 문구를 해석하지 않고 상태를 나눌 수 있다 |
+| 좌표 범위 | 위도 33.0~38.7, 경도 124.5~132.0(대한민국, 독도 포함)만 받는다 | 서비스 대상 밖 예약을 막는다 |
+| 메일 설정 오류 | 값이 잘못되면(예: 포트) 지도 서비스는 그대로 두고 알림 예약만 끈다. 서버 로그에 경고를 남긴다 | 메일 설정 하나로 사이트 전체가 멈추지 않게 한다 |
+| 입력 길이 | 검색어 1~30자(PRD 3.3), 장소 이름 1~100자 | |
