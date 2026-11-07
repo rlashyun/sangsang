@@ -17,6 +17,7 @@ from .sender import (
     PermanentSendError,
     SendError,
     TemporarySendError,
+    with_idempotency_key,
 )
 from .settings import AlertSettings
 from .store import AlertStore
@@ -97,6 +98,7 @@ def _send_pending(
                 if email is None:
                     store.delete_message(message_id)
                     continue
+                email = with_idempotency_key(email, message_id)
                 if session is None:
                     try:
                         session = sender.open()
@@ -152,7 +154,7 @@ def run_send_pass(
         "reservations_expired": 0,
         "reservations_unconfirmed_closed": 0,
     }
-    secrets = (settings.mail.password, settings.secret, store.secret_key)
+    secrets = (*settings.mail.secrets(), settings.secret, store.secret_key)
     status = "succeeded"
     errors: list[str] = []
     try:

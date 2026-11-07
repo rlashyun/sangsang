@@ -55,6 +55,7 @@ class CreateReservationTests(AlertServiceTestCase):
         self.assertEqual([email.to for email in self.sender.sent], ["user@example.com"])
         (message,) = self.store.messages.values()
         self.assertEqual((message["kind"], message["status"]), ("confirm", "sent"))
+        self.assertTrue(self.sender.sent[0].idempotency_key.startswith(f"alert-{message['id']}-"))
 
     def test_without_consent_nothing_is_saved_or_sent(self) -> None:
         with self.assertRaisesRegex(ValueError, "동의"):

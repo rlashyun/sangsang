@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from ..alerts import matching
 from ..alerts.dispatch import run_send_pass
 from ..alerts.matching import run_match_pass
-from ..alerts.sender import SmtpEmailSender
+from ..alerts.sender import create_email_sender
 from ..alerts.settings import load_alert_settings
 from ..alerts.store import SupabaseAlertStore
 from ..config import read_optional_env_value
@@ -102,7 +102,7 @@ def alert_send(request: Request) -> JSONResponse:
         return JSONResponse(status_code=503, content={"error": str(error)}, headers=no_store)
     result = run_send_pass(
         store,
-        SmtpEmailSender(settings.mail),
+        create_email_sender(settings.mail),
         settings,
         deadline=started + ALERT_DEADLINE_SECONDS,
     )

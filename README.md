@@ -170,30 +170,45 @@ DB 트리거 적용 이후 최종 저장 결과를 기준으로 기록합니다.
 - 매칭: 수집 크론(`partner-sync`·`police-sync`)이 끝날 때 그 출처의 새 물품만 비교합니다.
   유사 판정은 ⑥ 검색 방식 결론 뒤에 연결합니다.
 - 발송: `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 돕니다.
-  최근 24시간 450통까지 보냅니다.
+  최근 24시간 동안 하루 발송 상한(Resend 기본 100통, Gmail SMTP 기본 450통)까지 보냅니다.
 - 메일 설정이 하나라도 없으면 알림 예약 API(`/api/alerts*`)는 503을 돌려줍니다.
   Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
 
+발신 수단은 **Resend 무료 플랜**입니다(2026-11-07 결정). Gmail SMTP는 예비로 남겨 두었고,
+`MAIL_PROVIDER`만 바꾸면 코드 수정 없이 오갈 수 있습니다.
+
 서버 전용 환경 변수입니다. 브라우저로 전달하지 않습니다.
 
-- `MAIL_SMTP_HOST` — `smtp.gmail.com`
-- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS)
-- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소
-- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리(공백 없이)
-- `MAIL_FROM` — `리트리버 <서비스 Gmail 주소>`
+- `MAIL_PROVIDER` — `resend` 또는 `smtp`(비우면 `smtp`)
+- `RESEND_API_KEY` — Resend API 키(`MAIL_PROVIDER=resend`일 때 필수)
+- `MAIL_FROM` — 보내는 주소. Resend는 **인증한 도메인의 주소**여야 합니다. 예: `리트리버 <alert@우리도메인>`
+- `MAIL_SMTP_HOST` — `smtp.gmail.com` (`MAIL_PROVIDER=smtp`일 때)
+- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS) (〃)
+- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소 (〃)
+- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리, 공백 없이 (〃)
 - `PUBLIC_BASE_URL` — 메일 속 링크 주소의 앞부분. 로컬은 `http://127.0.0.1:8000`
 - `ALERT_SECRET` — 링크 토큰과 IP 해시에 쓰는 무작위 문자열
-- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본 450
+- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본은 Resend 100, SMTP 450
 
-앱 비밀번호는 Google 계정에 2단계 인증을 켠 뒤 https://myaccount.google.com/apppasswords
-에서 만듭니다. 계정 비밀번호를 바꾸면 앱 비밀번호가 무효가 되어 메일이 멈춥니다.
+**Resend 준비** — Resend 무료 플랜은 하루 100통·월 3,000통이고(하루는 UTC 기준), 도메인을
+인증하지 않으면 계정 주인 주소로만 보낼 수 있습니다.
+
+1. Resend 대시보드 Domains에서 도메인을 추가하고, 안내하는 DNS 레코드(SPF·DKIM)를 도메인 관리 화면에 등록합니다.
+2. 인증이 끝나면(보통 몇 분~몇 시간) API Keys에서 발송 권한 키를 만들어 `RESEND_API_KEY`에 넣습니다.
+3. `MAIL_FROM`을 그 도메인 주소로 바꿉니다.
+
+메일마다 대기열 id와 내용으로 만든 `Idempotency-Key`를 붙여, 같은 메일을 다시 보내도
+Resend가 24시간 동안 한 번만 보냅니다.
+
+Gmail SMTP를 쓸 때는 Google 계정에 2단계 인증을 켠 뒤 https://myaccount.google.com/apppasswords
+에서 앱 비밀번호를 만듭니다. 계정 비밀번호를 바꾸면 앱 비밀번호가 무효가 되어 메일이 멈춥니다.
 `ALERT_SECRET`은 다음 명령으로 만듭니다. 값을 바꾸면 이미 보낸 메일의 링크가 모두 무효가 됩니다.
 
 ```powershell
 uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-배포 전에는 DB 없이 메일 한 통만 보내 Gmail 연결과 스팸함 분류를 확인합니다.
+배포 전에는 DB 없이 메일 한 통만 보내 발송 설정과 스팸함 분류를 확인합니다.
 실제 메일이 나가므로 받는 주소를 확인한 뒤 실행합니다.
 
 ```powershell

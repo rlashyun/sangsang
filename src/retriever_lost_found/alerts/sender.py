@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import smtplib
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.message import EmailMessage
 from typing import Protocol
 
@@ -15,6 +16,18 @@ class OutgoingEmail:
     subject: str
     text: str
     html: str
+    # 설계 14장 — 같은 메일을 다시 보낼 때 발송 서비스가 한 번만 보내게 하는 키(Resend Idempotency-Key)
+    idempotency_key: str | None = None
+
+
+def with_idempotency_key(email: OutgoingEmail, message_id: int) -> OutgoingEmail:
+    """설계 14장 — 대기열 행 id와 내용으로 키를 만든다.
+
+    같은 메일을 다시 보내면(함수가 보낸 직후 죽은 경우 등) 같은 키가 되어 Resend가 24시간 동안 한 번만 보낸다.
+    대기 중인 알림 메일에 물품이 더 붙어 내용이 바뀌면 키도 바뀐다(같은 키·다른 본문은 409로 거절된다).
+    """
+    digest = hashlib.sha256(f"{email.to}\n{email.subject}\n{email.text}".encode("utf-8")).hexdigest()[:24]
+    return replace(email, idempotency_key=f"alert-{int(message_id)}-{digest}")
 
 
 class SendError(Exception):
@@ -113,3 +126,12 @@ class SmtpEmailSender:
         except (smtplib.SMTPException, OSError) as error:
             raise TemporarySendError(f"SMTP 연결 실패: {type(error).__name__}") from None
         return SmtpSession(client, settings.from_address)
+
+
+def create_email_sender(settings: MailSettings, *, timeout: float = 20.0) -> EmailSender:
+    """설계 14장 — MAIL_PROVIDER에 맞는 발송기. 바꿀 때 코드는 고치지 않는다."""
+    if settings.provider == "resend":
+        from .resend_sender import ResendEmailSender
+
+        return ResendEmailSender(settings, timeout=timeout)
+    return SmtpEmailSender(settings, timeout=timeout)

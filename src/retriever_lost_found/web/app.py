@@ -13,7 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from ..alerts.reservations import AlertService
-from ..alerts.sender import SmtpEmailSender
+from ..alerts.sender import create_email_sender
 from ..alerts.settings import load_alert_settings
 from ..alerts.store import SupabaseAlertStore
 from ..config import read_env_value, read_optional_env_value
@@ -242,7 +242,7 @@ def create_runtime_app() -> FastAPI:
     if alert_settings is not None:
         alert_service = AlertService(
             store=SupabaseAlertStore(supabase_url, supabase_secret_key),
-            sender=SmtpEmailSender(alert_settings.mail),
+            sender=create_email_sender(alert_settings.mail),
             settings=alert_settings,
         )
     app = create_app(
