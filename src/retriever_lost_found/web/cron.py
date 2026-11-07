@@ -95,8 +95,13 @@ def alert_send(request: Request) -> JSONResponse:
         return JSONResponse(status_code=503, content={"error": str(error)}, headers=no_store)
     if settings is None:
         return JSONResponse(status_code=503, content={"error": "알림 메일 설정이 없습니다."}, headers=no_store)
+    try:
+        store = SupabaseAlertStore.from_environment()
+    except ValueError as error:
+        # AGENTS.md 4장 — 설정이 없으면 503(입력 오류 400과 구분한다).
+        return JSONResponse(status_code=503, content={"error": str(error)}, headers=no_store)
     result = run_send_pass(
-        SupabaseAlertStore.from_environment(),
+        store,
         SmtpEmailSender(settings.mail),
         settings,
         deadline=started + ALERT_DEADLINE_SECONDS,

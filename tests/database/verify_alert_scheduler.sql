@@ -141,6 +141,24 @@ begin
         raise exception '취소 뒤 개인정보나 대기 메일이 남았습니다';
     end if;
 
+    -- 설계 14장 — 취소해도 IP 제한 기록은 24시간 동안 남는다(취소로 제한을 풀 수 없다).
+    if (select count(*) from public.alert_request_log where ip_hash = 'verify-ip') <> 1 then
+        raise exception '취소가 IP 제한 기록을 지웠습니다';
+    end if;
+    for v_claimed in 1..4 loop
+        perform public.create_alert_reservation(
+            'verify' || v_claimed || '@example.com', '에어팟', '서울역', 37.5547, 126.9707, 1000,
+            'verify-ip', 'verify-nonce-ip-' || v_claimed, now() + interval '7 days'
+        );
+    end loop;
+    v_created := public.create_alert_reservation(
+        'verify6@example.com', '에어팟', '서울역', 37.5547, 126.9707, 1000,
+        'verify-ip', 'verify-nonce-ip-6', now() + interval '7 days'
+    );
+    if v_created ->> 'status' <> 'ip_limit' then
+        raise exception '같은 IP 6번째 예약이 막히지 않았습니다: %', v_created;
+    end if;
+
     raise notice '알림 스케줄러 DB 검증 통과';
 end;
 $$;

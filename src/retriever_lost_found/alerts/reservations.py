@@ -133,14 +133,25 @@ class AlertService:
         reservation_id = int(created["reservation_id"])
         message_id = int(created["message_id"])
 
-        # 설계 2장 — 확인 메일도 하루 450통 안에서 센다.
-        if not self.store.claim_messages(limit=1, daily_cap=self.settings.daily_send_limit, message_id=message_id):
-            self.store.delete_reservation(reservation_id)
-            raise AlertLimitError("오늘 보낼 수 있는 메일을 모두 보냈습니다. 내일 다시 시도해 주세요.")
-        reservation = self.store.get_reservation(reservation_id)
-        if reservation is None:
-            raise RuntimeError("알림 예약을 저장하지 못했습니다.")
-        message = confirmation_email(email, reservation, mail_links(self.settings, reservation, now))
+        try:
+            # 설계 2장 — 확인 메일도 하루 450통 안에서 센다.
+            if not self.store.claim_messages(
+                limit=1, daily_cap=self.settings.daily_send_limit, message_id=message_id
+            ):
+                self._discard(reservation_id)
+                raise AlertLimitError("오늘 보낼 수 있는 메일을 모두 보냈습니다. 내일 다시 시도해 주세요.")
+            reservation = self.store.get_reservation(reservation_id)
+            if reservation is None:
+                raise RuntimeError("예약을 다시 읽지 못했습니다.")
+            message = confirmation_email(email, reservation, mail_links(self.settings, reservation, now))
+            # 설계 14장 — 보냄 기록을 먼저 남긴다. 보낸 뒤 기록에 실패하면 발송 크론이 같은 확인 메일을
+            # 다시 보내게 되기 때문이다. 발송이 실패하면 예약째 지우므로 450통 계산에서도 빠진다.
+            self.store.finish_message(message_id, "sent")
+        except AlertLimitError:
+            raise
+        except Exception:
+            self._discard(reservation_id)
+            raise RuntimeError("알림 예약을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
         try:
             session = self.sender.open()
             try:
@@ -149,10 +160,16 @@ class AlertService:
                 session.close()
         except SendError:
             # 설계 5.4 — 발송에 실패하면 예약을 남기지 않아 사용자가 바로 다시 시도할 수 있다.
-            self.store.delete_reservation(reservation_id)
+            self._discard(reservation_id)
             raise RuntimeError("확인 메일을 보내지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
-        self.store.finish_message(message_id, "sent")
         return {"status": "pending", "message": PENDING_MESSAGE}
+
+    def _discard(self, reservation_id: int) -> None:
+        """실패한 예약을 지운다. 지우기마저 실패하면 미확인 예약으로 남았다가 24시간 뒤 정리된다."""
+        try:
+            self.store.delete_reservation(reservation_id)
+        except Exception:
+            pass
 
     def _reservation(self, token: Any) -> dict[str, Any]:
         if not isinstance(token, str):

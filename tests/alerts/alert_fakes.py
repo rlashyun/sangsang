@@ -58,9 +58,11 @@ class FakeEmailSender:
         self.failures = {address: list(errors) for address, errors in (failures or {}).items()}
         self.open_error = open_error
         self.open_count = 0
+        self.open_attempts = 0
         self.closed = 0
 
     def open(self) -> "FakeEmailSender":
+        self.open_attempts += 1
         if self.open_error is not None:
             raise self.open_error
         self.open_count += 1
@@ -139,6 +141,8 @@ class FakeAlertStore:
         self.locations: dict[int, dict[str, Any]] = {}
         self.found_items: dict[int, dict[str, Any]] = {}
         self.runs: dict[int, dict[str, Any]] = {}
+        self.request_log: list[tuple[str, datetime]] = []  # alert_request_log (ip_hash, created_at)
+        self.fail_finish_message = False  # True면 finish_message가 DB 오류를 흉내 낸다
 
     # ---- 테스트 준비용 ----
     def advance(self, **delta: float) -> None:
@@ -170,7 +174,7 @@ class FakeAlertStore:
         self.reservations[reservation_id] = {
             "id": reservation_id, "email": email, "query": query, "place_name": "서울역",
             "latitude": latitude, "longitude": longitude, "radius_m": radius_m, "status": "active",
-            "link_nonce": link_nonce, "ip_hash": "ip-hash", "created_at": self.now,
+            "link_nonce": link_nonce, "created_at": self.now,
             "confirmed_at": self.now, "expires_at": expires_at or expires_at_for(self.now),
             "extension_count": extension_count, "ended_at": None,
         }
@@ -210,8 +214,15 @@ class FakeAlertStore:
     def _public_message(self, message):
         return {key: _iso(value) for key, value in message.items()}
 
+    def _purge_request_log(self) -> int:
+        cutoff = self.now - timedelta(hours=24)
+        kept = [(logged, at) for logged, at in self.request_log if at > cutoff]
+        purged = len(self.request_log) - len(kept)
+        self.request_log = kept
+        return purged
+
     def _end(self, reservation, status):
-        reservation.update(status=status, email=None, ip_hash=None, ended_at=self.now)
+        reservation.update(status=status, email=None, ended_at=self.now)
         for message_id in [
             message_id for message_id, message in self.messages.items()
             if message["reservation_id"] == reservation["id"] and message["status"] == "pending"
@@ -226,18 +237,18 @@ class FakeAlertStore:
         )
         if open_count >= 3:
             return {"status": "email_limit"}
-        if ip_hash is not None and sum(
-            1 for reservation in self.reservations.values()
-            if reservation["ip_hash"] == ip_hash and reservation["created_at"] > self.now - timedelta(hours=24)
-        ) >= 5:
+        self._purge_request_log()
+        if ip_hash is not None and sum(1 for logged, _ in self.request_log if logged == ip_hash) >= 5:
             return {"status": "ip_limit"}
         reservation_id = next(self._ids)
         self.reservations[reservation_id] = {
             "id": reservation_id, "email": email, "query": query.strip(), "place_name": place_name.strip(),
             "latitude": latitude, "longitude": longitude, "radius_m": radius_m, "status": "pending",
-            "link_nonce": link_nonce, "ip_hash": ip_hash, "created_at": self.now, "confirmed_at": None,
+            "link_nonce": link_nonce, "created_at": self.now, "confirmed_at": None,
             "expires_at": expires_at, "extension_count": 0, "ended_at": None,
         }
+        if ip_hash is not None:
+            self.request_log.append((ip_hash, self.now))
         for source in SOURCES:
             self.cursors[(reservation_id, source)] = self.now
         message_id = self._insert_message(reservation_id, "confirm")
@@ -416,6 +427,8 @@ class FakeAlertStore:
         }
 
     def finish_message(self, message_id, status, error=None):
+        if self.fail_finish_message:
+            raise RuntimeError("Supabase 알림 API 연결 실패: timed out")
         message = self.messages.get(message_id)
         if message is None or message["status"] != "sending":
             return
@@ -440,7 +453,11 @@ class FakeAlertStore:
             elif reservation["status"] == "pending" and reservation["created_at"] <= self.now - timedelta(hours=24):
                 self._end(reservation, "unconfirmed_expired")
                 unconfirmed += 1
-        return {"expired": expired, "unconfirmed_closed": unconfirmed}
+        return {
+            "expired": expired,
+            "unconfirmed_closed": unconfirmed,
+            "request_log_purged": self._purge_request_log(),
+        }
 
     def start_run(self, kind, item_source_code=None):
         run_id = next(self._ids)

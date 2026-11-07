@@ -115,7 +115,7 @@ class SendPassTests(unittest.TestCase):
 
     def test_mail_for_a_reservation_cancelled_meanwhile_is_dropped(self) -> None:
         reservation_id, message_id = self.reservation_with_alert("a@example.com")
-        self.store.reservations[reservation_id].update(status="cancelled", email=None, ip_hash=None)
+        self.store.reservations[reservation_id].update(status="cancelled", email=None)
 
         self.assertEqual(self.run_pass()["messages_sent"], 0)
         self.assertNotIn(message_id, self.store.messages)
@@ -191,6 +191,37 @@ class SendPassTests(unittest.TestCase):
 
         self.assertEqual((result["status"], result["messages_sent"]), ("partial", 0))
         self.assertEqual(self.match_statuses(), ["pending"])
+
+    def test_smtp_connection_failure_stops_the_pass_after_one_try(self) -> None:
+        # 연결 시도마다 최대 20초를 기다리므로, 메일마다 다시 연결하면 300초 제한을 넘길 수 있다.
+        self.reservation_with_alert("a@example.com")
+        self.reservation_with_alert("b@example.com")
+        self.sender.open_error = TemporarySendError("SMTP 연결 실패: TimeoutError")
+
+        result = self.run_pass()
+
+        self.assertEqual(self.sender.open_attempts, 1)
+        self.assertEqual((result["status"], result["messages_deferred"]), ("partial", 2))
+        self.assertEqual(self.match_statuses(), ["pending", "pending"])
+
+    def test_confirmation_older_than_a_day_is_not_mailed(self) -> None:
+        # 링크가 이미 만료된 확인 메일은 보내지 않는다(확인 링크는 24시간 유효).
+        created = self.new_pending_reservation("late@example.com")
+        self.store.advance(hours=24, minutes=1)
+
+        result = self.run_pass()
+
+        self.assertEqual(result["messages_sent"], 0)
+        self.assertNotIn(created["message_id"], self.store.messages)
+        self.assertEqual(self.store.reservations[created["reservation_id"]]["status"], "unconfirmed_expired")
+
+    def test_confirmation_within_a_day_is_still_mailed(self) -> None:
+        self.new_pending_reservation("fresh@example.com")
+        self.store.advance(hours=23)
+
+        self.assertEqual([email.subject for email in self.sender.sent], [])
+        self.assertEqual(self.run_pass()["messages_sent"], 1)
+        self.assertEqual([email.subject for email in self.sender.sent], [CONFIRM_SUBJECT])
 
     def test_login_failure_is_recorded_without_the_password(self) -> None:
         self.reservation_with_alert("a@example.com")

@@ -127,6 +127,20 @@ class AlertSendEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         run_send.assert_not_called()
 
+    def test_without_a_supabase_key_is_503(self) -> None:
+        # AGENTS.md 4장 — 설정이 없으면 503. 입력 오류(400)로 보이지 않게 한다.
+        with (
+            patch.dict(os.environ, {"CRON_SECRET": "cron-test-secret"}),
+            patch("retriever_lost_found.web.cron.load_alert_settings", return_value=TEST_SETTINGS),
+            patch(FROM_ENVIRONMENT, side_effect=ValueError("SUPABASE_SECRET_KEY가 설정되지 않았습니다.")),
+            patch("retriever_lost_found.web.cron.run_send_pass") as run_send,
+        ):
+            response = self.client.get("/api/cron/alert-send", headers=AUTH)
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("SUPABASE_SECRET_KEY", response.json()["error"])
+        run_send.assert_not_called()
+
     def test_failed_send_pass_is_500(self) -> None:
         response, _, _ = self.call(AUTH, result={"status": "failed", "messages_sent": 0})
 

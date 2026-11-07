@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -118,13 +120,23 @@ class ClientIpTests(unittest.TestCase):
             }
         )
 
-    def test_prefers_vercel_real_ip_then_forwarded_for_then_the_socket(self) -> None:
-        self.assertEqual(
-            client_ip(self.request({"x-real-ip": "203.0.113.7", "x-forwarded-for": "198.51.100.1"})),
-            "203.0.113.7",
-        )
-        self.assertEqual(client_ip(self.request({"x-forwarded-for": "198.51.100.1, 10.0.0.2"})), "198.51.100.1")
-        self.assertEqual(client_ip(self.request({})), "10.0.0.1")
+    def test_on_vercel_uses_the_forwarded_for_header_vercel_overwrites(self) -> None:
+        # Vercel은 들어온 X-Forwarded-For를 덮어써 위조를 막는다 — Vercel 위에서만 헤더를 믿는다.
+        with patch.dict(os.environ, {"VERCEL": "1"}):
+            self.assertEqual(
+                client_ip(self.request({"x-forwarded-for": "203.0.113.7, 10.0.0.2", "x-real-ip": "198.51.100.1"})),
+                "203.0.113.7",
+            )
+            self.assertEqual(client_ip(self.request({"x-real-ip": "198.51.100.1"})), "198.51.100.1")
+            self.assertEqual(client_ip(self.request({})), "10.0.0.1")
+
+    def test_off_vercel_forwarding_headers_are_ignored(self) -> None:
+        # 헤더를 바꿔 가며 IP 제한을 피하지 못하게 한다.
+        with patch.dict(os.environ, {"VERCEL": ""}):
+            self.assertEqual(
+                client_ip(self.request({"x-forwarded-for": "203.0.113.7", "x-real-ip": "198.51.100.1"})),
+                "10.0.0.1",
+            )
 
 
 if __name__ == "__main__":

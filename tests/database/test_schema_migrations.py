@@ -165,6 +165,7 @@ class SchemaMigrationTests(unittest.TestCase):
             "alert_messages",
             "alert_notified_items",
             "alert_runs",
+            "alert_request_log",
         )
         for table in tables:
             self.assertIn(f"create table public.{table} (", migration)
@@ -211,10 +212,17 @@ class SchemaMigrationTests(unittest.TestCase):
 
     def test_alert_scheduler_keeps_its_rules_in_the_database(self) -> None:
         migration = self._alert_migration()
-        # 설계 8장 — 끝난 예약에는 이메일·IP 해시가 남을 수 없다.
+        # 설계 8장 — 끝난 예약에는 이메일이 남을 수 없다.
         self.assertIn(
-            "status in ('expired', 'cancelled', 'unconfirmed_expired') and email is null"
-            " and ip_hash is null",
+            "status in ('expired', 'cancelled', 'unconfirmed_expired') and email is null)",
+            migration,
+        )
+        # 설계 14장 — IP 제한은 예약 행이 아니라 24시간 기록으로 센다. 취소해도 제한이 풀리지 않고,
+        # IP 해시는 24시간이 지나면 지운다.
+        self.assertNotIn("ip_hash = null", migration)
+        self.assertIn("from public.alert_request_log as request where request.ip_hash = p_ip_hash", migration)
+        self.assertIn(
+            "delete from public.alert_request_log where created_at <= now() - interval '24 hours'",
             migration,
         )
         # 설계 4.4 — 한 번 알린 물품은 다시 들어갈 수 없다.

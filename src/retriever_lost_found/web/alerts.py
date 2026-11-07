@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -14,14 +15,19 @@ UNAVAILABLE = {"error": "분실물 알림 예약을 지금은 사용할 수 없�
 
 
 def client_ip(request: Request) -> str:
-    """설계 5.2 — Vercel이 넣어 주는 x-real-ip를 먼저 본다."""
-    real_ip = request.headers.get("x-real-ip", "").strip()
-    if real_ip:
-        return real_ip
+    """설계 5.2·14장 — IP 제한에 쓸 접속 IP.
+
+    Vercel은 들어온 X-Forwarded-For를 덮어써 위조를 막으므로 Vercel 위(`VERCEL=1`)에서만
+    전달 헤더를 믿는다. 그 밖(로컬·다른 호스트)에서는 헤더를 바꿔 제한을 피할 수 있어 소켓 주소를 쓴다.
+    """
+    socket_ip = request.client.host if request.client else ""
+    if os.getenv("VERCEL") != "1":
+        return socket_ip
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded.strip():
         return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else ""
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    return real_ip or socket_ip
 
 
 async def _json_object(request: Request) -> dict[str, Any]:

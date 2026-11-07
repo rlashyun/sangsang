@@ -107,6 +107,36 @@ class CreateReservationTests(AlertServiceTestCase):
         self.store.advance(hours=25)
         self.create(email="user7@example.com")  # 24시간이 지나면 다시 된다
 
+    def test_cancelling_does_not_give_the_ip_quota_back(self) -> None:
+        # 설계 14장 — 예약과 취소를 되풀이해 확인 메일로 하루 450통을 다 쓰지 못하게 한다.
+        for index in range(5):
+            self.create(email=f"user{index}@example.com")
+        for reservation in list(self.store.reservations.values()):
+            self.service.cancel(self.token_for(reservation))
+
+        with self.assertRaises(AlertLimitError):
+            self.create(email="user5@example.com")
+        self.assertEqual(len(self.sender.sent), 5)
+
+    def test_ip_hash_is_not_kept_on_the_reservation(self) -> None:
+        self.create()
+
+        self.assertNotIn("ip_hash", self.only_reservation())
+        self.assertEqual(len(self.store.request_log), 1)
+        self.assertNotIn("203.0.113.7", self.store.request_log[0][0])
+
+    def test_failure_to_record_the_confirmation_sends_nothing_and_keeps_nothing(self) -> None:
+        # 설계 14장 — 보냄 기록을 먼저 남기고 보낸다. 기록에 실패하면 메일을 보내지 않고 예약도 남기지 않아,
+        # 나중에 발송 크론이 같은 확인 메일을 다시 보내는 일이 없다.
+        self.store.fail_finish_message = True
+
+        with self.assertRaisesRegex(RuntimeError, "알림 예약을 저장하지 못했습니다"):
+            self.create()
+
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(len(self.store.reservations), 0)
+        self.assertEqual(len(self.store.messages), 0)
+
     def test_send_failure_leaves_no_reservation(self) -> None:
         self.sender.failures["user@example.com"] = [TemporarySendError("SMTP 421")]
 

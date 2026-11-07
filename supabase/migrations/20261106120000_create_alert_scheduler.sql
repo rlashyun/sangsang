@@ -18,7 +18,6 @@ create table public.alert_reservations (
     radius_m integer not null,
     status text not null default 'pending',
     link_nonce text not null,
-    ip_hash text,
     consent_at timestamptz not null,
     created_at timestamptz not null default now(),
     confirmed_at timestamptz,
@@ -35,10 +34,10 @@ create table public.alert_reservations (
         check (status in ('pending', 'active', 'expired', 'cancelled', 'unconfirmed_expired')),
     constraint alert_reservations_extension_range check (extension_count between 0 and 3),
     constraint alert_reservations_nonce_not_blank check (btrim(link_nonce) <> ''),
-    -- 설계 8장 — 끝난 예약에는 이메일·IP 해시가 남을 수 없다.
+    -- 설계 8장 — 끝난 예약에는 이메일이 남을 수 없다. IP 해시는 예약 행에 두지 않는다(alert_request_log).
     constraint alert_reservations_personal_data_lifecycle check (
         (status in ('pending', 'active') and email is not null)
-        or (status in ('expired', 'cancelled', 'unconfirmed_expired') and email is null and ip_hash is null)
+        or (status in ('expired', 'cancelled', 'unconfirmed_expired') and email is null)
     )
 );
 
@@ -47,9 +46,6 @@ create index alert_reservations_status_expires_idx
 create index alert_reservations_open_email_idx
     on public.alert_reservations (email)
     where status in ('pending', 'active');
-create index alert_reservations_ip_created_idx
-    on public.alert_reservations (ip_hash, created_at)
-    where ip_hash is not null;
 
 -- 설계 4.2 — 출처별로 어디까지 확인했는지. 판정에 걸리지 않은 물품이 매일 다시 후보가 되지 않게 한다.
 create table public.alert_match_cursors (
@@ -145,6 +141,18 @@ create table public.alert_runs (
 create index alert_runs_kind_started_idx
     on public.alert_runs (kind, started_at desc);
 
+-- 설계 14장 — IP당 24시간 5건 제한용 기록. 예약 행과 따로 두어 취소해도 제한이 풀리지 않게 하고,
+-- IP 해시는 24시간이 지나면 지운다(예약 생성과 발송 크론 정리 때).
+create table public.alert_request_log (
+    ip_hash text not null,
+    created_at timestamptz not null default now()
+);
+
+create index alert_request_log_ip_created_idx
+    on public.alert_request_log (ip_hash, created_at);
+create index alert_request_log_created_idx
+    on public.alert_request_log (created_at);
+
 -- 설계 5.4 — 예약 생성. 이메일 3개·IP 24시간 5건 제한을 확인하고 예약·커서·확인 메일 행을 한 번에 만든다.
 create or replace function public.create_alert_reservation(
     p_email text,
@@ -181,24 +189,31 @@ begin
         return jsonb_build_object('status', 'email_limit');
     end if;
 
+    -- 24시간이 지난 IP 해시는 남기지 않는다.
+    delete from public.alert_request_log where created_at <= now() - interval '24 hours';
+
+    -- 취소·만료와 상관없이 이 IP가 24시간 안에 만든 예약 수를 센다(취소로 제한을 풀 수 없다).
     if p_ip_hash is not null and (
         select count(*)
-        from public.alert_reservations as reservation
-        where reservation.ip_hash = p_ip_hash
-          and reservation.created_at > now() - interval '24 hours'
+        from public.alert_request_log as request
+        where request.ip_hash = p_ip_hash
     ) >= p_ip_daily_limit then
         return jsonb_build_object('status', 'ip_limit');
     end if;
 
     insert into public.alert_reservations (
         email, query, place_name, latitude, longitude, radius_m,
-        status, link_nonce, ip_hash, consent_at, expires_at
+        status, link_nonce, consent_at, expires_at
     )
     values (
         p_email, btrim(p_query), btrim(p_place_name), p_latitude, p_longitude, p_radius_m,
-        'pending', p_link_nonce, p_ip_hash, now(), p_expires_at
+        'pending', p_link_nonce, now(), p_expires_at
     )
     returning id into v_reservation_id;
+
+    if p_ip_hash is not null then
+        insert into public.alert_request_log (ip_hash) values (p_ip_hash);
+    end if;
 
     -- 설계 4.2 — 출처별 커서의 처음 값은 예약 생성 시각이다(예약 이후 새 물품만 비교).
     insert into public.alert_match_cursors (reservation_id, item_source_code, checked_until)
@@ -327,7 +342,7 @@ begin
     end if;
 
     update public.alert_reservations
-    set status = 'cancelled', email = null, ip_hash = null, ended_at = now()
+    set status = 'cancelled', email = null, ended_at = now()
     where id = p_reservation_id;
     delete from public.alert_messages
     where reservation_id = p_reservation_id
@@ -650,7 +665,8 @@ begin
 end;
 $$;
 
--- 설계 6.2 ③ — 만료된 예약과 확인 없이 24시간 지난 예약의 이메일·IP 해시를 지운다. 행은 전환율 집계용으로 남긴다.
+-- 설계 6.2 ③ — 만료된 예약과 확인 없이 24시간 지난 예약의 이메일을 지운다. 행은 전환율 집계용으로 남긴다.
+-- 24시간이 지난 IP 해시 기록도 지운다.
 create or replace function public.close_ended_alert_reservations()
 returns jsonb
 language sql
@@ -660,14 +676,14 @@ set search_path = ''
 as $$
     with expired as (
         update public.alert_reservations
-        set status = 'expired', email = null, ip_hash = null, ended_at = now()
+        set status = 'expired', email = null, ended_at = now()
         where status = 'active'
           and expires_at <= now()
         returning id
     ),
     unconfirmed as (
         update public.alert_reservations
-        set status = 'unconfirmed_expired', email = null, ip_hash = null, ended_at = now()
+        set status = 'unconfirmed_expired', email = null, ended_at = now()
         where status = 'pending'
           and created_at <= now() - interval '24 hours'
         returning id
@@ -677,11 +693,17 @@ as $$
         where status = 'pending'
           and reservation_id in (select id from expired union all select id from unconfirmed)
         returning id
+    ),
+    purged as (
+        delete from public.alert_request_log
+        where created_at <= now() - interval '24 hours'
+        returning 1
     )
     select jsonb_build_object(
         'expired', (select count(*) from expired),
         'unconfirmed_closed', (select count(*) from unconfirmed),
-        'messages_dropped', (select count(*) from dropped)
+        'messages_dropped', (select count(*) from dropped),
+        'request_log_purged', (select count(*) from purged)
     )
 $$;
 
@@ -690,13 +712,15 @@ alter table public.alert_match_cursors enable row level security;
 alter table public.alert_messages enable row level security;
 alter table public.alert_notified_items enable row level security;
 alter table public.alert_runs enable row level security;
+alter table public.alert_request_log enable row level security;
 
 revoke all on table
     public.alert_reservations,
     public.alert_match_cursors,
     public.alert_messages,
     public.alert_notified_items,
-    public.alert_runs
+    public.alert_runs,
+    public.alert_request_log
 from public, anon, authenticated;
 
 grant select, insert, update, delete on table
@@ -704,7 +728,8 @@ grant select, insert, update, delete on table
     public.alert_match_cursors,
     public.alert_messages,
     public.alert_notified_items,
-    public.alert_runs
+    public.alert_runs,
+    public.alert_request_log
 to service_role;
 
 revoke all on sequence

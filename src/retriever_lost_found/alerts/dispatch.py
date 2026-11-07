@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .errors import safe_error
-from .links import mail_links
+from .links import mail_links, parse_timestamp
 from .reservations import utc_now
 from .sender import (
     DailyLimitExceeded,
@@ -15,6 +15,7 @@ from .sender import (
     LoginFailed,
     OutgoingEmail,
     PermanentSendError,
+    SendError,
     TemporarySendError,
 )
 from .settings import AlertSettings
@@ -23,6 +24,7 @@ from .templates import confirmation_email, expiry_notice_email, match_email
 
 SEND_BATCH_SIZE = 20
 MAX_SEND_ATTEMPTS = 3  # 설계 6.3 — 일시 오류는 세 번째 시도에서 실패로 둔다
+CONFIRM_LINK_VALID_FOR = timedelta(hours=24)  # 설계 5.4 — 확인 링크 유효 시간
 
 
 def compose_message(
@@ -44,7 +46,12 @@ def compose_message(
     links = mail_links(settings, reservation, now)
     kind = message["kind"]
     if kind == "confirm":
-        return confirmation_email(email, reservation, links) if status == "pending" else None
+        if status != "pending":
+            return None
+        # 링크가 이미 만료된 확인 메일은 보내지 않는다. 예약은 정리 단계에서 '미확인 종료'가 된다.
+        if parse_timestamp(reservation["created_at"]) <= now - CONFIRM_LINK_VALID_FOR:
+            return None
+        return confirmation_email(email, reservation, links)
     if status != "active":
         return None
     if kind == "match":
@@ -90,13 +97,19 @@ def _send_pending(
                 if email is None:
                     store.delete_message(message_id)
                     continue
-                try:
-                    if session is None:
+                if session is None:
+                    try:
                         session = sender.open()
+                    except LoginFailed:
+                        _release(store, batch[index:], counts)
+                        raise
+                    except SendError:
+                        # 연결 실패는 메일마다 다시 시도하지 않는다. 시도마다 최대 20초를 기다려
+                        # 300초 함수 제한을 넘길 수 있기 때문이다. 남은 메일은 다음 실행에서 보낸다.
+                        _release(store, batch[index:], counts)
+                        return "partial"
+                try:
                     session.send(email)
-                except LoginFailed:
-                    _release(store, batch[index:], counts)
-                    raise
                 except DailyLimitExceeded:
                     _release(store, batch[index:], counts)
                     return "partial"
