@@ -1,17 +1,22 @@
 -- PRD 4.5, 6 — execute after the unified mapping migration; all changes roll back.
 begin;
+set local statement_timeout='60s';
 do $test$
 declare
     original public.found_items%rowtype;
     institution public.storage_locations%rowtype;
     result_id bigint;
 begin
-    select f.* into strict original from public.found_items f
-    join public.storage_location_detail_mappings m on m.item_source_code = f.item_source_code
-      and m.normalized_raw_storage_name = regexp_replace(lower(normalize(f.detail_department,NFKC)), '[^[:alnum:]]', '', 'g')
-      and m.detail_org_id = f.detail_org_id and m.storage_location_id = f.storage_location_id
-    join public.storage_locations l on l.id = f.storage_location_id and l.is_active
-    order by f.id limit 1;
+    -- Find one fixture through the location index; do not sort/join the entire item table.
+    select f.* into strict original from public.storage_location_detail_mappings m
+    join public.storage_locations l on l.id=m.storage_location_id and l.is_active
+    cross join lateral (
+        select item.* from public.found_items item
+        where item.storage_location_id=m.storage_location_id and item.item_source_code=m.item_source_code
+          and item.detail_org_id=m.detail_org_id and item.detail_checked_at is not null
+          and m.normalized_raw_storage_name=regexp_replace(lower(normalize(item.detail_department,NFKC)),'[^[:alnum:]]','','g')
+        limit 1
+    ) f limit 1;
     select * into strict institution from public.storage_locations where id = original.storage_location_id;
 
     -- A re-ingestion that supplies no detail fields retains the reviewed evidence.

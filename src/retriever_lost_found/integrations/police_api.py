@@ -11,6 +11,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from .deadline import DeadlineExceeded, check_retry_delay, request_timeout
+
 
 BASE_URL = (
     "https://apis.data.go.kr/1320000/LosfundInfoInqireService/"
@@ -74,8 +76,10 @@ def parse_response(xml_data: bytes) -> tuple[list[dict[str, str]], int]:
 
 
 class PoliceFoundItemsClient:
-    def __init__(self, service_key: str) -> None:
+    def __init__(self, service_key: str, *, retry_delays: tuple[int, ...] = (1, 2, 4, 8, 16)) -> None:
         self.service_key = service_key
+        self.retry_delays = retry_delays
+        self.request_deadline: float | None = None
 
     def fetch_page(
         self,
@@ -97,11 +101,14 @@ class PoliceFoundItemsClient:
                 "User-Agent": "RetrieverLostFound/0.1",
             },
         )
-        retry_delays = (1, 2, 4, 8, 16)
+        retry_delays = self.retry_delays
         for attempt in range(len(retry_delays) + 1):
+            timeout = request_timeout(self.request_deadline, 30)
             try:
-                with urllib.request.urlopen(request, timeout=30) as response:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
                     return parse_response(response.read())
+            except DeadlineExceeded:
+                raise
             except urllib.error.HTTPError as error:
                 body = error.read().decode("utf-8", errors="replace")
                 body = body.replace(self.service_key, "[REDACTED]")[:500]
@@ -120,6 +127,7 @@ class PoliceFoundItemsClient:
                 reason = getattr(error, "reason", error)
 
             delay = retry_delays[attempt]
+            check_retry_delay(self.request_deadline, delay)
             print(
                 f"페이지 {page_no} 요청 실패({reason}), {delay}초 후 재시도 "
                 f"({attempt + 1}/{len(retry_delays)})",

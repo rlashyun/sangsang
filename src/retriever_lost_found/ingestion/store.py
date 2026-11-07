@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ..config import read_env_value, read_optional_env_value
+from ..integrations.deadline import request_timeout
 
 
 SOURCE_LOCATION_CODES = {
@@ -52,6 +54,8 @@ class SupabaseIngestionStore:
         self.url = url.rstrip("/")
         self.secret_key = secret_key
         self.timeout = timeout
+        self.deadline: float | None = None
+        self.cleanup_deferred = False
 
     @classmethod
     def from_environment(cls) -> SupabaseIngestionStore:
@@ -90,7 +94,7 @@ class SupabaseIngestionStore:
             headers["Prefer"] = prefer
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(request, timeout=request_timeout(self.deadline, self.timeout)) as response:
                 response_body = response.read()
         except urllib.error.HTTPError as error:
             response_body = error.read().decode("utf-8", errors="replace")[:1000]
@@ -303,9 +307,12 @@ class SupabaseIngestionStore:
             return None
         return date.fromisoformat(str(rows[0]["registered_on"]))
 
-    def upsert_found_items(self, rows: list[dict[str, Any]]) -> int:
+    def upsert_found_items(
+        self, rows: list[dict[str, Any]], *, statistics: dict[str, int] | None = None,
+    ) -> int:
         """Save rows, preserve verified DB mappings and return the final unmatched count."""
         unmatched = 0
+        excluded = 0
         for batch in chunks(rows, UPSERT_BATCH_SIZE):
             saved = self._request(
                 "POST",
@@ -337,7 +344,10 @@ class SupabaseIngestionStore:
                 )
                 if not isinstance(updated, list) or len(updated) != len(unresolved_ids):
                     raise SupabaseRequestError("미매칭 물품의 수동 검토 상태를 확인하지 못했습니다.")
-            unmatched += sum(row["location_match_status"] != "matched" for row in saved)
+            unmatched += sum(row["location_match_status"] in {"unmatched", "ambiguous"} for row in saved)
+            excluded += sum(row["location_match_status"] == "excluded_overseas" for row in saved)
+        if statistics is not None:
+            statistics["excluded_overseas"] = excluded
         return unmatched
 
     def delete_expired(self, source_code: str) -> int:
@@ -348,7 +358,12 @@ class SupabaseIngestionStore:
         더 남은 것으로 보고 반복하고, 짧은 배치가 나오면 끝난 것으로 본다.
         """
         total = 0
+        self.cleanup_deferred = False
         for _ in range(DELETE_MAX_BATCHES):
+            # Retention cleanup can continue tomorrow; reserve a full request for audit logging.
+            if self.deadline is not None and self.deadline - time.monotonic() < self.timeout:
+                self.cleanup_deferred = True
+                break
             result = self._request(
                 "POST",
                 "rpc/delete_expired_found_items",
@@ -360,6 +375,8 @@ class SupabaseIngestionStore:
             total += deleted
             if deleted < DELETE_BATCH_SIZE:
                 break
+        else:
+            self.cleanup_deferred = True
         return total
 
 

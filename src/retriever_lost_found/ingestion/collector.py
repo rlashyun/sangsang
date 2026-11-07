@@ -18,6 +18,7 @@ from .categories import (
 )
 from ..integrations.partner_api import create_client as create_partner_client
 from ..integrations.police_api import PoliceFoundItemsClient, read_service_key
+from ..integrations.deadline import DeadlineExceeded, check_retry_delay, request_timeout
 
 
 CSV_FIELDS = (
@@ -53,6 +54,8 @@ def retention_start(today: date, months: int = 6) -> date:
 
 
 class PageClient(Protocol):
+    request_deadline: float | None
+
     def fetch_page(
         self,
         page_no: int,
@@ -65,7 +68,8 @@ def create_source_client(source: str) -> PageClient:
     if source == "partner":
         return create_partner_client()
     if source == "police":
-        return PoliceFoundItemsClient(read_service_key())
+        # This collector owns retries; do not multiply them by the CLI client's retries.
+        return PoliceFoundItemsClient(read_service_key(), retry_delays=())
     raise ValueError(f"지원하지 않는 출처입니다: {source}")
 
 
@@ -97,14 +101,19 @@ def fetch_page_with_retry(
     *,
     attempts: int = 5,
     sleep: Callable[[float], None] = time.sleep,
+    deadline: float | None = None,
 ) -> tuple[list[dict[str, str]], int]:
     delay = 1.0
     for attempt in range(1, attempts + 1):
+        request_timeout(deadline, float('inf'))
         try:
             return client.fetch_page(page_no, rows_per_page, **filters)
+        except DeadlineExceeded:
+            raise
         except (RuntimeError, TimeoutError, ValueError) as error:
             if attempt == attempts:
                 raise
+            check_retry_delay(deadline, delay)
             print(
                 f"페이지 {page_no} 실패({error}), {delay:g}초 후 재시도 "
                 f"({attempt}/{attempts - 1})",
@@ -147,6 +156,7 @@ def collect_selected_rows(
     start_date: date,
     end_date: date,
     rows_per_page: int = 100,
+    deadline: float | None = None,
 ) -> tuple[list[dict[str, str]], dict[str, int]]:
     if start_date > end_date:
         raise ValueError("시작일은 종료일보다 늦을 수 없습니다.")
@@ -159,6 +169,8 @@ def collect_selected_rows(
         "START_YMD": start_date.strftime("%Y%m%d"),
         "END_YMD": end_date.strftime("%Y%m%d"),
     }
+    if deadline is not None:
+        client.request_deadline = deadline
     unique_rows: dict[tuple[str, str], dict[str, str]] = {}
     fetched_count = 0
     invalid_count = 0
@@ -172,6 +184,7 @@ def collect_selected_rows(
             page_no,
             rows_per_page,
             filters,
+            deadline=deadline,
         )
         if not page_items:
             break

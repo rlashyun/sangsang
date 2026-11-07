@@ -25,6 +25,28 @@ def detail(status="보관중", place="밀양경찰서", code="O0002287"):
 
 
 class CurrentDetailMappingTests(unittest.TestCase):
+    def test_enriched_and_plain_items_can_share_one_postgrest_bulk_request(self):
+        selected=[]
+        for identity,name in [('A1','중앙지구대'),('A2','서울중앙지구대')]:
+            selected.append({'atc_id':identity,'found_sequence':'1','raw_storage_name':name,
+                'raw_category_name':'지갑','color_name':'','item_name':'원문','description':'설명',
+                'image_url':'','registered_on':'2026-11-06','normalized_search_text':'지갑','raw_payload':'{}'})
+        rows=service._build_database_rows(selected,source_code='police_api',category_ids={'지갑':1},
+            aliases={},locations=[LocationReference(1,'서울중앙지구대','서울중앙지구대'),
+                                  LocationReference(2,'충주중앙지구대','충주중앙지구대')])
+        evidence={**detail(),'detail_org_name':'밀양경찰서','detail_phone':'055-000-0000'}
+        with patch.object(service,'_fetch_detail',return_value=evidence):
+            self.enrich(rows,{('밀양경찰서','O0002287'):245})
+        store=SupabaseIngestionStore('https://example.supabase.co','fake')
+        def post(*args,**kwargs):
+            payload=kwargs['payload']
+            self.assertEqual(set(payload[0]),set(payload[1]),'PostgREST rejects mixed object keys')
+            return [{'id':i,'location_match_status':r['location_match_status']} for i,r in enumerate(payload)]
+        with patch.object(store,'_request',side_effect=post):
+            self.assertEqual(store.upsert_found_items(rows),0)
+        self.assertEqual(rows[0]['detail_status'],'보관중')
+        self.assertIsNone(rows[1]['detail_status'])
+
     def enrich(self, rows, mappings, **kwargs):
         return service._enrich_ambiguous_rows(
             rows, source_code="police_api", service_key="fake-key", mappings=mappings,
@@ -67,6 +89,30 @@ class CurrentDetailMappingTests(unittest.TestCase):
             self.enrich(rows, {("밀양경찰서", "O0002287"): 245})
         fetch.assert_called_once()
         self.assertTrue(all(r["storage_location_id"] == 245 for r in rows))
+
+    def test_transient_failure_retries_once_without_losing_current_match(self):
+        rows=[row()]
+        with patch.object(service,'_fetch_detail',side_effect=[TimeoutError(),detail()]) as fetch:
+            stats=self.enrich(rows,{('밀양경찰서','O0002287'):245},deadline=time.monotonic()+4)
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual(stats['requested'],2)
+        self.assertEqual(stats['retried'],1)
+        self.assertEqual(stats['failed'],0)
+        self.assertEqual(stats['succeeded'],1)
+        self.assertEqual(rows[0]['storage_location_id'],245)
+
+    def test_permanent_detail_failure_does_not_retry(self):
+        with patch.object(service,'_fetch_detail',side_effect=service.DetailLookupError('invalid identity')) as fetch:
+            stats=self.enrich([row()],{},deadline=time.monotonic()+4)
+        self.assertEqual(fetch.call_count,1)
+        self.assertEqual(stats['failed'],1)
+
+    def test_repeated_network_failure_stops_after_two_attempts(self):
+        with patch.object(service,'_fetch_detail',side_effect=TimeoutError()) as fetch:
+            stats=self.enrich([row()],{},deadline=time.monotonic()+4)
+        self.assertEqual(fetch.call_count,2)
+        self.assertEqual(stats['failed'],1)
+        self.assertEqual(stats['deferred'],0)
 
     def test_failure_and_expired_budget_leave_no_stale_match(self):
         with patch.object(service, "_fetch_detail", side_effect=TimeoutError()):
@@ -134,7 +180,7 @@ class CurrentDetailMappingTests(unittest.TestCase):
         ]
         store.load_detail_mappings.return_value = {("밀양경찰서", "O0002287"): 245}
         store.existing_identities.return_value = set()
-        store.upsert_found_items.side_effect = lambda rows: sum(r["location_match_status"] != "matched" for r in rows)
+        store.upsert_found_items.side_effect = lambda rows, **kwargs: sum(r["location_match_status"] in {"unmatched", "ambiguous"} for r in rows)
         store.delete_expired.return_value = 0
         selected = []
         for i, name in enumerate(["중앙지구대", "서울중앙지구대", "미등록기관"]):
