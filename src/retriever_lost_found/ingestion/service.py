@@ -9,6 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
@@ -23,6 +24,7 @@ from .collector import (
     retention_start,
 )
 from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
+from .overseas import is_overseas_custody
 
 
 SOURCE_ORDER = ("partner", "police")
@@ -36,6 +38,15 @@ DETAIL_TIMEOUT_SECONDS = 3.0
 DETAIL_BUDGET_SECONDS = 45.0
 DETAIL_MAX_REQUESTS = 200
 DETAIL_STAGE_DEADLINE_SECONDS = 180.0
+COLLECTION_STAGE_DEADLINE_SECONDS = 150.0
+SYNC_WORK_DEADLINE_SECONDS = 270.0
+AUDIT_DEADLINE_SECONDS = 295.0
+
+
+class DetailLookupError(RuntimeError):
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def _normalize_key(value: Any) -> str:
@@ -119,7 +130,10 @@ def _build_database_rows(
             raise RuntimeError(
                 f"DB 카테고리 매핑이 없습니다: {source_code}/{row['raw_category_name']}"
             )
-        location_id, match_status = resolver.resolve(row["raw_storage_name"])
+        if is_overseas_custody(source_code, row["raw_storage_name"]):
+            location_id, match_status = None, "excluded_overseas"
+        else:
+            location_id, match_status = resolver.resolve(row["raw_storage_name"])
         # PRD 4.5 — the bounded detail stage handles only ambiguous rows afterwards.
         try:
             raw_payload = json.loads(row["raw_payload"])
@@ -147,6 +161,8 @@ def _build_database_rows(
                 "detail_department": None,
                 "detail_phone": None,
                 "detail_checked_at": None,
+                # PostgREST bulk upsert requires identical keys for enriched and plain rows.
+                "detail_status": None,
             }
         )
     return database_rows
@@ -180,7 +196,8 @@ def _fetch_detail(source_code: str, service_key: str, atc_id: str, sequence: str
         }
     except Exception as error:
         status = getattr(error, "code", None)
-        raise RuntimeError(f"상세 조회 실패: {type(error).__name__}, HTTP {status}") from None
+        retryable = status >= 500 if isinstance(status, int) else isinstance(error, (TimeoutError, urllib.error.URLError))
+        raise DetailLookupError(f"상세 조회 실패: {type(error).__name__}, HTTP {status}", retryable=retryable) from None
 
 
 def _enrich_ambiguous_rows(
@@ -188,6 +205,7 @@ def _enrich_ambiguous_rows(
     mappings: dict[tuple[str, str], int], deadline: float,
 ) -> dict[str, Any]:
     """PRD 4.5 — current place+code lookup; treatment status is informational only."""
+    started = time.monotonic()
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in rows:
         if row["location_match_status"] == "ambiguous":
@@ -195,16 +213,23 @@ def _enrich_ambiguous_rows(
             # A failed/deferred lookup must not reconnect using stale cached evidence.
             row["location_match_status"] = "unmatched"
             row["storage_location_id"] = None
-    stats = {"eligible": len(grouped), "requested": 0, "succeeded": 0, "failed": 0, "deferred": 0}
+    stats = {"eligible": len(grouped), "requested": 0, "succeeded": 0, "failed": 0, "deferred": 0, "retried": 0}
     identities = iter(grouped)
+    retries: deque[tuple[str, str]] = deque()
+    attempts: dict[tuple[str, str], int] = {}
     pending: dict[Any, tuple[str, str]] = {}
     executor = ThreadPoolExecutor(max_workers=DETAIL_WORKERS)
     try:
         while time.monotonic() < deadline:
             while len(pending) < DETAIL_WORKERS and stats["requested"] < DETAIL_MAX_REQUESTS and time.monotonic() < deadline:
                 identity = next(identities, None)
+                if identity is None and retries:
+                    identity = retries.popleft()
                 if identity is None:
                     break
+                attempts[identity] = attempts.get(identity, 0) + 1
+                if attempts[identity] > 1:
+                    stats["retried"] += 1
                 future = executor.submit(_fetch_detail, source_code, service_key, *identity)
                 pending[future] = identity
                 stats["requested"] += 1
@@ -217,21 +242,32 @@ def _enrich_ambiguous_rows(
                 identity = pending.pop(future)
                 try:
                     detail = future.result()
-                except Exception:
-                    stats["failed"] += 1
+                except Exception as error:
+                    if attempts[identity] == 1:
+                        stats["failed"] += 1
+                    retryable = getattr(error, "retryable", isinstance(error, (TimeoutError, urllib.error.URLError)))
+                    # Retry a transient failure once, after first attempts, inside the same caps.
+                    if retryable and attempts[identity] == 1 and deadline - time.monotonic() > DETAIL_TIMEOUT_SECONDS:
+                        retries.append(identity)
                     continue
+                if attempts[identity] > 1:
+                    stats["failed"] -= 1
                 stats["succeeded"] += 1
-                target = mappings.get((_normalize_key(detail["detail_department"]), detail["detail_org_id"]))
+                overseas = is_overseas_custody(source_code, detail["detail_department"])
+                target = None if overseas else mappings.get((_normalize_key(detail["detail_department"]), detail["detail_org_id"]))
                 for row in grouped[identity]:
                     row.update(detail)
                     row["storage_location_id"] = target
-                    row["location_match_status"] = "matched" if target is not None else "unmatched"
+                    row["location_match_status"] = (
+                        "excluded_overseas" if overseas else "matched" if target is not None else "unmatched"
+                    )
     finally:
         for future in pending:
             future.cancel()
         # Fetch workers never write rows/DB. Do not wait past the scheduling deadline.
         executor.shutdown(wait=False, cancel_futures=True)
     stats["deferred"] = stats["eligible"] - stats["succeeded"] - stats["failed"]
+    stats["elapsed_seconds"] = round(time.monotonic() - started, 3)
     return stats
 
 
@@ -253,6 +289,7 @@ def _empty_result(source_code: str, status: str) -> dict[str, Any]:
         "updated": 0,
         "deleted": 0,
         "unmatched": 0,
+        "excluded_overseas": 0,
         "invalid": 0,
     }
 
@@ -266,6 +303,8 @@ def _sync_source(
 ) -> dict[str, Any]:
     """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다."""
     sync_started = time.monotonic()
+    if incremental_only:
+        store.deadline = sync_started + SYNC_WORK_DEADLINE_SECONDS
     if source not in SOURCE_ORDER:
         raise ValueError(f"지원하지 않는 수집원입니다: {source}")
     source_code = SOURCE_CODES[source]
@@ -294,6 +333,7 @@ def _sync_source(
 
     audit: dict[str, Any] = {}
     upsert_completed = False
+    client = None
     try:
         category_ids = store.load_category_ids(source_code)
         aliases = store.load_aliases(source_code)
@@ -308,6 +348,7 @@ def _sync_source(
             start_date=start_date,
             end_date=window_end,
             rows_per_page=100,
+            deadline=sync_started + COLLECTION_STAGE_DEADLINE_SECONDS if incremental_only else None,
         )
         result["fetched"] = fetch_summary["fetched_count"]
         result["selected"] = fetch_summary["selected_count"]
@@ -335,10 +376,14 @@ def _sync_source(
         result["inserted"] = len(incoming - existing)
 
         # PRD 4.5 — count final DB matches after the verified-detail trigger runs.
-        result["unmatched"] = store.upsert_found_items(database_rows)
+        upsert_statistics: dict[str, int] = {}
+        result["unmatched"] = store.upsert_found_items(database_rows, statistics=upsert_statistics)
+        result["excluded_overseas"] = upsert_statistics.get("excluded_overseas", 0)
         upsert_completed = True
         result["deleted"] = store.delete_expired(source_code)
+        result["cleanup_deferred"] = getattr(store, "cleanup_deferred", False) is True
         result["status"] = "succeeded"
+        result["duration_seconds"] = round(time.monotonic() - sync_started, 3)
         audit = _audit_values(
             result,
             start_date=start_date,
@@ -348,8 +393,10 @@ def _sync_source(
         )
     except Exception as error:
         result["status"] = "partial" if upsert_completed else "failed"
-        error_message = _safe_error(error, (store.secret_key,))
+        service_key = getattr(client, "service_key", "")
+        error_message = _safe_error(error, (store.secret_key, service_key if isinstance(service_key, str) else ""))
         result["error"] = error_message
+        result["duration_seconds"] = round(time.monotonic() - sync_started, 3)
         audit = _audit_values(
             result,
             start_date=start_date,
@@ -359,6 +406,8 @@ def _sync_source(
             upsert_completed=upsert_completed,
         )
 
+    if incremental_only:
+        store.deadline = sync_started + AUDIT_DEADLINE_SECONDS
     _finish_audit(store, run_id, audit, result)
     return result
 
@@ -377,6 +426,7 @@ def _audit_values(
         "window_start": start_date.isoformat(),
         "window_end": end_date.isoformat(),
         "trigger": trigger,
+        "excluded_overseas_count": result.get("excluded_overseas", 0),
     }
     if fetch_summary is not None:
         metadata.update(
@@ -388,6 +438,10 @@ def _audit_values(
         )
     if "detail_lookup" in result:
         metadata["detail_lookup"] = result["detail_lookup"]
+    if "duration_seconds" in result:
+        metadata["duration_seconds"] = result["duration_seconds"]
+    if result.get("cleanup_deferred"):
+        metadata["cleanup_deferred"] = True
     return {
         "status": result["status"],
         "fetched_count": result["fetched"],

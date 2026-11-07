@@ -86,11 +86,13 @@ class FakeStore:
         self.requested_identities = identities
         return {("OLD", "1")} & identities
 
-    def upsert_found_items(self, rows: list[dict]) -> int:
+    def upsert_found_items(self, rows: list[dict], *, statistics: dict | None = None) -> int:
         if self.fail_upsert:
             raise RuntimeError("upsert failed")
         self.upserted.extend(rows)
-        return sum(row["location_match_status"] != "matched" for row in rows)
+        if statistics is not None:
+            statistics["excluded_overseas"] = sum(row["location_match_status"] == "excluded_overseas" for row in rows)
+        return sum(row["location_match_status"] in {"unmatched", "ambiguous"} for row in rows)
 
     def delete_expired(self, source_code: str) -> int:
         self.deleted = True
@@ -259,12 +261,13 @@ class DailyIngestionTests(unittest.TestCase):
     @patch.object(daily_ingestion, "create_source_client")
     def test_audit_counts_final_db_matches(self, create_client, collect_rows) -> None:
         store = FakeStore()
-        store.upsert_found_items = lambda rows: 0  # Verified DB trigger resolves the incoming row.
+        store.upsert_found_items = lambda rows, **kwargs: 0  # Verified DB trigger resolves the incoming row.
         collect_rows.return_value = ([selected_row(storage="unknown")], {
             "fetched_count": 1, "selected_count": 1, "invalid_count": 0,
             "outside_range_count": 0, "api_total_count": 1,
         })
         result = daily_ingestion._sync_source(store, source="partner", today=date(2026, 10, 7))
+        self.assertEqual(result["status"], "succeeded")
         self.assertEqual(result["unmatched"], 0)
         self.assertEqual(store.finished[0]["unmatched_count"], 0)
 

@@ -40,11 +40,11 @@ def _run_source(request: Request, source: Literal["partner", "police"]) -> JSONR
 
 @router.get("/partner-sync")
 def partner_sync(request: Request) -> JSONResponse:
-    """연계기관 API의 오늘 등록분만 동기화합니다."""
+    """완료된 어제까지 연계기관 등록분을 증분 동기화합니다."""
     return _run_source(request, "partner")
 
 
 @router.get("/police-sync")
 def police_sync(request: Request) -> JSONResponse:
-    """경찰관서 API의 오늘 등록분만 동기화합니다."""
+    """완료된 어제까지 경찰관서 등록분을 증분 동기화합니다."""
     return _run_source(request, "police")
