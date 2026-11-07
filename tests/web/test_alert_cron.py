@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "tests" / "alerts"))
+
+from alert_fakes import TEST_SETTINGS, FakeAlertStore  # noqa: E402
+from api import index  # noqa: E402
+from retriever_lost_found.alerts import matching  # noqa: E402
+
+AUTH = {"Authorization": "Bearer cron-test-secret"}
+FROM_ENVIRONMENT = "retriever_lost_found.web.cron.SupabaseAlertStore.from_environment"
+
+
+def sync_result(status: str = "succeeded", inserted: int = 3) -> dict:
+    return {
+        "date": "2026-11-06",
+        "status": status,
+        "source": {"source": "partner_api", "status": status, "inserted": inserted},
+    }
+
+
+def judge(query, candidates):
+    return []
+
+
+class MatchingHookTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(index.app)
+
+    def call_partner(self, result: dict):
+        with (
+            patch.dict(os.environ, {"CRON_SECRET": "cron-test-secret"}),
+            patch("retriever_lost_found.web.cron.run_incremental_sync", return_value=result),
+        ):
+            return self.client.get("/api/cron/partner-sync", headers=AUTH)
+
+    def test_new_items_start_matching_for_that_source(self) -> None:
+        store = FakeAlertStore()
+        with (
+            patch.object(matching, "SIMILARITY_JUDGE", judge),
+            patch(FROM_ENVIRONMENT, return_value=store),
+            patch("retriever_lost_found.web.cron.run_match_pass") as run_match,
+        ):
+            response = self.call_partner(sync_result())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), sync_result())  # 수집 응답은 그대로다(설계 6.1)
+        run_match.assert_called_once()
+        self.assertIs(run_match.call_args.args[0], store)
+        self.assertIs(run_match.call_args.args[1], judge)
+        self.assertEqual(run_match.call_args.kwargs["item_source_code"], "partner_api")
+
+    def test_no_new_items_or_a_failed_sync_skips_matching(self) -> None:
+        for result in (sync_result(inserted=0), sync_result(status="failed")):
+            with (
+                self.subTest(result=result),
+                patch.object(matching, "SIMILARITY_JUDGE", judge),
+                patch(FROM_ENVIRONMENT) as from_environment,
+            ):
+                self.call_partner(result)
+            from_environment.assert_not_called()
+
+    def test_without_a_judge_matching_does_not_run(self) -> None:
+        with patch.object(matching, "SIMILARITY_JUDGE", None), patch(FROM_ENVIRONMENT) as from_environment:
+            self.call_partner(sync_result())
+
+        from_environment.assert_not_called()
+
+    def test_matching_failure_does_not_change_the_sync_response(self) -> None:
+        with (
+            patch.object(matching, "SIMILARITY_JUDGE", judge),
+            patch(FROM_ENVIRONMENT, return_value=FakeAlertStore()),
+            patch("retriever_lost_found.web.cron.run_match_pass", side_effect=RuntimeError("boom")),
+        ):
+            response = self.call_partner(sync_result())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), sync_result())
+
+
+if __name__ == "__main__":
+    unittest.main()

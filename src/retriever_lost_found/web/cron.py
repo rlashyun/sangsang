@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 import hmac
-from typing import Literal
+import sys
+import time
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from ..alerts import matching
+from ..alerts.matching import run_match_pass
+from ..alerts.store import SupabaseAlertStore
 from ..config import read_optional_env_value
+from ..ingestion.collector import SOURCE_CODES
 from ..ingestion.service import run_incremental_sync
 
 
 router = APIRouter(prefix="/api/cron", include_in_schema=False)
+# 설계 6.1·6.2 — 함수 300초 제한 안에서 기록·응답에 40초를 남긴다.
+ALERT_DEADLINE_SECONDS = 260.0
 
 
 def _authorized(request: Request) -> JSONResponse | None:
@@ -26,11 +34,31 @@ def _authorized(request: Request) -> JSONResponse | None:
     return None
 
 
+def _run_alert_matching(source: str, result: dict[str, Any], *, deadline: float) -> None:
+    """설계 6.1 — 알림 매칭. 실패해도 수집 응답과 ingestion_runs는 그대로다."""
+    judge = matching.SIMILARITY_JUDGE
+    source_result = result.get("source") if isinstance(result.get("source"), dict) else {}
+    try:
+        inserted = int(source_result.get("inserted") or 0)
+    except (TypeError, ValueError):
+        inserted = 0
+    # 판정이 없거나, 저장까지 못 했거나, 새 물품이 없으면 DB를 부르지 않는다.
+    if judge is None or result.get("status") not in ("succeeded", "partial") or inserted <= 0:
+        return
+    try:
+        store = SupabaseAlertStore.from_environment()
+        run_match_pass(store, judge, item_source_code=SOURCE_CODES[source], deadline=deadline)
+    except Exception as error:
+        print(f"[alerts] {source} 매칭 단계 실패: {type(error).__name__}", file=sys.stderr)
+
+
 def _run_source(request: Request, source: Literal["partner", "police"]) -> JSONResponse:
+    started = time.monotonic()
     authorization_error = _authorized(request)
     if authorization_error is not None:
         return authorization_error
     result = run_incremental_sync(source)
+    _run_alert_matching(source, result, deadline=started + ALERT_DEADLINE_SECONDS)
     return JSONResponse(
         status_code=200 if result.get("status") == "succeeded" else 500,
         content=result,
