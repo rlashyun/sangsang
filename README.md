@@ -162,6 +162,22 @@ DB 트리거 적용 이후 최종 저장 결과를 기준으로 기록합니다.
 요청은 `Authorization: Bearer $CRON_SECRET`이 일치해야 실행됩니다. Vercel Hobby
 요금제에서는 지정한 한 시간 안에서 실행 시각이 지연될 수 있습니다.
 
+## 기관의 카카오 검색어 확인
+
+검토 대상 기관에 저장한 `storage_locations.kakao_search`로 카카오 장소를 조회합니다.
+값이 없는 기관은 기존 `name`을 사용합니다. 기관명이나 물품 연결 키는 바꾸지 않으며,
+결과는 검토 후보입니다. 이 명령은 DB나 좌표를 수정하지 않습니다(PRD 4.5).
+
+```powershell
+uv run python scripts/search_storage_location_kakao.py 5052
+```
+
+검증된 기관 정보·검색어·매핑 규칙의 재현 SQL은
+`supabase/repairs/20261107_reviewed_institution_repairs.sql`에 있습니다.
+원래 기관 데이터를 적재하고 스키마 마이그레이션을 적용한 DB에서 수동 실행하는 파일이며,
+해당 값은 운영 DB에 이미 반영했습니다. 물품 원문이나 물품 연결 상태는 이 파일로 갱신하지 않습니다.
+서로 다른 DB에서도 같은 기관을 가리키도록 생성 ID 대신 출처·원본 기관 키로 연결합니다.
+
 ## 프로젝트 구조
 
 ```text

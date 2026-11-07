@@ -3,9 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from collections.abc import Iterable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .collector import (
@@ -20,6 +26,16 @@ from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 
 
 SOURCE_ORDER = ("partner", "police")
+DETAIL_ENDPOINTS = {
+    "police_api": "LosfundInfoInqireService/getLosfundDetailInfo",
+    "partner_api": "LosPtfundInfoInqireService/getPtLosfundDetailInfo",
+}
+# PRD 4.5, 5 — keep optional detail work inside the 300-second cron budget.
+DETAIL_WORKERS = 4
+DETAIL_TIMEOUT_SECONDS = 3.0
+DETAIL_BUDGET_SECONDS = 45.0
+DETAIL_MAX_REQUESTS = 200
+DETAIL_STAGE_DEADLINE_SECONDS = 180.0
 
 
 def _normalize_key(value: Any) -> str:
@@ -104,8 +120,7 @@ def _build_database_rows(
                 f"DB 카테고리 매핑이 없습니다: {source_code}/{row['raw_category_name']}"
             )
         location_id, match_status = resolver.resolve(row["raw_storage_name"])
-        # PRD 4.5 — existing detail evidence and verified mappings are handled by the DB trigger.
-        # Unknown institutions are left for manual review; ingestion never calls the detail API.
+        # PRD 4.5 — the bounded detail stage handles only ambiguous rows afterwards.
         try:
             raw_payload = json.loads(row["raw_payload"])
         except json.JSONDecodeError as error:
@@ -135,6 +150,89 @@ def _build_database_rows(
             }
         )
     return database_rows
+
+
+def _fetch_detail(source_code: str, service_key: str, atc_id: str, sequence: str) -> dict[str, Any]:
+    """Read current custody evidence; never expose URLs, keys, or raw API errors."""
+    url = "https://apis.data.go.kr/1320000/" + DETAIL_ENDPOINTS[source_code]
+    url += "?" + urllib.parse.urlencode({"serviceKey": service_key, "ATC_ID": atc_id, "FD_SN": sequence})
+    try:
+        with urllib.request.urlopen(url, timeout=DETAIL_TIMEOUT_SECONDS) as response:
+            payload = response.read(131_073)
+        if len(payload) > 131_072:
+            raise ValueError("oversized response")
+        root = ET.fromstring(payload)
+        if root.findtext("./header/resultCode") != "00":
+            raise ValueError("unsuccessful response")
+        item = root.find("./body/item")
+        if item is None:
+            item = root.find("./body/items/item")
+        if item is None or item.findtext("atcId") != atc_id or item.findtext("fdSn") != sequence:
+            raise ValueError("identity mismatch")
+        values = {field: (item.findtext(field) or "").strip() for field in ("orgId", "orgNm", "depPlace", "tel", "csteSteNm")}
+        if not values["orgId"] or not values["depPlace"]:
+            raise ValueError("missing custody identity")
+        return {
+            "detail_org_id": values["orgId"], "detail_org_name": values["orgNm"],
+            "detail_department": values["depPlace"], "detail_phone": values["tel"],
+            "detail_status": values["csteSteNm"],
+            "detail_checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as error:
+        status = getattr(error, "code", None)
+        raise RuntimeError(f"상세 조회 실패: {type(error).__name__}, HTTP {status}") from None
+
+
+def _enrich_ambiguous_rows(
+    rows: list[dict[str, Any]], *, source_code: str, service_key: str,
+    mappings: dict[tuple[str, str], int], deadline: float,
+) -> dict[str, Any]:
+    """PRD 4.5 — current place+code lookup; treatment status is informational only."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        if row["location_match_status"] == "ambiguous":
+            grouped.setdefault((row["atc_id"], row["found_sequence"]), []).append(row)
+            # A failed/deferred lookup must not reconnect using stale cached evidence.
+            row["location_match_status"] = "unmatched"
+            row["storage_location_id"] = None
+    stats = {"eligible": len(grouped), "requested": 0, "succeeded": 0, "failed": 0, "deferred": 0}
+    identities = iter(grouped)
+    pending: dict[Any, tuple[str, str]] = {}
+    executor = ThreadPoolExecutor(max_workers=DETAIL_WORKERS)
+    try:
+        while time.monotonic() < deadline:
+            while len(pending) < DETAIL_WORKERS and stats["requested"] < DETAIL_MAX_REQUESTS and time.monotonic() < deadline:
+                identity = next(identities, None)
+                if identity is None:
+                    break
+                future = executor.submit(_fetch_detail, source_code, service_key, *identity)
+                pending[future] = identity
+                stats["requested"] += 1
+            if not pending:
+                break
+            completed, _ = wait(pending, timeout=max(0.0, deadline - time.monotonic()), return_when=FIRST_COMPLETED)
+            if not completed:
+                break
+            for future in completed:
+                identity = pending.pop(future)
+                try:
+                    detail = future.result()
+                except Exception:
+                    stats["failed"] += 1
+                    continue
+                stats["succeeded"] += 1
+                target = mappings.get((_normalize_key(detail["detail_department"]), detail["detail_org_id"]))
+                for row in grouped[identity]:
+                    row.update(detail)
+                    row["storage_location_id"] = target
+                    row["location_match_status"] = "matched" if target is not None else "unmatched"
+    finally:
+        for future in pending:
+            future.cancel()
+        # Fetch workers never write rows/DB. Do not wait past the scheduling deadline.
+        executor.shutdown(wait=False, cancel_futures=True)
+    stats["deferred"] = stats["eligible"] - stats["succeeded"] - stats["failed"]
+    return stats
 
 
 def _safe_error(error: BaseException, secrets: Iterable[str] = ()) -> str:
@@ -167,6 +265,7 @@ def _sync_source(
     incremental_only: bool = False,
 ) -> dict[str, Any]:
     """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다."""
+    sync_started = time.monotonic()
     if source not in SOURCE_ORDER:
         raise ValueError(f"지원하지 않는 수집원입니다: {source}")
     source_code = SOURCE_CODES[source]
@@ -221,6 +320,15 @@ def _sync_source(
             aliases=aliases,
             locations=locations,
         )
+        if any(row["location_match_status"] == "ambiguous" for row in database_rows):
+            mappings = store.load_detail_mappings(source_code, active_ids={location.id for location in locations})
+            result["detail_lookup"] = _enrich_ambiguous_rows(
+                database_rows, source_code=source_code, service_key=client.service_key,
+                mappings=mappings, deadline=min(
+                    time.monotonic() + DETAIL_BUDGET_SECONDS,
+                    sync_started + DETAIL_STAGE_DEADLINE_SECONDS,
+                ),
+            )
         incoming = {(row["atc_id"], row["found_sequence"]) for row in database_rows}
         existing = store.existing_identities(source_code, incoming)
         result["updated"] = len(incoming & existing)
@@ -275,9 +383,11 @@ def _audit_values(
             {
                 "api_total_count": fetch_summary["api_total_count"],
                 "outside_range_count": fetch_summary["outside_range_count"],
-                "detail_lookup_policy": "manual_review",
+                "detail_lookup_policy": "bounded_ambiguous_current_place",
             }
         )
+    if "detail_lookup" in result:
+        metadata["detail_lookup"] = result["detail_lookup"]
     return {
         "status": result["status"],
         "fetched_count": result["fetched"],
