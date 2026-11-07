@@ -9,7 +9,7 @@ begin
     join public.storage_location_detail_mappings m
       on m.item_source_code=f.item_source_code and m.detail_org_id=f.detail_org_id
      and m.normalized_raw_storage_name=regexp_replace(
-         lower(normalize(f.raw_storage_name,NFKC)), '[^[:alnum:]]', '', 'g')
+         lower(normalize(f.detail_department,NFKC)), '[^[:alnum:]]', '', 'g')
      and m.storage_location_id=f.storage_location_id
     where f.location_match_status='matched'
     order by f.id limit 1;

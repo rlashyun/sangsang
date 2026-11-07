@@ -271,6 +271,21 @@ class SupabaseIngestionStore:
             existing.update((str(row["atc_id"]), str(row["found_sequence"])) for row in rows)
         return existing & identities
 
+    def load_detail_mappings(
+        self, source_code: str, *, active_ids: set[int],
+    ) -> dict[tuple[str, str], int]:
+        """PRD 4.5 — one batch-local dictionary, scoped to active institutions."""
+        rows = self._fetch_all(
+            "storage_location_detail_mappings",
+            "normalized_raw_storage_name,detail_org_id,storage_location_id",
+            filters=[("item_source_code", f"eq.{source_code}")],
+        )
+        return {
+            (str(row["normalized_raw_storage_name"]), str(row["detail_org_id"])):
+                int(row["storage_location_id"])
+            for row in rows if int(row["storage_location_id"]) in active_ids
+        }
+
     def latest_registered_on(self, source_code: str) -> date | None:
         rows = self._request(
             "GET",
