@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/police-sync",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/alert-send",
+      "schedule": "0 2 * * *"
     }
   ]
 }

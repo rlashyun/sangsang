@@ -87,5 +87,51 @@ class MatchingHookTests(unittest.TestCase):
         self.assertEqual(response.json(), sync_result())
 
 
+class AlertSendEndpointTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = TestClient(index.app)
+
+    def call(self, headers=None, *, settings=TEST_SETTINGS, result=None):
+        with (
+            patch.dict(os.environ, {"CRON_SECRET": "cron-test-secret"}),
+            patch("retriever_lost_found.web.cron.load_alert_settings", return_value=settings),
+            patch(FROM_ENVIRONMENT, return_value=FakeAlertStore()) as from_environment,
+            patch(
+                "retriever_lost_found.web.cron.run_send_pass",
+                return_value=result or {"status": "succeeded", "messages_sent": 2},
+            ) as run_send,
+        ):
+            response = self.client.get("/api/cron/alert-send", headers=headers)
+        return response, run_send, from_environment
+
+    def test_requires_the_cron_secret(self) -> None:
+        # 절대 규칙 8
+        response, run_send, _ = self.call()
+
+        self.assertEqual(response.status_code, 401)
+        run_send.assert_not_called()
+
+    def test_runs_the_send_pass_with_the_time_budget(self) -> None:
+        response, run_send, from_environment = self.call(AUTH)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "succeeded", "messages_sent": 2})
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertIs(run_send.call_args.args[0], from_environment.return_value)
+        self.assertIs(run_send.call_args.args[2], TEST_SETTINGS)
+        self.assertIn("deadline", run_send.call_args.kwargs)
+
+    def test_without_mail_settings_is_503(self) -> None:
+        response, run_send, _ = self.call(AUTH, settings=None)
+
+        self.assertEqual(response.status_code, 503)
+        run_send.assert_not_called()
+
+    def test_failed_send_pass_is_500(self) -> None:
+        response, _, _ = self.call(AUTH, result={"status": "failed", "messages_sent": 0})
+
+        self.assertEqual(response.status_code, 500)
+
+
 if __name__ == "__main__":
     unittest.main()

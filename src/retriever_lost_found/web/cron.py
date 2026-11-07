@@ -9,7 +9,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..alerts import matching
+from ..alerts.dispatch import run_send_pass
 from ..alerts.matching import run_match_pass
+from ..alerts.sender import SmtpEmailSender
+from ..alerts.settings import load_alert_settings
 from ..alerts.store import SupabaseAlertStore
 from ..config import read_optional_env_value
 from ..ingestion.collector import SOURCE_CODES
@@ -76,3 +79,30 @@ def partner_sync(request: Request) -> JSONResponse:
 def police_sync(request: Request) -> JSONResponse:
     """경찰관서 API의 오늘 등록분만 동기화합니다."""
     return _run_source(request, "police")
+
+
+@router.get("/alert-send")
+def alert_send(request: Request) -> JSONResponse:
+    """설계 6.2 — 만료 안내 → 발송(450통 한도) → 정리. KST 11시대에 한 번 돈다."""
+    started = time.monotonic()
+    authorization_error = _authorized(request)
+    if authorization_error is not None:
+        return authorization_error
+    no_store = {"Cache-Control": "no-store"}
+    try:
+        settings = load_alert_settings()
+    except ValueError as error:
+        return JSONResponse(status_code=503, content={"error": str(error)}, headers=no_store)
+    if settings is None:
+        return JSONResponse(status_code=503, content={"error": "알림 메일 설정이 없습니다."}, headers=no_store)
+    result = run_send_pass(
+        SupabaseAlertStore.from_environment(),
+        SmtpEmailSender(settings.mail),
+        settings,
+        deadline=started + ALERT_DEADLINE_SECONDS,
+    )
+    return JSONResponse(
+        status_code=500 if result.get("status") == "failed" else 200,
+        content=result,
+        headers=no_store,
+    )
