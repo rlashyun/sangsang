@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from ..alerts.reservations import AlertService
+from ..alerts.sender import SmtpEmailSender
+from ..alerts.settings import load_alert_settings
+from ..alerts.store import SupabaseAlertStore
 from ..config import read_env_value, read_optional_env_value
 from ..integrations.kakao import KakaoLocalClient, kakao_sdk_url
 from ..integrations.supabase import (
@@ -20,6 +25,7 @@ from ..integrations.supabase import (
     validate_location_ids,
 )
 from ..search.fuzzy import rank_found_items
+from .alerts import create_alert_router
 
 
 DEFAULT_STATIC_DIR = Path(__file__).with_name("static")
@@ -34,6 +40,7 @@ def create_app(
     institutions: list[dict[str, Any]] | None = None,
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
+    alert_service: AlertService | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
     sdk_url = kakao_sdk_url(javascript_key)
@@ -205,6 +212,8 @@ def create_app(
         latitude = optional_float(y, "y")
         return client.search_keyword(query, longitude=longitude, latitude=latitude)
 
+    # 설계 5.4 — 메일 설정이 없으면 서비스가 None이고 /api/alerts*는 503이다.
+    app.include_router(create_alert_router(alert_service))
     return app
 
 
@@ -223,11 +232,25 @@ def create_runtime_app() -> FastAPI:
 
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
+    try:
+        alert_settings = load_alert_settings()
+    except ValueError as error:
+        # 메일 설정이 잘못돼도 지도 서비스는 멈추지 않게 알림 예약만 끈다(설계 14장).
+        print(f"[alerts] 알림 예약을 끕니다: {error}", file=sys.stderr)
+        alert_settings = None
+    alert_service = None
+    if alert_settings is not None:
+        alert_service = AlertService(
+            store=SupabaseAlertStore(supabase_url, supabase_secret_key),
+            sender=SmtpEmailSender(alert_settings.mail),
+            settings=alert_settings,
+        )
     app = create_app(
         KakaoLocalClient(rest_api_key),
         javascript_key,
         map_location_client=map_location_client,
         found_item_client=found_item_client,
+        alert_service=alert_service,
     )
     app.state.location_source = "supabase"
     app.state.item_counts_available = True
