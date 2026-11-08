@@ -8,6 +8,7 @@ async (page) => {
   page.on("pageerror", error => errors.push(error.message));
   let responseMode = "success";
   let itemRequests = 0;
+  const photoRequests = new Set();
   let releaseResponse;
   const items = Array.from({ length: 60 }, (_, index) => ({
     id: index + 1,
@@ -22,9 +23,9 @@ async (page) => {
     raw_storage_name: "서울역 유실물센터",
     item_source_code: "partner_api",
     image_url: index === 1
-      ? "https://minwon24.police.go.kr/images/sub/img02_no_img.gif"
+      ? "https://minwon24.police.go.kr/images/sub/img02_no_img.gif?default=1"
       : index === 2 ? "https://minwon24.police.go.kr/broken.png"
-        : index === 3 ? null : "https://minwon24.police.go.kr/photo.svg",
+        : index === 3 ? null : `https://minwon24.police.go.kr/photo.svg?item=${index + 1}`,
     match_score: 0.87,
   }));
   await page.addInitScript(() => {
@@ -52,6 +53,7 @@ async (page) => {
     if (url.hostname === "minwon24.police.go.kr") {
       if (url.pathname === "/broken.png") return route.abort();
       check(url.pathname === "/photo.svg", "기본 그림은 요청하지 않아야 한다");
+      photoRequests.add(url.searchParams.get("item"));
       return route.fulfill({ contentType: "image/svg+xml", body:
         '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect width="240" height="160" fill="#543b2b"/><text x="40" y="90" fill="white">TEST WALLET</text></svg>' });
     }
@@ -90,6 +92,17 @@ async (page) => {
   const cards = page.getByRole("button", { name: /검정 지갑 \d+ 상세 보기/ });
   await cards.first().waitFor();
   check(await cards.count() === 50, "정상 첫 페이지가 보여야 한다");
+  const itemRows = page.getByRole("list", { name: "습득물 목록" }).locator("li");
+  const firstThumbnail = itemRows.first().getByRole("img", { name: "검정 지갑 1 사진" });
+  await firstThumbnail.waitFor();
+  await page.waitForFunction(() => document.querySelector(".item-thumbnail img")?.naturalWidth > 0);
+  check(await firstThumbnail.getAttribute("loading") === "lazy", "목록 사진은 지연 로딩해야 한다");
+  check(!photoRequests.has("50"), "화면에서 멀리 떨어진 사진을 미리 받으면 안 된다");
+  check(await itemRows.nth(1).locator("img").count() === 0, "목록의 기본 그림도 사진으로 표시하면 안 된다");
+  await itemRows.nth(2).getByText("사진을 불러오지 못했습니다.", { exact: true }).waitFor({ state: "attached" });
+  check(await itemRows.nth(2).locator("img").count() === 0, "깨진 목록 사진은 아이콘으로 대체해야 한다");
+  check(await itemRows.nth(3).locator("img").count() === 0, "사진 URL이 없는 카드에도 아이콘을 유지해야 한다");
+  await page.screenshot({ path: "/private/tmp/retriever-list-photos-desktop.png" });
   await cards.first().click();
   await page.getByRole("dialog").getByRole("button", { name: /닫기/ }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
@@ -160,6 +173,8 @@ async (page) => {
   await dialog.waitFor({ state: "detached" });
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await cards.first().scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "/private/tmp/retriever-list-photos-mobile.png" });
   await cards.nth(3).click();
   await dialog.waitFor();
   await dialog.getByText("등록된 사진이 없습니다.").waitFor();
@@ -189,5 +204,5 @@ async (page) => {
   check(await cards.count() === 0, "오류 결과에서는 상세 열기가 없어야 한다");
   check(await search.inputValue() === "검정 지갑", "오류 후에도 재검색할 입력을 유지해야 한다");
   check(errors.length === 0, `브라우저 오류: ${errors.join(", ")}`);
-  return "PASS: paging, desktop/mobile details, photos, missing fields, keyboard scrolling, history, scroll, loading/empty/error/disabled";
+  return "PASS: lazy list photos/fallbacks, paging, desktop/mobile details, missing fields, keyboard scrolling, history, scroll, loading/empty/error/disabled";
 }

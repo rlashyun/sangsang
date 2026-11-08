@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { categoryIcon, formatRegisteredDate, sourceLabel } from "../lib/presentation";
+import { categoryIcon, formatRegisteredDate, foundItemImageUrl, sourceLabel } from "../lib/presentation";
 import type { FoundItem, Institution } from "../types";
 
 interface FoundItemDetailProps {
@@ -15,10 +15,7 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
   const pointerStartedOutside = useRef(false);
   const [imageFailed, setImageFailed] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
-  // PRD 3.2-2 — 원천의 기본 그림은 사진 없음으로 처리한다.
-  const imageUrl = item.image_url && !item.image_url.split(/[?#]/)[0].endsWith("/img02_no_img.gif")
-    ? item.image_url
-    : null;
+  const imageUrl = foundItemImageUrl(item.image_url);
   const showImage = imageUrl && !imageFailed;
   const phone = institution?.phone?.trim();
   const dialNumber = phone?.replace(/[^\d+]/g, "");
