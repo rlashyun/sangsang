@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import socket
+import ssl
 import time
 import unicodedata
 import urllib.error
@@ -35,8 +37,9 @@ DETAIL_ENDPOINTS = {
 # PRD 4.5, 5 — keep optional detail work inside the 300-second cron budget.
 DETAIL_WORKERS = 4
 DETAIL_TIMEOUT_SECONDS = 3.0
-DETAIL_BUDGET_SECONDS = 45.0
-DETAIL_MAX_REQUESTS = 200
+DETAIL_BUDGET_SECONDS = 60.0
+# PRD 4.5 — 2026-11-08: include retries within 400 attempts; retain time deadlines.
+DETAIL_MAX_REQUESTS = 400
 DETAIL_STAGE_DEADLINE_SECONDS = 180.0
 COLLECTION_STAGE_DEADLINE_SECONDS = 150.0
 SYNC_WORK_DEADLINE_SECONDS = 270.0
@@ -44,9 +47,10 @@ AUDIT_DEADLINE_SECONDS = 295.0
 
 
 class DetailLookupError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, reason: str = "unknown") -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.reason = reason
 
 
 def _normalize_key(value: Any) -> str:
@@ -176,28 +180,56 @@ def _fetch_detail(source_code: str, service_key: str, atc_id: str, sequence: str
         with urllib.request.urlopen(url, timeout=DETAIL_TIMEOUT_SECONDS) as response:
             payload = response.read(131_073)
         if len(payload) > 131_072:
-            raise ValueError("oversized response")
+            raise DetailLookupError("상세 응답 크기 초과", reason="oversized_response")
         root = ET.fromstring(payload)
-        if root.findtext("./header/resultCode") != "00":
-            raise ValueError("unsuccessful response")
+        result_code = root.findtext("./header/resultCode")
+        if result_code != "00":
+            # PRD 5 — retain only bounded numeric codes, never response text or URLs.
+            api_code = root.findtext(".//returnReasonCode") or result_code
+            code = api_code if api_code and re.fullmatch(r"[0-9]{1,3}", api_code) else "unknown"
+            raise DetailLookupError("상세 API 오류 응답", reason=f"api_{code}")
         item = root.find("./body/item")
         if item is None:
             item = root.find("./body/items/item")
-        if item is None or item.findtext("atcId") != atc_id or item.findtext("fdSn") != sequence:
-            raise ValueError("identity mismatch")
+        if item is None:
+            raise DetailLookupError("상세 물품 누락", reason="missing_item")
+        if item.findtext("atcId") != atc_id or item.findtext("fdSn") != sequence:
+            raise DetailLookupError("상세 물품 식별 불일치", reason="identity_mismatch")
         values = {field: (item.findtext(field) or "").strip() for field in ("orgId", "orgNm", "depPlace", "tel", "csteSteNm")}
         if not values["orgId"] or not values["depPlace"]:
-            raise ValueError("missing custody identity")
+            raise DetailLookupError("현재 보관기관 정보 누락", reason="missing_custody_identity")
         return {
             "detail_org_id": values["orgId"], "detail_org_name": values["orgNm"],
             "detail_department": values["depPlace"], "detail_phone": values["tel"],
             "detail_status": values["csteSteNm"],
             "detail_checked_at": datetime.now(timezone.utc).isoformat(),
         }
+    except DetailLookupError:
+        raise
     except Exception as error:
-        status = getattr(error, "code", None)
-        retryable = status >= 500 if isinstance(status, int) else isinstance(error, (TimeoutError, urllib.error.URLError))
-        raise DetailLookupError(f"상세 조회 실패: {type(error).__name__}, HTTP {status}", retryable=retryable) from None
+        status = error.code if isinstance(error, urllib.error.HTTPError) else None
+        retryable = status == 429 or status >= 500 if isinstance(status, int) else isinstance(error, (TimeoutError, urllib.error.URLError))
+        if isinstance(status, int):
+            reason = f"http_{status}"
+        elif isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
+            reason = "timeout"
+        elif isinstance(error, urllib.error.URLError):
+            network_error = error.reason
+            if isinstance(network_error, ssl.SSLCertVerificationError):
+                reason = "tls_certificate"
+            elif isinstance(network_error, ssl.SSLError):
+                reason = "tls"
+            elif isinstance(network_error, socket.gaierror):
+                reason = "dns"
+            elif isinstance(network_error, ConnectionResetError):
+                reason = "connection_reset"
+            else:
+                reason = "network"
+        elif isinstance(error, ET.ParseError):
+            reason = "invalid_xml"
+        else:
+            reason = "unexpected"
+        raise DetailLookupError("상세 조회 실패", retryable=retryable, reason=reason) from None
 
 
 def _enrich_ambiguous_rows(
@@ -214,6 +246,8 @@ def _enrich_ambiguous_rows(
             row["location_match_status"] = "unmatched"
             row["storage_location_id"] = None
     stats = {"eligible": len(grouped), "requested": 0, "succeeded": 0, "failed": 0, "deferred": 0, "retried": 0}
+    # PRD 4.5, 5 — count failed attempts, including those later recovered by a retry.
+    failure_attempts_by_reason: dict[str, int] = {}
     identities = iter(grouped)
     retries: deque[tuple[str, str]] = deque()
     attempts: dict[tuple[str, str], int] = {}
@@ -243,6 +277,8 @@ def _enrich_ambiguous_rows(
                 try:
                     detail = future.result()
                 except Exception as error:
+                    reason = error.reason if isinstance(error, DetailLookupError) else "unexpected"
+                    failure_attempts_by_reason[reason] = failure_attempts_by_reason.get(reason, 0) + 1
                     if attempts[identity] == 1:
                         stats["failed"] += 1
                     retryable = getattr(error, "retryable", isinstance(error, (TimeoutError, urllib.error.URLError)))
@@ -268,6 +304,7 @@ def _enrich_ambiguous_rows(
         executor.shutdown(wait=False, cancel_futures=True)
     stats["deferred"] = stats["eligible"] - stats["succeeded"] - stats["failed"]
     stats["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    stats["failure_attempts_by_reason"] = failure_attempts_by_reason
     return stats
 
 
