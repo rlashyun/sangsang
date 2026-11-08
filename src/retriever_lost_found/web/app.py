@@ -271,6 +271,8 @@ def content_security_policy() -> str:
     return "; ".join(
         [
             "default-src 'self'",
+            # PRD 5 — 로컬 HTTP에서 SDK가 만드는 외부 HTTP 요청도 HTTPS로 올려 기존 CDN 허용 범위를 유지한다.
+            "upgrade-insecure-requests",
             # PRD 5 — 카카오맵의 새 CDN 하위 호스트도 허용한다 (공식 CSP 공지 2026-07-07).
             "script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
             "style-src 'self' 'unsafe-inline' https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
