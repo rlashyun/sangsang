@@ -37,11 +37,13 @@ export interface KakaoPlaceDocument {
 
 export interface FoundItem {
   id?: number;
+  storage_location_id?: number | null;
   item_source_code?: string;
   item_name?: string;
   raw_category_name?: string;
   color_name?: string;
   description?: string;
+  image_url?: string | null;
   registered_on?: string;
   raw_storage_name?: string;
   match_score?: number;

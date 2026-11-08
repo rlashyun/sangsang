@@ -623,11 +623,106 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   scrollbar-color: var(--color-scrollbar) transparent;
 }
 .found-item-card {
+  position: relative;
   display: grid;
   grid-template-columns: 88px minmax(0, 1fr);
   gap: 14px;
   padding: 17px 2px;
   border-top: 1px solid var(--color-border-card);
+}
+.found-item-open {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+}
+.found-item-open:hover { background: var(--color-focus-ring-compact); }
+.found-item-open:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.found-item-open:disabled { cursor: wait; }
+.item-detail-hint { display: block; margin-top: 8px; color: var(--color-action); font-size: 12px; }
+
+/* PRD 4.3-C · 5 — 수령 정보와 키보드 접근성. 2026-11-08 사용자 결정: 모바일 하단 시트. */
+.item-detail {
+  width: min(560px, calc(100% - 48px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-panel);
+  border-radius: 20px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-panel);
+}
+.item-detail[open] { display: flex; flex-direction: column; }
+.item-detail::backdrop { background: var(--color-overlay-dark); }
+.item-detail-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-border-section);
+}
+.item-detail-header h2 { margin: 0; font-size: 18px; }
+.item-detail-close {
+  display: flex;
+  min-width: 72px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--color-border-control);
+  border-radius: 12px;
+  color: var(--color-action-text);
+  background: var(--color-bg-control);
+  cursor: pointer;
+}
+.item-detail-close span { font-size: 24px; }
+.item-detail-close:hover { background: var(--color-bg-control-hover); }
+.item-detail :is(button, a):focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.item-detail-content:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -4px; }
+.item-detail-content { min-height: 0; padding: 20px; overflow-y: auto; overscroll-behavior: contain; }
+.item-detail-photo {
+  display: grid;
+  min-height: 160px;
+  margin-bottom: 20px;
+  place-items: center;
+  border-radius: 12px;
+  color: var(--color-text-description);
+  background: var(--color-bg-page);
+  text-align: center;
+  font-size: 14px;
+}
+.item-detail-photo img { display: block; max-width: 100%; max-height: 280px; object-fit: contain; }
+.item-detail-photo img[hidden] { display: none; }
+.item-detail-photo-empty { padding: 16px; }
+.item-detail-photo-empty > span { font-size: 40px; }
+.item-detail-photo-empty p { margin: 8px 0 0; }
+.item-detail h3 { margin: 24px 0 12px; font-size: 16px; }
+.item-detail h3.item-detail-name { margin-top: 0; font-size: 22px; }
+.item-detail-fields { margin: 0; font-size: 14px; }
+.item-detail-fields > div { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+.item-detail-fields dt { color: var(--color-text-description); }
+.item-detail-fields dd { margin: 0; }
+.item-detail-fields a { display: inline-flex; min-height: 44px; align-items: center; color: var(--color-action); }
+.item-detail-description { margin: 0; font-size: 14px; white-space: pre-wrap; }
+.item-detail :is(h3, dd, p) { overflow-wrap: anywhere; line-height: 1.6; }
+@media (max-width: 820px) {
+  .item-detail {
+    width: 100%;
+    max-width: 100%;
+    max-height: calc(100dvh - 24px);
+    margin: auto 0 0;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
+  .item-detail-content { padding-bottom: max(24px, env(safe-area-inset-bottom)); }
 }
 .item-placeholder {
   display: flex;

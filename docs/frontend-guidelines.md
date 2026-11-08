@@ -132,6 +132,8 @@ uv run --with 'pytest>=8,<9' pytest -q
 - 느린 네트워크·0건·API 오류·버튼 disabled 상태를 확인한다.
 - 생성된 `src/retriever_lost_found/web/static/` 파일은 Vite 빌드 결과다. 소스 대신 직접 수정하지 않는다.
 
+물품 상세 창의 브라우저 회귀 검증은 `tests/web/item_detail.browser.cjs`를 사용한다. Vite를 `127.0.0.1:5178`에 실행하고 Playwright CLI 브라우저를 연 뒤 `playwright-cli run-code --filename tests/web/item_detail.browser.cjs`를 실행한다. API·사진·지도 SDK는 모두 가짜 응답으로 대체한다. 데스크톱·모바일 상세 창, 키보드·뒤로가기·스크롤 복귀, 누락·사진 실패·loading·empty·error·disabled 상태를 검증하며, 검토용 스크린샷은 시스템 TEMP에만 저장한다.
+
 > [결정 필요: FE-03] 컴포넌트 테스트 도구 도입
 >
 > - 현재 구현: TypeScript 빌드, Node 테스트, FastAPI 테스트가 중심이며 React 컴포넌트 테스트 도구는 없음
