@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { fetchFoundItems } from "../api/client";
 import {
-  categoryIcon,
   formatRegisteredDate,
   institutionLocationIds,
-  sourceLabel,
 } from "../lib/presentation";
 import {
   radiusKilometersLabel,
   SEARCH_RADIUS_OPTIONS_METERS,
 } from "../lib/geo.js";
 import type { FoundItem, Institution } from "../types";
+import { FoundItemDetail } from "./FoundItemDetail";
+import { FoundItemThumbnail } from "./FoundItemThumbnail";
 
 interface FoundItemBrowserProps {
   scope: Institution[];
@@ -30,6 +31,14 @@ export function FoundItemBrowser({
   onShowRadius,
   onRadiusChange,
 }: FoundItemBrowserProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [detail, setDetail] = useState<{
+    item: FoundItem;
+    institution?: Institution;
+    historyKey: string;
+  } | null>(null);
+  const detailIsOpen = detail !== null && location.state?.foundItemDetail === detail.historyKey;
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<FoundItem[]>([]);
   const [status, setStatus] = useState(
@@ -49,6 +58,8 @@ export function FoundItemBrowser({
   );
 
   async function load(searchQuery: string, signal?: AbortSignal) {
+    // PRD 4.1 — 탐색 범위·검색이 바뀌면 이전 물품 상세를 앞으로가기로 다시 열지 않는다.
+    setDetail(null);
     const sequence = ++requestSequence.current;
     setNextCursor(null);
     setTotalCount(null);
@@ -138,6 +149,24 @@ export function FoundItemBrowser({
     void load(query);
   }
 
+  function openDetail(item: FoundItem) {
+    const historyKey = crypto.randomUUID();
+    setDetail({
+      item,
+      institution: scope.find((institution) => (
+        item.storage_location_id != null
+        && institution.storage_location_id === item.storage_location_id
+      )),
+      historyKey,
+    });
+    // PRD 4.3-C — 수령 정보를 확인한 뒤 기존 탐색 조건과 목록 위치로 복귀한다.
+    // 2026-11-08 사용자 결정: 뒤로가기는 상세 창만 닫는다. 물품 데이터는 메모리에만 둔다.
+    void navigate(`${location.pathname}${location.search}${location.hash}`, {
+      state: { ...location.state, foundItemDetail: historyKey },
+      preventScrollReset: true,
+    });
+  }
+
   return (
     <section className="item-browser" aria-labelledby="item-browser-title">
       <div className="item-browser-header">
@@ -219,10 +248,15 @@ export function FoundItemBrowser({
           // PRD 3.1-6 · 4.5 · D2 — 유사도 %는 화면에 노출하지 않는다(match_score는 내부 평가용).
           return (
             <li className="found-item-card" key={item.id ?? `${item.item_name}:${item.registered_on}:${index}`}>
-              <div className="item-placeholder" aria-hidden="true">
-                <span>{categoryIcon(item.raw_category_name)}</span>
-                <small>{sourceLabel(item.item_source_code)}</small>
-              </div>
+              <button
+                className="found-item-open"
+                type="button"
+                aria-label={`${item.item_name || "이름 미상"} 상세 보기`}
+                aria-haspopup="dialog"
+                disabled={isLoading}
+                onClick={() => openDetail(item)}
+              />
+              <FoundItemThumbnail item={item} />
               <div className="item-card-body">
                 <div className="item-card-top">
                   <span className="item-category">{item.raw_category_name}</span>
@@ -233,6 +267,7 @@ export function FoundItemBrowser({
                   <div><dt>보관장소</dt><dd>{item.raw_storage_name || "정보 없음"}</dd></div>
                   <div><dt>등록일</dt><dd>{formatRegisteredDate(item.registered_on)}</dd></div>
                 </dl>
+                <span className="item-detail-hint" aria-hidden="true">상세 보기 →</span>
               </div>
             </li>
           );
@@ -250,6 +285,14 @@ export function FoundItemBrowser({
               : `물품 더 보기 (${items.length.toLocaleString("ko-KR")} / ${(totalCount ?? items.length).toLocaleString("ko-KR")}건)`}
           </button>
         </div>
+      )}
+      {detailIsOpen && (
+        <FoundItemDetail
+          key={detail.historyKey}
+          item={detail.item}
+          institution={detail.institution}
+          onClose={() => { void navigate(-1); }}
+        />
       )}
     </section>
   );
