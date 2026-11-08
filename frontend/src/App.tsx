@@ -1,29 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { NewItemAlert } from "./components/NewItemAlert";
 
 import { fetchInstitutions, geocodeAddress, searchPlaces } from "./api/client";
 import { FoundItemBrowser } from "./components/FoundItemBrowser";
 import { KakaoMap, type KakaoMapHandle } from "./components/KakaoMap";
-import { LocationSearch } from "./components/LocationSearch";
+import { LocationSearch, PLACE_PAGE_SIZE } from "./components/LocationSearch";
 import { SelectionSummary } from "./components/SelectionSummary";
-import { ThemePreview } from "./components/ThemePreview";
 import {
   DEFAULT_SEARCH_RADIUS_METERS,
   isWithinRadius,
   radiusKilometersLabel,
+  nextSearchRadiusMeters,
 } from "./lib/geo.js";
 import { normalizePlace } from "./lib/presentation";
 import {
   applyPreviewTheme,
-  readPreviewTheme,
   type PreviewTheme,
 } from "./lib/theme";
 import type { Institution, Place, SelectionSummary as SelectionSummaryValue } from "./types";
 
 export function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const alertIsOpen = location.state?.newItemAlert === true;
+  const [alertQuery, setAlertQuery] = useState("");
   const mapRef = useRef<KakaoMapHandle>(null);
-  const [previewTheme, setPreviewTheme] = useState<PreviewTheme>(() => {
-    const theme = import.meta.env.DEV ? readPreviewTheme() : "retriever-modern";
-    if (import.meta.env.DEV) applyPreviewTheme(theme);
+  const [previewTheme] = useState<PreviewTheme>(() => {
+    // PRD 4.4 — 승인된 파란 기본 테마가 과거 비교 테마보다 우선한다.
+    const theme = "retriever-blue";
+    applyPreviewTheme(theme);
     return theme;
   });
   const [institutions, setInstitutions] = useState<Institution[]>([]);
@@ -31,12 +37,18 @@ export function App() {
   const [institutionError, setInstitutionError] = useState("");
   const [countsAvailable, setCountsAvailable] = useState(false);
   const [places, setPlaces] = useState<Place[]>([]);
+  const [placePage, setPlacePage] = useState(0);
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
+  useEffect(() => { setAlertQuery(""); }, [selectedPlace]);
+  const [previewPlace, setPreviewPlace] = useState<Place | null>(null);
   const [radiusMeters, setRadiusMeters] = useState(DEFAULT_SEARCH_RADIUS_METERS);
+  const [radiusNotice, setRadiusNotice] = useState("");
   const [locationStatus, setLocationStatus] = useState("장소명을 입력해 검색해보세요.");
   const [locationStatusIsError, setLocationStatusIsError] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedInstitutionScope, setSelectedInstitutionScope] = useState<Institution[] | null>(null);
+  const pagePlaces = useMemo(() => places.slice(placePage * PLACE_PAGE_SIZE, (placePage + 1) * PLACE_PAGE_SIZE), [places, placePage]);
+  const placeNumbers = useMemo(() => pagePlaces.map((_, index) => placePage * PLACE_PAGE_SIZE + index + 1), [pagePlaces, placePage]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -72,6 +84,15 @@ export function App() {
   ), [institutions, radiusMeters, selectedPlace]);
   const visibleInstitutions = selectedPlace ? radiusScope : institutions;
   const activeScope = selectedInstitutionScope ?? radiusScope;
+  useEffect(() => {
+    // PRD 4.5 — 기관 조회가 정상 완료되고 0곳일 때만 1→2→3km로 확장한다.
+    if (!selectedPlace || !institutionsLoaded || institutionError || radiusScope.length) return;
+    const nextRadius = nextSearchRadiusMeters(radiusMeters);
+    if (nextRadius === null) return;
+    setRadiusMeters(nextRadius);
+    setSelectedInstitutionScope(null);
+    setRadiusNotice(`${radiusKilometersLabel(radiusMeters)} 안에 보관기관이 없어 ${radiusKilometersLabel(nextRadius)}로 넓혔어요.`);
+  }, [selectedPlace, institutionsLoaded, institutionError, radiusScope.length, radiusMeters]);
   const selection = useMemo<SelectionSummaryValue | null>(() => {
     if (selectedInstitutionScope?.length) {
       const total = selectedInstitutionScope.reduce(
@@ -89,7 +110,7 @@ export function App() {
     if (!selectedPlace) return null;
     return {
       title: `${selectedPlace.name} 주변 습득물`,
-      description: `${selectedPlace.address} · 반경 ${radiusKilometersLabel(radiusMeters)} 기관 ${radiusScope.length.toLocaleString("ko-KR")}곳`,
+      description: selectedPlace.address,
     };
   }, [radiusMeters, radiusScope.length, selectedInstitutionScope, selectedPlace]);
   const activeScopeTitle = selection?.title ?? "주변 습득물";
@@ -104,16 +125,36 @@ export function App() {
   }, [places.length, radiusMeters, radiusScope.length, selectedPlace]);
 
   const handlePlaceSelect = useCallback((place: Place) => {
-    setSelectedPlace(place);
+    // PRD 4.3-A — 후보는 지도에서 미리 보고 명시적으로 확정한 뒤 물품을 조회한다.
+    setPreviewPlace(place);
+    setSelectedPlace(null);
     setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
+    setRadiusNotice("");
     setSelectedInstitutionScope(null);
     setLocationStatusIsError(false);
+    setLocationStatus("지도에서 위치를 확인한 뒤 선택해주세요.");
   }, []);
+
+  function confirmPlace() {
+    if (!previewPlace || isSearching) return;
+    setSelectedPlace(previewPlace);
+    setPreviewPlace(null);
+  }
+
+  function changePlacePage(page: number) {
+    // PRD 4.4 — 페이지 이동은 재검색 없이 후보만 바꾸며 미확정 선택은 해제한다.
+    const lastPage = Math.max(0, Math.ceil(places.length / PLACE_PAGE_SIZE) - 1);
+    if (isSearching || page === placePage || page < 0 || page > lastPage) return;
+    setPlacePage(page);
+    setPreviewPlace(null);
+    setLocationStatus(`장소 후보 ${places.length.toLocaleString("ko-KR")}곳 · 위치를 확인해주세요.`);
+  }
 
   const handleInstitutionSelect = useCallback((group: Institution[]) => {
     if (!group.length) return;
+    if (previewPlace && !selectedPlace) return;
     setSelectedInstitutionScope(group);
-  }, []);
+  }, [previewPlace, selectedPlace]);
 
   async function handleSearch(query: string) {
     const center = mapRef.current?.getCenter();
@@ -122,6 +163,7 @@ export function App() {
       return;
     }
     setIsSearching(true);
+    setPreviewPlace(null);
     setLocationStatusIsError(false);
     setLocationStatus("카카오맵에서 위치를 찾고 있습니다…");
     try {
@@ -138,13 +180,14 @@ export function App() {
         .map(normalizePlace)
         .filter((place) => Number.isFinite(place.latitude) && Number.isFinite(place.longitude));
       setPlaces(nextPlaces);
+      setPlacePage(0);
       setSelectedPlace(null);
       setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
       setSelectedInstitutionScope(null);
       if (!nextPlaces.length) {
         setLocationStatus("검색 결과가 없습니다. 더 구체적인 장소명이나 주소를 입력해보세요.");
       } else {
-        setLocationStatus(`장소 후보 ${nextPlaces.length.toLocaleString("ko-KR")}개입니다. 주소를 확인하고 선택해주세요.`);
+        setLocationStatus(`장소 후보 ${nextPlaces.length.toLocaleString("ko-KR")}곳 · 위치를 확인해주세요.`);
       }
     } catch (error) {
       setPlaces([]);
@@ -159,11 +202,13 @@ export function App() {
   }
 
   function resetLocation() {
+    const previousPlace = selectedPlace;
     setSelectedPlace(null);
-    setPlaces([]);
+    setPreviewPlace(previousPlace);
     setRadiusMeters(DEFAULT_SEARCH_RADIUS_METERS);
     setSelectedInstitutionScope(null);
-    setLocationStatus("전체 연계기관과 경찰청 관서를 표시하고 있습니다.");
+    setRadiusNotice("");
+    setLocationStatus(places.length ? "장소를 다시 확인하거나 새로 검색해주세요." : "장소명을 입력해 검색해보세요.");
     setLocationStatusIsError(false);
   }
 
@@ -175,6 +220,7 @@ export function App() {
   function handleRadiusChange(nextRadiusMeters: number) {
     if (!selectedPlace) return;
     setRadiusMeters(nextRadiusMeters);
+    setRadiusNotice("");
     setSelectedInstitutionScope(null);
   }
 
@@ -190,29 +236,40 @@ export function App() {
       ? "숫자를 누르면 확대 · 핀을 누르면 기관 정보"
       : "확대하면 개별 기관을 볼 수 있어요");
 
-  function handlePreviewThemeChange(theme: PreviewTheme) {
-    applyPreviewTheme(theme);
-    setPreviewTheme(theme);
-  }
-
   return (
     <>
+      {/* PRD 4.4 — 메뉴는 로고 옆에 유지한다. 후속 화면은 구현 후 연결한다. */}
+      <header className="app-header">
+        <a className="app-wordmark" href="/" aria-label="RETRIEVER 홈">RETRIEVER</a>
+        <nav className="app-navigation" aria-label="주요 메뉴">
+          <a className={`app-nav-link${alertIsOpen ? "" : " active"}`} href="#page-title" aria-current={alertIsOpen ? undefined : "page"}
+            onClick={event => { if (alertIsOpen) { event.preventDefault(); void navigate(-1); } }}>물건 찾기</a>
+          <button className={`app-nav-link${alertIsOpen ? " active" : ""}`} type="button" aria-current={alertIsOpen ? "page" : undefined}
+            aria-haspopup="dialog" onClick={() => { if (!alertIsOpen) void navigate(`${location.pathname}${location.search}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}>새 물건 알림</button>
+        </nav>
+        <button className="app-guide-link" type="button" disabled title="이용안내 화면 준비 중">이용안내</button>
+      </header>
       <main className="app-shell">
-        <section className={`search-panel${selection ? " items-view" : ""}`} aria-labelledby="page-title">
+        <section className={`search-panel${selection ? " items-view" : places.length ? " has-place-results" : ""}`} aria-labelledby="page-title">
           <LocationSearch
             results={places}
-            selectedPlace={selectedPlace}
+            selectedPlace={previewPlace ?? selectedPlace}
             status={locationStatus}
             statusIsError={locationStatusIsError}
             isSearching={isSearching}
             onSearch={(query) => { void handleSearch(query); }}
             onSelect={handlePlaceSelect}
+            onConfirm={confirmPlace}
+            page={placePage}
+            onPageChange={changePlacePage}
           />
 
           {selection && (
             <SelectionSummary
               selection={selection}
               onChangeLocation={resetLocation}
+              radiusMeters={selectedPlace ? radiusMeters : undefined}
+              notice={radiusNotice}
             />
           )}
 
@@ -224,6 +281,9 @@ export function App() {
               radiusMeters={radiusMeters}
               onShowRadius={showRadiusItems}
               onRadiusChange={handleRadiusChange}
+              canExpandRadius={selectedPlace !== null}
+              onSubmittedQueryChange={setAlertQuery}
+              onAlertRequest={() => { void navigate(`${location.pathname}${location.search}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}
             />
           )}
         </section>
@@ -235,8 +295,10 @@ export function App() {
           institutionsLoaded={institutionsLoaded}
           institutionError={institutionError}
           countsAvailable={countsAvailable}
-          places={places}
+          places={pagePlaces}
+          placeNumbers={placeNumbers}
           selectedPlace={selectedPlace}
+          previewPlace={previewPlace}
           radiusMeters={radiusMeters}
           visibleInstitutions={visibleInstitutions}
           mapBadge={mapBadge}
@@ -245,7 +307,7 @@ export function App() {
           onResetRadius={resetLocation}
         />
       </main>
-      <ThemePreview theme={previewTheme} onChange={handlePreviewThemeChange} />
+      {alertIsOpen && <NewItemAlert place={selectedPlace} query={alertQuery} radiusMeters={radiusMeters} onClose={() => { void navigate(-1); }} />}
     </>
   );
 }

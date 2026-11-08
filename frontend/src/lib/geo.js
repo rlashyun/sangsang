@@ -1,5 +1,9 @@
-export const SEARCH_RADIUS_OPTIONS_METERS = Object.freeze([1000, 3000, 5000]);
+export const SEARCH_RADIUS_OPTIONS_METERS = Object.freeze([1000, 2000, 3000]);
 export const DEFAULT_SEARCH_RADIUS_METERS = SEARCH_RADIUS_OPTIONS_METERS[0];
+/** @param {number} radiusMeters */
+export function nextSearchRadiusMeters(radiusMeters) {
+  return SEARCH_RADIUS_OPTIONS_METERS.find((option) => option > radiusMeters) ?? null;
+}
 const EARTH_RADIUS_METERS = 6371008.8;
 
 /** @param {number} value */

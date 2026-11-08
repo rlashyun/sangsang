@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { fetchFoundItems } from "../api/client";
+import { ensureBufferedItemPage, itemPageNumbers } from "../lib/item-pagination.js";
 import {
   formatRegisteredDate,
   institutionLocationIds,
 } from "../lib/presentation";
 import {
   radiusKilometersLabel,
-  SEARCH_RADIUS_OPTIONS_METERS,
+  nextSearchRadiusMeters,
 } from "../lib/geo.js";
 import type { FoundItem, Institution } from "../types";
 import { FoundItemDetail } from "./FoundItemDetail";
@@ -21,6 +22,9 @@ interface FoundItemBrowserProps {
   radiusMeters: number;
   onShowRadius: () => void;
   onRadiusChange: (radiusMeters: number) => void;
+  canExpandRadius: boolean;
+  onSubmittedQueryChange: (query: string) => void;
+  onAlertRequest: () => void;
 }
 
 export function FoundItemBrowser({
@@ -30,6 +34,9 @@ export function FoundItemBrowser({
   radiusMeters,
   onShowRadius,
   onRadiusChange,
+  canExpandRadius,
+  onSubmittedQueryChange,
+  onAlertRequest,
 }: FoundItemBrowserProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -40,7 +47,11 @@ export function FoundItemBrowser({
   } | null>(null);
   const detailIsOpen = detail !== null && location.state?.foundItemDetail === detail.historyKey;
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
+  const submittedQueryRef = useRef("");
   const [items, setItems] = useState<FoundItem[]>([]);
+  const [itemPage, setItemPage] = useState(0);
+  const pageSize = 4;
   const [status, setStatus] = useState(
     () => `위치를 검색하면 반경 ${radiusKilometersLabel(radiusMeters)}의 습득물을 보여드립니다.`,
   );
@@ -53,13 +64,15 @@ export function FoundItemBrowser({
   const requestSequence = useRef(0);
   const locationIds = useMemo(() => institutionLocationIds(scope), [scope]);
   const showCenteredStatus = items.length === 0 && !isLoading && !statusIsError;
-  const largerRadiusOptions = SEARCH_RADIUS_OPTIONS_METERS.filter(
-    (option) => option > radiusMeters,
-  );
+  const nextRadius = nextSearchRadiusMeters(radiusMeters);
+  const loadedPages = Math.ceil(items.length / pageSize);
+  const visibleItems = items.slice(itemPage * pageSize, (itemPage + 1) * pageSize);
+  const pageNumbers = itemPageNumbers(itemPage, loadedPages);
 
   async function load(searchQuery: string, signal?: AbortSignal) {
     // PRD 4.1 — 탐색 범위·검색이 바뀌면 이전 물품 상세를 앞으로가기로 다시 열지 않는다.
     setDetail(null);
+    setItemPage(0);
     const sequence = ++requestSequence.current;
     setNextCursor(null);
     setTotalCount(null);
@@ -83,7 +96,7 @@ export function FoundItemBrowser({
       const payload = await fetchFoundItems(params, signal);
       if (sequence !== requestSequence.current) return;
       const nextItems = payload.items || [];
-      const nextTotal = payload.total_count ?? nextItems.length;
+      const nextTotal = payload.total_count ?? (payload.next_cursor ? null : nextItems.length);
       setItems(nextItems);
       setNextCursor(payload.next_cursor ?? null);
       setTotalCount(nextTotal);
@@ -94,7 +107,7 @@ export function FoundItemBrowser({
       } else {
         setStatus(searchQuery
           ? `후보 ${(payload.candidate_count ?? 0).toLocaleString("ko-KR")}건 중 유사한 물품 ${nextItems.length.toLocaleString("ko-KR")}건`
-          : storedItemsStatus(nextTotal));
+          : storedItemsStatus(nextTotal ?? nextItems.length));
       }
     } catch (error) {
       if (sequence !== requestSequence.current) return;
@@ -109,29 +122,40 @@ export function FoundItemBrowser({
     }
   }
 
-  async function loadMore() {
-    if (!nextCursor || isLoadingMore) return;
+  async function changeItemPage(page: number) {
+    if (page < 0 || page === itemPage || isLoadingMore || isLoading) return;
+    if (page * pageSize >= items.length && !nextCursor) return;
+    if ((page + 1) * pageSize <= items.length || !nextCursor) {
+      setItemPage(page);
+      return;
+    }
     // 범위나 검색어가 바뀌어 새 load()가 시작되면 이 응답은 버린다.
     const sequence = requestSequence.current;
     setIsLoadingMore(true);
     try {
-      const params = new URLSearchParams({
-        location_ids: locationIds.join(","),
-        cursor: nextCursor,
+      const searchQuery = submittedQueryRef.current;
+      const result = await ensureBufferedItemPage({
+        items, nextCursor, page, pageSize,
+        isCurrent: () => sequence === requestSequence.current,
+        loadNext: (cursor) => {
+          const params = new URLSearchParams({ location_ids: locationIds.join(","), cursor });
+          if (searchQuery) params.set("q", searchQuery);
+          return fetchFoundItems(params);
+        },
       });
-      const payload = await fetchFoundItems(params);
-      if (sequence !== requestSequence.current) return;
-      setItems((current) => [...current, ...(payload.items || [])]);
-      setNextCursor(payload.next_cursor ?? null);
+      if (!result || sequence !== requestSequence.current) return;
+      setItems(result.items);
+      setNextCursor(result.nextCursor);
+      setItemPage(result.page);
       setStatusIsError(false);
-      setStatus(storedItemsStatus(totalCount ?? 0));
+      setStatus(storedItemsStatus(totalCount ?? result.items.length));
     } catch (error) {
       if (sequence !== requestSequence.current) return;
       // 이미 보여 준 목록은 유지하고, 같은 버튼으로 다시 시도할 수 있게 둔다.
       setStatusIsError(true);
       setStatus(error instanceof Error
-        ? `물품 더 보기 실패: ${error.message}`
-        : "물품을 더 불러오지 못했습니다.");
+        ? `다음 물품 조회 실패: ${error.message}`
+        : "다음 물품을 불러오지 못했습니다. 다시 시도해주세요.");
     } finally {
       if (sequence === requestSequence.current) setIsLoadingMore(false);
     }
@@ -139,14 +163,20 @@ export function FoundItemBrowser({
 
   useEffect(() => {
     const controller = new AbortController();
-    setQuery("");
-    void load("", controller.signal);
+    // PRD 4.5 — 범위 변경은 입력 중 문구가 아닌 마지막 제출 검색어로 재검색한다.
+    setQuery(submittedQueryRef.current);
+    void load(submittedQueryRef.current, controller.signal);
     return () => controller.abort();
   }, [locationIds.join(","), radiusMeters, scopeTitle]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void load(query);
+    const value = query.trim();
+    submittedQueryRef.current = value;
+    setSubmittedQuery(value);
+    onSubmittedQueryChange(value);
+    setQuery(value);
+    void load(value);
   }
 
   function openDetail(item: FoundItem) {
@@ -169,17 +199,12 @@ export function FoundItemBrowser({
 
   return (
     <section className="item-browser" aria-labelledby="item-browser-title">
-      <div className="item-browser-header">
-        <div>
-          <p className="section-kicker">FOUND ITEMS</p>
-          <h2 id="item-browser-title">{scopeTitle}</h2>
-        </div>
-        {canShowRadiusScope && (
-          <button className="scope-reset" type="button" onClick={onShowRadius}>
-            {radiusKilometersLabel(radiusMeters)} 전체
-          </button>
-        )}
-      </div>
+      <h2 id="item-browser-title" className="sr-only">습득물 검색과 결과</h2>
+      {canShowRadiusScope && <div className="item-browser-header">
+        <button className="scope-reset" type="button" onClick={onShowRadius}>
+          {radiusKilometersLabel(radiusMeters)} 전체
+        </button>
+      </div>}
 
       <form className="found-item-form" onSubmit={handleSubmit}>
         <label className="sr-only" htmlFor="found-item-input">습득물 검색어</label>
@@ -190,7 +215,7 @@ export function FoundItemBrowser({
             /* PRD 3.3 · D3 — 습득물 검색어 상한 30자 (서버 found_items()와 동일) */
             maxLength={30}
             autoComplete="off"
-            placeholder="예: 검정 지갑, 아이퐁, 흰색 카드"
+            placeholder="어떤 물건을 찾고 있나요?"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />
@@ -209,42 +234,15 @@ export function FoundItemBrowser({
         </div>
       </form>
 
-      <fieldset className="radius-selector">
-        <legend>탐색 반경</legend>
-        <div className="radius-options">
-          {SEARCH_RADIUS_OPTIONS_METERS.map((option) => (
-            <button
-              key={option}
-              className="radius-option"
-              type="button"
-              aria-pressed={radiusMeters === option}
-              onClick={() => onRadiusChange(option)}
-            >
-              {radiusKilometersLabel(option)}
-            </button>
-          ))}
-        </div>
-      </fieldset>
-
       <div
         className={`found-item-status${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
         role="status"
         aria-live="polite"
       >
         {status}
-        {!locationIds.length && largerRadiusOptions.length > 0 && !statusIsError && (
-          <div className="radius-empty-actions" aria-label="검색 반경 넓히기">
-            {largerRadiusOptions.map((option) => (
-              <button key={option} type="button" onClick={() => onRadiusChange(option)}>
-                {radiusKilometersLabel(option)}로 넓히기
-              </button>
-            ))}
-          </div>
-        )}
       </div>
-      <ol className="found-items" aria-label="습득물 목록">
-        {items.map((item, index) => {
-          const color = item.color_name ? ` · ${item.color_name}` : "";
+      <ol className="found-items" data-page-size={pageSize} aria-label="습득물 목록" aria-busy={isLoading || isLoadingMore}>
+        {visibleItems.map((item, index) => {
           // PRD 3.1-6 · 4.5 · D2 — 유사도 %는 화면에 노출하지 않는다(match_score는 내부 평가용).
           return (
             <li className="found-item-card" key={item.id ?? `${item.item_name}:${item.registered_on}:${index}`}>
@@ -253,37 +251,47 @@ export function FoundItemBrowser({
                 type="button"
                 aria-label={`${item.item_name || "이름 미상"} 상세 보기`}
                 aria-haspopup="dialog"
-                disabled={isLoading}
+                disabled={isLoading || isLoadingMore}
                 onClick={() => openDetail(item)}
               />
               <FoundItemThumbnail item={item} />
               <div className="item-card-body">
                 <div className="item-card-top">
                   <span className="item-category">{item.raw_category_name}</span>
+                  {item.color_name?.trim() && <span className="item-color" title={item.color_name}>{item.color_name}</span>}
                 </div>
-                <strong className="item-name">{item.item_name || "이름 미상"}{color}</strong>
-                {item.description && <p className="item-description">{item.description}</p>}
+                <strong className="item-name" title={item.item_name || "이름 미상"}>{item.item_name || "이름 미상"}</strong>
                 <dl className="item-meta">
                   <div><dt>보관장소</dt><dd>{item.raw_storage_name || "정보 없음"}</dd></div>
                   <div><dt>등록일</dt><dd>{formatRegisteredDate(item.registered_on)}</dd></div>
                 </dl>
-                <span className="item-detail-hint" aria-hidden="true">상세 보기 →</span>
               </div>
             </li>
           );
         })}
       </ol>
-      {nextCursor && items.length > 0 && (
-        <div className="found-items-more">
-          <button
-            type="button"
-            onClick={() => { void loadMore(); }}
-            disabled={isLoadingMore || isLoading}
-          >
-            {isLoadingMore
-              ? "물품을 더 불러오고 있습니다…"
-              : `물품 더 보기 (${items.length.toLocaleString("ko-KR")} / ${(totalCount ?? items.length).toLocaleString("ko-KR")}건)`}
-          </button>
+      {items.length > 0 && (
+        <nav className="place-pagination item-pagination" aria-label="물품 검색 결과 페이지">
+          <button type="button" aria-label="이전 물품 페이지" disabled={isLoading || isLoadingMore || itemPage === 0}
+            onClick={() => { void changeItemPage(itemPage - 1); }}>‹</button>
+          {pageNumbers.map((page) => <span key={page} className="item-page-option">
+            <button type="button" aria-label={`물품 ${page + 1}페이지`} aria-current={page === itemPage ? "page" : undefined}
+              disabled={isLoading || isLoadingMore} onClick={() => { void changeItemPage(page); }}>{page + 1}</button>
+          </span>)}
+          <button type="button" aria-label="다음 물품 페이지" disabled={isLoading || isLoadingMore || ((itemPage + 1) * pageSize >= items.length && !nextCursor)}
+            onClick={() => { void changeItemPage(itemPage + 1); }}>›</button>
+          <span className="sr-only" role="status">{isLoadingMore ? "다음 물품을 불러오고 있습니다." : `물품 ${itemPage + 1}페이지`}</span>
+        </nav>
+      )}
+      {submittedQuery && canExpandRadius && (
+        <div className="item-search-followup" aria-label="검색 범위 다시 살펴보기">
+          <p>찾는 물건이 없나요?</p>
+          <div className="item-followup-actions">
+          {nextRadius !== null && <button type="button" disabled={isLoading || isLoadingMore} onClick={() => onRadiusChange(nextRadius)}>
+              {radiusKilometersLabel(nextRadius)}로 넓혀보기
+            </button>}
+          <button type="button" className="item-alert-button" aria-haspopup="dialog" disabled={isLoading || isLoadingMore} onClick={onAlertRequest}>새 물건 알림 받기</button>
+          </div>
         </div>
       )}
       {detailIsOpen && (

@@ -15,6 +15,11 @@ export interface MapColorTokens {
 
 export const PREVIEW_THEMES = [
   {
+    value: "retriever-blue",
+    shortLabel: "Blue",
+    description: "흰색 표면과 부드러운 파란색",
+  },
+  {
     value: "warm-ivory",
     shortLabel: "Warm",
     description: "밝은 아이보리와 부드러운 갈색",
@@ -38,7 +43,7 @@ const PREVIEW_THEME_STORAGE_KEY = "retriever-preview-theme";
 export function readPreviewTheme(): PreviewTheme {
   const storedTheme = window.localStorage.getItem(PREVIEW_THEME_STORAGE_KEY);
   const match = PREVIEW_THEMES.find((theme) => theme.value === storedTheme);
-  return match?.value || "retriever-modern";
+  return match?.value || "retriever-blue";
 }
 
 export function applyPreviewTheme(theme: PreviewTheme) {
