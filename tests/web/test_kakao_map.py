@@ -180,6 +180,19 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["Content-Security-Policy"], _content_security_policy())
 
+    def test_http_response_upgrades_insecure_cdn_requests_without_opening_other_hosts(self) -> None:
+        # PRD 5 — 외부 HTTP 요청을 HTTPS로 올리고 스크립트 출처 허용 범위를 넓히지 않는다.
+        client = TestClient(create_app(KakaoLocalClient("test-rest-key"), "test-js-key"))
+        response = client.get("/")
+        directives = _csp_directives(response.headers["Content-Security-Policy"])
+
+        self.assertIn("upgrade-insecure-requests", directives)
+        for name in ("script-src", "style-src", "img-src", "connect-src"):
+            self.assertNotIn("http://*.kakaocdn.net", directives[name], name)
+            self.assertIn("https://*.kakaocdn.net", directives[name], name)
+        for value in ("*", "http:", "https:", "'unsafe-inline'", "'unsafe-eval'"):
+            self.assertNotIn(value, directives["script-src"])
+
     # PRD 3.2-2 — 습득물 사진(image_url)은 전부 minwon24.police.go.kr에서 온다 (운영 DB 2026-09-27 확인)
     def test_csp_allows_police_item_photos_as_images(self) -> None:
         directives = _csp_directives(_content_security_policy())
