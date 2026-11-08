@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import unittest
+import urllib.error
 from unittest.mock import patch
 from unittest.mock import Mock
 from datetime import date
@@ -100,6 +101,50 @@ class CurrentDetailMappingTests(unittest.TestCase):
         self.assertEqual(stats['failed'],0)
         self.assertEqual(stats['succeeded'],1)
         self.assertEqual(rows[0]['storage_location_id'],245)
+
+    def test_today_sized_batch_has_room_for_119_transient_retries(self):
+        rows = [row(str(i)) for i in range(254)]
+        seen = set()
+        def fetch(source, key, identity, sequence):
+            if int(identity) < 119 and identity not in seen:
+                seen.add(identity)
+                raise service.DetailLookupError("temporary", retryable=True, reason="timeout")
+            return detail()
+        with patch.object(service, "_fetch_detail", side_effect=fetch):
+            stats = self.enrich(rows, {("밀양경찰서", "O0002287"): 245}, deadline=time.monotonic()+10)
+        self.assertEqual(stats["requested"], 373)
+        self.assertEqual(stats["retried"], 119)
+        self.assertEqual(stats["succeeded"], 254)
+        self.assertEqual(stats["failed"], 0)
+        self.assertEqual(stats["deferred"], 0)
+        self.assertEqual(stats["failure_attempts_by_reason"], {"timeout": 119})
+        self.assertTrue(all(r["storage_location_id"] == 245 for r in rows))
+
+    def test_more_than_400_identities_still_obey_request_cap(self):
+        rows = [row(str(i)) for i in range(401)]
+        with patch.object(service, "_fetch_detail", return_value=detail()):
+            stats = self.enrich(rows, {("밀양경찰서", "O0002287"): 245}, deadline=time.monotonic()+10)
+        self.assertEqual(stats["requested"], 400)
+        self.assertEqual(stats["succeeded"], 400)
+        self.assertEqual(stats["deferred"], 1)
+
+    def test_safe_failure_classification_distinguishes_network_api_and_identity(self):
+        cases = [
+            (urllib.error.HTTPError("https://secret", 429, "secret", {}, None), "http_429", True),
+            (urllib.error.URLError(TimeoutError("secret")), "timeout", True),
+            (b"not XML secret", "invalid_xml", False),
+            (b"<response><header><resultCode>22</resultCode></header></response>", "api_22", False),
+            (b"<response><header><resultCode>00</resultCode></header><body/></response>", "missing_item", False),
+        ]
+        for response, reason, retryable in cases:
+            with self.subTest(reason=reason):
+                kwargs = {"side_effect": response} if isinstance(response, Exception) else {"return_value": io.BytesIO(response)}
+                with patch("urllib.request.urlopen", **kwargs):
+                    with self.assertRaises(service.DetailLookupError) as caught:
+                        service._fetch_detail("police_api", "secret", "A1", "1")
+                self.assertEqual(caught.exception.reason, reason)
+                self.assertEqual(caught.exception.retryable, retryable)
+                self.assertNotIn("secret", str(caught.exception))
 
     def test_permanent_detail_failure_does_not_retry(self):
         with patch.object(service,'_fetch_detail',side_effect=service.DetailLookupError('invalid identity')) as fetch:
