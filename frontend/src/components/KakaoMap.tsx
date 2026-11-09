@@ -1,3 +1,5 @@
+// @refresh reset
+// PRD 4.4 — SDK 컨트롤 변경은 지도 DOM도 재생성해 개발 중 남은 기본 UI를 제거한다.
 import {
   forwardRef,
   useEffect,
@@ -13,12 +15,14 @@ import {
   radiusKilometersLabel,
 } from "../lib/geo.js";
 import { escapeHtml } from "../lib/presentation";
+import { createRadiusHalo } from "../lib/radius-halo.js";
 import {
   readMapColorTokens,
   type MapColorTokens,
   type PreviewTheme,
 } from "../lib/theme";
 import type { Institution, Place } from "../types";
+import { MapControls } from "./MapControls";
 
 declare global {
   interface Window {
@@ -39,7 +43,9 @@ interface KakaoMapProps {
   institutionError: string;
   countsAvailable: boolean;
   places: Place[];
+  placeNumbers: number[];
   selectedPlace: Place | null;
+  previewPlace: Place | null;
   radiusMeters: number;
   visibleInstitutions: Institution[];
   mapBadge: string;
@@ -52,22 +58,61 @@ function coordinateKey(institution: Institution) {
   return `${institution.latitude.toFixed(7)},${institution.longitude.toFixed(7)}`;
 }
 
-function clusterStyles(colors: MapColorTokens) {
+function compactMarkerImage(kakao: any, mapColors: MapColorTokens, source: string | undefined, selected = false, number?: number) {
+  const police = source === "police";
+  const color = police ? mapColors.pinPolice : mapColors.pinPartner;
+  const width = 28;
+  const height = 36;
+  // PRD 4.4 — 범례와 같은 색을 사용하고 클러스터보다 진하게 표시한다.
+  const pinPath = "M15 3C8.9 3 4 7.9 4 14c0 8.2 11 18 11 18s11-9.8 11-18C26 7.9 21.1 3 15 3Z";
+  const innerShape = number !== undefined
+    ? `<text x="15" y="18" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="${mapColors.textOnSolid}">${number}</text>`
+    : police
+    ? `<path d="M15 9l4 2v3c0 2-2 3.5-4 4.5-2-1-4-2.5-4-4.5v-3z" fill="${mapColors.pinShadow}" fill-opacity=".65"/>`
+    : `<circle cx="15" cy="14" r="3" fill="${mapColors.pinShadow}" fill-opacity=".65"/>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 30 38">`
+    + `<filter id="soft-shadow" x="-40%" y="-30%" width="180%" height="180%"><feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="${mapColors.pinShadow}" flood-opacity=".16"/></filter>`
+    + (selected ? `<circle cx="15" cy="15" r="14" fill="${color}" fill-opacity=".2"/>` : "")
+    + `<path d="${pinPath}" fill="${mapColors.textOnSolid}" filter="url(#soft-shadow)"/>`
+    + `<path d="${pinPath}" fill="${color}" fill-opacity="1" stroke="${mapColors.textOnSolid}" stroke-width="${selected ? 2.5 : 1.5}"/>`
+    + innerShape + "</svg>";
+  return new kakao.maps.MarkerImage(
+    `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    new kakao.maps.Size(width, height),
+    { offset: new kakao.maps.Point(14, 30) },
+  );
+}
+
+function placePreviewMarkerImage(kakao: any, colors: MapColorTokens) {
+  // PRD 4.3-A — 확인 중인 장소는 기존 기관 핀보다 큰 흰색 핀으로 구분한다.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="38" height="48" viewBox="0 0 38 48">`
+    + `<filter id="s" x="-40%" y="-30%" width="180%" height="180%"><feDropShadow dx="0" dy="2" stdDeviation="1.8" flood-color="${colors.pinShadow}" flood-opacity=".22"/></filter>`
+    + `<path d="M19 3C10.7 3 4 9.7 4 18c0 11 15 25 15 25s15-14 15-25C34 9.7 27.3 3 19 3Z" fill="${colors.textOnSolid}" stroke="${colors.pinPartner}" stroke-width="1.5" filter="url(#s)"/>`
+    + `<circle cx="19" cy="18" r="5" fill="${colors.pinPartner}"/>`
+    + "</svg>";
+  return new kakao.maps.MarkerImage(
+    `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
+    new kakao.maps.Size(38, 48),
+    { offset: new kakao.maps.Point(19, 43) },
+  );
+}
+
+function clusterStyles(colors: MapColorTokens, softened: boolean) {
   return colors.clusterFills.map((color, index) => {
-    const rawSize = [42, 48, 56, 64, 72][index];
+    const rawSize = softened ? 42 : [42, 48, 56, 64, 72][index];
     const size = Number(rawSize);
     return {
       width: `${size}px`,
       height: `${size}px`,
-      background: `${color}e8`,
-      border: `2px solid ${colors.clusterBorder}`,
+      background: `${color}${softened ? "66" : "e8"}`,
+      border: softened ? `1px solid ${colors.textOnSolid}` : `2px solid ${colors.clusterBorder}`,
       borderRadius: "50%",
-      color: colors.textOnSolid,
-      fontSize: size >= 64 ? "18px" : "15px",
-      fontWeight: "800",
-      lineHeight: `${size - 4}px`,
+      color: softened ? colors.pinShadow : colors.textOnSolid,
+      fontSize: softened ? "13px" : size >= 64 ? "18px" : "15px",
+      fontWeight: softened ? "600" : "800",
+      lineHeight: `${size - (softened ? 2 : 4)}px`,
       textAlign: "center",
-      boxShadow: `0 5px 16px ${colors.clusterShadow}`,
+      boxShadow: softened ? `0 2px 6px ${colors.clusterShadow}` : `0 5px 16px ${colors.clusterShadow}`,
     };
   });
 }
@@ -128,7 +173,9 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   institutionError,
   countsAvailable,
   places,
+  placeNumbers,
   selectedPlace,
+  previewPlace,
   radiusMeters,
   visibleInstitutions,
   mapBadge,
@@ -141,10 +188,12 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const infoWindowRef = useRef<any>(null);
   const clustererRef = useRef<any>(null);
   const institutionMarkersRef = useRef<any[]>([]);
-  const searchMarkersRef = useRef<Array<{ marker: any; place: Place }>>([]);
-  const radiusCircleRef = useRef<any>(null);
+  const searchMarkersRef = useRef<Array<{ marker: any; place: Place; number: number }>>([]);
   const countMarkerImagesRef = useRef(new Map<string, any>());
   const selectedPlaceRef = useRef<Place | null>(selectedPlace);
+  // PRD 4.4 — 지도 분포는 유지하며 표시 밀도만 비교한다. 전환 시 지도 위치는 유지한다.
+  const softenedMarkers = true;
+  const preserveViewportRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
   const mapColors = useMemo(() => readMapColorTokens(), [themeKey]);
 
@@ -169,10 +218,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         center: new kakao.maps.LatLng(SEOUL_CENTER.latitude, SEOUL_CENTER.longitude),
         level: 8,
       });
-      map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT);
-      map.addControl(new kakao.maps.MapTypeControl(), kakao.maps.ControlPosition.TOPRIGHT);
       mapRef.current = map;
-      infoWindowRef.current = new kakao.maps.InfoWindow({ removable: true });
+      infoWindowRef.current = new kakao.maps.InfoWindow({ removable: true, zIndex: 30 });
       setMapReady(true);
     });
     return () => {
@@ -221,6 +268,16 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       police: fallbackMarkerImage("police"),
     };
 
+    const compactImages = {
+      partner: compactMarkerImage(kakao, mapColors, "partner"),
+      police: compactMarkerImage(kakao, mapColors, "police"),
+    };
+    const selectedImages = {
+      partner: compactMarkerImage(kakao, mapColors, "partner", true),
+      police: compactMarkerImage(kakao, mapColors, "police", true),
+    };
+    let highlightedMarker: { marker: any; source: "partner" | "police" } | null = null;
+
     function countMarkerImage(source: string | undefined, rawItemCount: number | undefined) {
       const label = markerCountLabel(rawItemCount);
       const cacheKey = `${source}:${label}`;
@@ -247,7 +304,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     }
 
     const markers = institutions.map((institution) => {
-      const image = countsAvailable
+      const source = institution.source === "police" ? "police" : "partner";
+      const image = softenedMarkers ? compactImages[source] : countsAvailable
         ? countMarkerImage(institution.source, institution.item_count)
         : (institution.source === "police" ? fallbackImages.police : fallbackImages.partner);
       const marker = new kakao.maps.Marker({
@@ -255,9 +313,19 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         image,
         title: `${institution.name}${countsAvailable ? ` · 보관 물품 ${institution.item_count || 0}개` : ""}`,
         clickable: true,
+        zIndex: 2,
       });
       const group = groups.get(coordinateKey(institution)) || [institution];
       kakao.maps.event.addListener(marker, "click", () => {
+        if (softenedMarkers) {
+          if (highlightedMarker) {
+            highlightedMarker.marker.setImage(compactImages[highlightedMarker.source]);
+            highlightedMarker.marker.setZIndex(2);
+          }
+          marker.setImage(selectedImages[source]);
+          marker.setZIndex(3);
+          highlightedMarker = { marker, source };
+        }
         infoWindowRef.current.setContent(institutionDetails(
           group,
           selectedPlaceRef.current,
@@ -278,27 +346,31 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       minClusterSize: 2,
       gridSize: 70,
       calculator: [10, 50, 100, 300],
-      styles: clusterStyles(mapColors),
+      styles: clusterStyles(mapColors, softenedMarkers),
     });
 
     return () => {
       clustererRef.current?.clear();
       markers.forEach((marker) => marker.setMap(null));
     };
-  }, [countsAvailable, institutions, mapColors, mapReady, onInstitutionSelect]);
+  }, [countsAvailable, institutions, mapColors, mapReady, onInstitutionSelect, softenedMarkers]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
     const kakao = window.kakao;
+    infoWindowRef.current?.close();
     searchMarkersRef.current.forEach(({ marker }) => marker.setMap(null));
-    const nextMarkers = places.map((place) => {
+    const nextMarkers = places.map((place, index) => {
+      const number = placeNumbers[index] ?? index + 1;
       const marker = new kakao.maps.Marker({
         map: mapRef.current,
         position: new kakao.maps.LatLng(place.latitude, place.longitude),
         title: place.name,
+        image: compactMarkerImage(kakao, mapColors, "partner", false, number),
+        zIndex: 4,
       });
       kakao.maps.event.addListener(marker, "click", () => onPlaceSelect(place));
-      return { marker, place };
+      return { marker, place, number };
     });
     searchMarkersRef.current = nextMarkers;
 
@@ -309,16 +381,12 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     }
 
     return () => nextMarkers.forEach(({ marker }) => marker.setMap(null));
-  }, [mapReady, onPlaceSelect, places]);
+  }, [mapColors, mapReady, onPlaceSelect, places, placeNumbers]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || !clustererRef.current) return;
     const kakao = window.kakao;
     const map = mapRef.current;
-    if (radiusCircleRef.current) {
-      radiusCircleRef.current.setMap(null);
-      radiusCircleRef.current = null;
-    }
     clustererRef.current.clear();
 
     if (!selectedPlace) {
@@ -327,6 +395,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       }
       searchMarkersRef.current.forEach(({ marker }) => marker.setMap(map));
       infoWindowRef.current?.close();
+      preserveViewportRef.current = false;
       return;
     }
 
@@ -337,22 +406,13 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         : []
     )).filter(Boolean);
     if (nearbyMarkers.length) clustererRef.current.addMarkers(nearbyMarkers);
-    searchMarkersRef.current.forEach(({ marker, place }) => {
+    searchMarkersRef.current.forEach(({ marker, place, number }) => {
       marker.setMap(place === selectedPlace ? map : null);
+      marker.setImage(place === selectedPlace
+        ? placePreviewMarkerImage(kakao, mapColors)
+        : compactMarkerImage(kakao, mapColors, "partner", false, number));
     });
 
-    radiusCircleRef.current = new kakao.maps.Circle({
-      map,
-      center: new kakao.maps.LatLng(selectedPlace.latitude, selectedPlace.longitude),
-      radius: radiusMeters,
-      strokeWeight: 2,
-      strokeColor: mapColors.radiusStroke,
-      strokeOpacity: 0.55,
-      strokeStyle: "solid",
-      fillColor: mapColors.radiusFill,
-      fillOpacity: 0.1,
-      zIndex: 1,
-    });
     const selectedMarker = searchMarkersRef.current.find(({ place }) => place === selectedPlace)?.marker;
     if (selectedMarker) {
       infoWindowRef.current.setContent(
@@ -361,8 +421,40 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       );
       infoWindowRef.current.open(map, selectedMarker);
     }
-    map.setBounds(circleBounds(kakao, selectedPlace, radiusMeters), 48, 48, 48, 48);
-  }, [institutions, mapColors, mapReady, radiusMeters, selectedPlace, visibleInstitutions]);
+    if (!preserveViewportRef.current) {
+      map.setBounds(circleBounds(kakao, selectedPlace, radiusMeters), 48, 48, 48, 48);
+    }
+    preserveViewportRef.current = false;
+  }, [institutions, mapColors, mapReady, radiusMeters, selectedPlace, visibleInstitutions, softenedMarkers]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !selectedPlace) return;
+    const halo = createRadiusHalo(window.kakao, mapRef.current, selectedPlace, radiusMeters, mapColors.radiusFill);
+    return () => halo.setMap(null);
+  }, [mapColors, mapReady, radiusMeters, selectedPlace]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || selectedPlace || !previewPlace) return;
+    const kakao = window.kakao;
+    const map = mapRef.current;
+    // PRD 4.3-A — 미리보기는 지도만 이동하고 반경·물품 조회를 시작하지 않는다.
+    searchMarkersRef.current.forEach(({ marker, place, number }) => {
+      marker.setImage(place === previewPlace
+        ? placePreviewMarkerImage(kakao, mapColors)
+        : compactMarkerImage(kakao, mapColors, "partner", false, number));
+      marker.setZIndex(place === previewPlace ? 6 : 4);
+    });
+    map.setLevel(3);
+    map.panTo(new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude));
+    const marker = searchMarkersRef.current.find(({ place }) => place === previewPlace)?.marker;
+    if (marker) {
+      infoWindowRef.current.setContent(
+        `<div class="info-window"><strong>${escapeHtml(previewPlace.name)}</strong>`
+        + `<span>${escapeHtml(previewPlace.address)}</span></div>`,
+      );
+      infoWindowRef.current.open(map, marker);
+    }
+  }, [mapColors, mapReady, previewPlace, selectedPlace, visibleInstitutions, softenedMarkers]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;
@@ -370,8 +462,9 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   }, [visibleInstitutions]);
 
   return (
-    <section className="map-panel" aria-label="카카오 지도">
+    <section className={`map-panel${softenedMarkers ? " map-panel-softened" : ""}`} aria-label="카카오 지도">
       <div id="map" ref={containerRef} />
+      <MapControls map={mapReady ? mapRef.current : null} />
       <div
         className={`institution-status${institutionError ? " error" : institutionsLoaded ? " loaded" : ""}${selectedPlace ? " filtered" : ""}`}
         aria-live="polite"

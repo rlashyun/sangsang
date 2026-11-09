@@ -1,7 +1,6 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 const test = require("node:test");
@@ -27,11 +26,11 @@ test("radius geometry and marker labels", async () => {
   const seoul = { latitude: 37.5665, longitude: 126.9780 };
   assert.equal(distanceMeters(seoul, seoul), 0);
 
-  assert.deepEqual(SEARCH_RADIUS_OPTIONS_METERS, [1000, 3000, 5000]);
+  assert.deepEqual(SEARCH_RADIUS_OPTIONS_METERS, [1000, 2000, 3000]);
   assert.equal(DEFAULT_SEARCH_RADIUS_METERS, 1000);
   assert.equal(radiusKilometersLabel(1000), "1km");
   assert.equal(radiusKilometersLabel(3000), "3km");
-  assert.equal(radiusKilometersLabel(5000), "5km");
+  assert.equal(radiusKilometersLabel(2000), "2km");
 
   const aboutOneKilometerNorth = { latitude: 37.5754932, longitude: 126.9780 };
   const distance = distanceMeters(seoul, aboutOneKilometerNorth);
@@ -49,33 +48,10 @@ test("radius geometry and marker labels", async () => {
   assert.equal(markerCountLabel(1500), "999+");
 });
 
-test("radius selector is rendered below the found-item search form", () => {
-  const componentPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "frontend",
-    "src",
-    "components",
-    "FoundItemBrowser.tsx",
-  );
-  const summaryPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "frontend",
-    "src",
-    "components",
-    "SelectionSummary.tsx",
-  );
-  const componentSource = readFileSync(componentPath, "utf8");
-  const summarySource = readFileSync(summaryPath, "utf8");
-  const searchFormEnd = componentSource.indexOf("</form>");
-  const radiusSelector = componentSource.indexOf('<fieldset className="radius-selector">');
-  const resultStatus = componentSource.indexOf('<div\n        className={`found-item-status');
-
-  assert.ok(searchFormEnd >= 0, "found-item search form should exist");
-  assert.ok(radiusSelector > searchFormEnd, "radius selector should follow the search form");
-  assert.ok(resultStatus > radiusSelector, "result status should follow the radius selector");
-  assert.equal(summarySource.includes("radius-selector"), false);
+test("manual radius expands one step at a time and stops at 3km", async () => {
+  const { nextSearchRadiusMeters } = await import("../../frontend/src/lib/geo.js");
+  assert.equal(nextSearchRadiusMeters(1000), 2000);
+  assert.equal(nextSearchRadiusMeters(2000), 3000);
+  assert.equal(nextSearchRadiusMeters(3000), null);
+  assert.equal(nextSearchRadiusMeters(5000), null);
 });

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { categoryIcon, foundItemImageUrl, sourceLabel } from "../lib/presentation";
+import { categoryIcon, foundItemImageUrl } from "../lib/presentation";
 import type { FoundItem } from "../types";
 
 export function FoundItemThumbnail({ item }: { item: FoundItem }) {
@@ -34,7 +34,6 @@ export function FoundItemThumbnail({ item }: { item: FoundItem }) {
           </span>
         )}
       </div>
-      <small>{sourceLabel(item.item_source_code)}</small>
     </div>
   );
 }

@@ -1,6 +1,9 @@
 import { useState, type FormEvent } from "react";
 
+import { placeCategoryLabel } from "../lib/presentation";
 import type { Place } from "../types";
+
+export const PLACE_PAGE_SIZE = 4;
 
 interface LocationSearchProps {
   results: Place[];
@@ -10,6 +13,9 @@ interface LocationSearchProps {
   isSearching: boolean;
   onSearch: (query: string) => void;
   onSelect: (place: Place) => void;
+  onConfirm: () => void;
+  page: number;
+  onPageChange: (page: number) => void;
 }
 
 export function LocationSearch({
@@ -20,9 +26,15 @@ export function LocationSearch({
   isSearching,
   onSearch,
   onSelect,
+  onConfirm,
+  page,
+  onPageChange,
 }: LocationSearchProps) {
   const [query, setQuery] = useState("");
   const showCenteredStatus = results.length === 0 && !isSearching && !statusIsError;
+  const pageCount = Math.ceil(results.length / PLACE_PAGE_SIZE);
+  const start = page * PLACE_PAGE_SIZE;
+  const visibleResults = results.slice(start, start + PLACE_PAGE_SIZE);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -78,27 +90,46 @@ export function LocationSearch({
           {status}
         </div>
         <ol className="results location-results" aria-label="위치 검색 결과">
-          {results.map((place, index) => {
+          {visibleResults.map((place, index) => {
             const isActive = selectedPlace === place;
-            const meta = [place.phone, place.category].filter(Boolean).join(" · ");
+            const category = placeCategoryLabel(place.category);
             return (
-              <li className="result-item" key={`${place.latitude}:${place.longitude}:${index}`}>
+              <li className={`result-item location-result-card${isActive ? " previewing" : ""}`} key={`${place.latitude}:${place.longitude}:${index}`}>
                 <button
                   type="button"
-                  className={`result-button${isActive ? " active" : ""}`}
+                  className="result-button"
                   onClick={() => onSelect(place)}
+                  disabled={isSearching}
+                  aria-pressed={isActive}
                 >
                   <span className="result-copy">
-                    <span className="result-title">{index + 1}. {place.name}</span>
-                    <span className="result-address">{place.address}</span>
-                    {meta && <span className="result-meta">{meta}</span>}
+                    <span className="result-title" title={place.name}>{start + index + 1}. {place.name}</span>
+                    <span className="result-address" title={place.address}>{place.address}</span>
+                    {category && <span className="place-category-tag">{category}</span>}
                   </span>
-                  <span className="select-place-label">이 위치 선택</span>
                 </button>
+                <div className="place-card-action">
+                  <button
+                    type="button"
+                    onClick={onConfirm}
+                    disabled={isSearching || !isActive}
+                    className={isActive ? "" : "place-confirm-hidden"}
+                  >이 위치 선택하기</button>
+                </div>
               </li>
             );
           })}
         </ol>
+        {pageCount > 0 && (
+          <nav className="place-pagination" aria-label="장소 검색 결과 페이지">
+            <button type="button" aria-label="이전 장소 페이지" disabled={isSearching || page === 0} onClick={() => onPageChange(page - 1)}>‹</button>
+            {Array.from({ length: pageCount }, (_, index) => (
+              <button key={index} type="button" aria-label={`장소 ${index + 1}페이지`} aria-current={index === page ? "page" : undefined}
+                disabled={isSearching} onClick={() => onPageChange(index)}>{index + 1}</button>
+            ))}
+            <button type="button" aria-label="다음 장소 페이지" disabled={isSearching || page === pageCount - 1} onClick={() => onPageChange(page + 1)}>›</button>
+          </nav>
+        )}
       </div>
     </>
   );
