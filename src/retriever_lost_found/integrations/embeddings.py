@@ -18,7 +18,7 @@ class BgeM3Client:
         self.api_key = api_key
         self.timeout = timeout
 
-    def embed(self, text: str) -> list[float]:
+    def embed(self, text: str, *, timeout: float | None = None) -> list[float]:
         request = Request(
             "https://openrouter.ai/api/v1/embeddings",
             data=json.dumps({"model": "baai/bge-m3", "input": [text],
@@ -27,7 +27,7 @@ class BgeM3Client:
             method="POST",
         )
         try:
-            with build_opener(NoRedirect()).open(request, timeout=self.timeout) as response:
+            with build_opener(NoRedirect()).open(request, timeout=min(self.timeout, timeout) if timeout is not None else self.timeout) as response:
                 payload = json.load(response)
             records = payload["data"]
             vector = records[0]["embedding"]

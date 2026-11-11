@@ -56,6 +56,7 @@ export function FoundItemBrowser({
     () => `위치를 검색하면 반경 ${radiusKilometersLabel(radiusMeters)}의 습득물을 보여드립니다.`,
   );
   const [statusIsError, setStatusIsError] = useState(false);
+  const [semanticUnavailable, setSemanticUnavailable] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // PRD 3.3 · 5 — 검색어 없는 목록은 서버가 50건씩 준다. 다음 페이지 커서와 총수를 기억한다.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -74,6 +75,7 @@ export function FoundItemBrowser({
     setDetail(null);
     setItemPage(0);
     const sequence = ++requestSequence.current;
+    setSemanticUnavailable(false);
     setNextCursor(null);
     setTotalCount(null);
     setIsLoadingMore(false);
@@ -96,6 +98,7 @@ export function FoundItemBrowser({
       const payload = await fetchFoundItems(params, signal);
       if (sequence !== requestSequence.current) return;
       const nextItems = payload.items || [];
+      setSemanticUnavailable(Boolean(searchQuery.trim()) && payload.semantic_status === "unavailable");
       const nextTotal = payload.total_count ?? (payload.next_cursor ? null : nextItems.length);
       setItems(nextItems);
       setNextCursor(payload.next_cursor ?? null);
@@ -240,6 +243,7 @@ export function FoundItemBrowser({
         aria-live="polite"
       >
         {status}
+        {semanticUnavailable && <span> 의미 검색에 연결하지 못해 키워드 검색 결과를 보여드리고 있어요.</span>}
       </div>
       <ol className="found-items" data-page-size={pageSize} aria-label="습득물 목록" aria-busy={isLoading || isLoadingMore}>
         {visibleItems.map((item, index) => {

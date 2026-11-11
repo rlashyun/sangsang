@@ -130,22 +130,41 @@ class SupabaseFoundItemClient:
             "total_count": int(total_count) if total_count is not None else None,
         }
 
-    def fetch_items(self, location_ids: list[int]) -> list[dict[str, Any]]:
+    def fetch_search_candidates(self, location_ids: list[int]) -> list[dict[str, Any]]:
+        """PRD 4.5 — 상세/사진/중복 정규화 텍스트를 순위 계산 전에 전송하지 않는다."""
+        return self.fetch_items(location_ids, search_only=True)
+
+    def fetch_item_details(self, location_ids: list[int], item_ids: list[int]) -> list[dict[str, Any]]:
+        rows = []
+        ids = sorted(set(item_ids))
+        for start in range(0, len(ids), 100):
+            rows.extend(self.fetch_items(location_ids, item_ids=ids[start:start + 100]))
+        return rows
+
+    def fetch_items(self, location_ids: list[int], *, search_only: bool = False,
+                    item_ids: list[int] | None = None) -> list[dict[str, Any]]:
         unique_ids = _unique_location_ids(location_ids)
-        if not unique_ids:
+        if not unique_ids or item_ids == []:
             return []
 
         items: list[dict[str, Any]] = []
         offset = 0
         id_filter = f"in.({','.join(str(value) for value in unique_ids)})"
+        after_id = 0
         while True:
+            filters = {}
+            if item_ids is not None:
+                filters["id"] = f"in.({','.join(str(int(value)) for value in item_ids)})"
+            elif search_only:
+                filters["id"] = f"gt.{after_id}"
             query = urllib.parse.urlencode(
                 {
-                    "select": self.SELECT_FIELDS,
+                    "select": "id,storage_location_id,item_name,raw_category_name,color_name,description" if search_only else self.SELECT_FIELDS,
                     "storage_location_id": id_filter,
-                    "order": "registered_on.desc,id.desc",
+                    "order": "id.asc" if search_only else "registered_on.desc,id.desc",
                     "limit": FOUND_ITEM_PAGE_SIZE,
-                    "offset": offset,
+                    **({} if search_only else {"offset": offset}),
+                    **filters,
                 }
             )
             request = urllib.request.Request(
@@ -158,9 +177,15 @@ class SupabaseFoundItemClient:
             items.extend(row for row in payload if isinstance(row, dict))
             if len(payload) < FOUND_ITEM_PAGE_SIZE:
                 return items
+            if search_only:
+                next_id = int(payload[-1]["id"])
+                if next_id <= after_id:
+                    raise RuntimeError("검색 후보 페이지가 진행되지 않았습니다.")
+                after_id = next_id
             offset += FOUND_ITEM_PAGE_SIZE
 
-    def semantic_scores(self, location_ids: list[int], embedding: list[float]) -> dict[int, float]:
+    def semantic_scores(self, location_ids: list[int], embedding: list[float], *,
+                        timeout: float = 5) -> dict[int, float]:
         """PRD 4.1 · 5 — 벡터 자체는 DB 안에 두고 선택 기관의 점수만 받는다."""
         unique_ids = _unique_location_ids(location_ids)
         if not unique_ids:
@@ -171,7 +196,7 @@ class SupabaseFoundItemClient:
             method="POST", headers=_headers(self.secret_key, content_type=True),
         )
         try:
-            payload = _request_json(request, min(self.timeout, 5), "Supabase 의미 검색 API")
+            payload = _request_json(request, min(self.timeout, timeout, 5), "Supabase 의미 검색 API")
         except (OSError, HTTPException):
             raise RuntimeError("Supabase 의미 검색 API 연결에 실패했습니다.") from None
         if not isinstance(payload, list):

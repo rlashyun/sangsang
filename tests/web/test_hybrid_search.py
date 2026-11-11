@@ -23,13 +23,13 @@ class FakeItems:
         assert ids == [7]
         return ITEMS
 
-    def semantic_scores(self, ids, vector):
+    def semantic_scores(self, ids, vector, **kwargs):
         assert ids == [7] and vector == [1.0] * 1024
         return {1: 0.9, 2: 0.85, 99: 0.99}  # 범위 밖 ID는 합산에서도 제외
 
 
 class FakeEmbedding:
-    def embed(self, query):
+    def embed(self, query, **kwargs):
         return [1.0] * 1024
 
 
@@ -37,6 +37,29 @@ def test_bm25_korean_partial_words_and_unrelated_rejection():
     scores = keyword_scores([{"id": 1, "item_name": "검정색지갑"}, ITEMS[2]], "검정 지갑")
     assert scores[1] > 0
     assert 3 not in scores
+
+
+def test_color_only_matches_are_rejected_but_wallet_and_typo_survive():
+    items = [
+        {"id": 1, "item_name": "검정 가죽 지갑"},
+        {"id": 2, "item_name": "빨강 장지갑"},
+        {"id": 3, "item_name": "검정 삼성 휴대폰"},
+        {"id": 4, "item_name": "검정 카드"},
+    ]
+    assert set(keyword_scores(items, "검정 가죽 지갑")) == {1, 2}
+    assert 3 in keyword_scores(items, "휴대푠")
+
+
+def test_reviewed_color_and_brand_aliases():
+    assert 1 in keyword_scores([{"id": 1, "item_name": "검정 MLB 모자"}], "검은색 엠엘비 모자")
+
+
+def test_expensive_fuzzy_is_bounded_and_does_not_read_description():
+    items = [{"id": i, "item_name": "지갑", "description": "긴 설명" * 100} for i in range(1000)]
+    with patch("retriever_lost_found.search.hybrid.fuzzy_item_score", return_value=1) as fuzzy:
+        keyword_scores(items, "지갑")
+    assert fuzzy.call_count <= 200
+    assert all("description" not in call.args[1] for call in fuzzy.call_args_list)
 
 
 def test_fusion_includes_semantic_only_and_boosts_shared_match():
@@ -49,12 +72,70 @@ def test_fusion_includes_semantic_only_and_boosts_shared_match():
 
 def test_keyword_survives_embedding_failure():
     class Broken:
-        def embed(self, query):
+        def embed(self, query, **kwargs):
             raise RuntimeError("do not expose upstream body")
 
     results, _, status = search_found_items(FakeItems(), "지갑", [7], Broken())
     assert status == "unavailable" and [r["id"] for r in results] == [1]
     assert search_found_items(FakeItems(), "지갑", [7])[2] == "disabled"
+
+
+def test_semantic_budget_returns_without_waiting_for_blocked_worker():
+    release = threading.Event()
+    finished = threading.Event()
+
+    class Slow(FakeEmbedding):
+        def embed(self, query, **kwargs):
+            release.wait(2)
+            finished.set()
+            return super().embed(query)
+
+    try:
+        rows, _, status = search_found_items(FakeItems(), "지갑", [7], Slow(), semantic_budget=0.01)
+        assert status == "unavailable" and rows[0]["id"] == 1
+        assert not finished.is_set()  # executor 종료를 기다리지 않고 이미 응답했다.
+    finally:
+        release.set()
+        assert finished.wait(2)
+
+
+def test_details_are_fetched_only_for_matches_and_scope_is_checked_again():
+    class Items(FakeItems):
+        def fetch_search_candidates(self, ids):
+            return ITEMS
+
+        def fetch_item_details(self, ids, item_ids):
+            assert ids == [7] and set(item_ids) == {1, 2}
+            return [{**ITEMS[0], "description": "상세 보존"},
+                    {**ITEMS[1], "storage_location_id": 999}]
+
+    rows, count, _ = search_found_items(Items(), "지갑", [7], FakeEmbedding())
+    assert count == 3
+    assert len(rows) == 1 and rows[0]["description"] == "상세 보존"
+
+
+def test_search_projection_and_keyset_pagination_keep_scope():
+    from urllib.parse import parse_qs, urlparse
+    client = SupabaseFoundItemClient("https://test.supabase.co", "test-key")
+    with patch("retriever_lost_found.integrations.supabase.FOUND_ITEM_PAGE_SIZE", 2), patch(
+        "retriever_lost_found.integrations.supabase._request_json",
+        side_effect=[[{"id": 1}, {"id": 2}], [{"id": 3}]],
+    ) as request:
+        assert len(client.fetch_search_candidates([7])) == 3
+    queries = [parse_qs(urlparse(call.args[0].full_url).query) for call in request.call_args_list]
+    assert queries[1]["id"] == ["gt.2"]
+    assert all(q["storage_location_id"] == ["in.(7)"] and "offset" not in q for q in queries)
+    assert "image_url" not in queries[0]["select"][0]
+    assert "normalized_search_text" not in queries[0]["select"][0]
+
+
+def test_detail_query_filters_both_ids_and_locations():
+    from urllib.parse import parse_qs, urlparse
+    client = SupabaseFoundItemClient("https://test.supabase.co", "test-key")
+    with patch("retriever_lost_found.integrations.supabase._request_json", return_value=[]) as call:
+        client.fetch_item_details([7], [1, 2])
+    query = parse_qs(urlparse(call.call_args.args[0].full_url).query)
+    assert query["id"] == ["in.(1,2)"] and query["storage_location_id"] == ["in.(7)"]
 
 
 def test_searches_start_in_parallel():
@@ -66,7 +147,7 @@ def test_searches_start_in_parallel():
             return super().fetch_items(ids)
 
     class Embedding(FakeEmbedding):
-        def embed(self, query):
+        def embed(self, query, **kwargs):
             barrier.wait()
             return super().embed(query)
 
@@ -93,7 +174,7 @@ def test_semantic_rpc_contains_scope_and_only_returns_scores():
 
 def test_keyword_survives_semantic_rpc_timeout():
     class Items(FakeItems):
-        def semantic_scores(self, ids, vector):
+        def semantic_scores(self, ids, vector, **kwargs):
             return SupabaseFoundItemClient("https://test.supabase.co", "test-key").semantic_scores(ids, vector)
     with patch("retriever_lost_found.integrations.supabase._request_json", side_effect=TimeoutError):
         rows, _, status = search_found_items(Items(), "지갑", [7], FakeEmbedding())

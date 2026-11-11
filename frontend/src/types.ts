@@ -58,6 +58,7 @@ export interface FoundItemsPayload {
   /** 검색어가 없을 때 다음 50건을 받을 커서. 마지막 페이지이거나 검색어가 있으면 null */
   next_cursor?: string | null;
   query?: string;
+  semantic_status?: "ok" | "disabled" | "unavailable";
 }
 
 export interface InstitutionPayload {
