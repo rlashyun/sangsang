@@ -122,6 +122,10 @@ Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이�
 `supabase/migrations/20261111042228_scoped_bge_m3_semantic_search.sql`을 적용합니다.
 운영 DB를 Preview에 연결하지 않습니다.
 
+단, 2026-11-11 김성현이 명시적으로 승인한 `seonghyun_search` 검색 실험 Preview는
+운영 Supabase를 사용합니다. 변경 내역과 중단·복구 절차 및 복구 한계는
+[검색 실험 복구 기록](docs/search-experiment-recovery.md)에 남깁니다.
+
 ### 검색 초안: BM25 + 의미 검색
 
 검색어가 있으면 선택된 `location_ids`에 대해 두 경로를 병렬 실행합니다.
