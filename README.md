@@ -116,6 +116,28 @@ FastAPI `app`을 진입점으로 사용합니다.
 - `DATA_GO_KR_SERVICE_KEY`
 - `CRON_SECRET`
 
+검색 의미 확장에는 서버 전용 `OPENROUTER_API_KEY`를 선택적으로 설정합니다.
+키가 없으면 키워드 검색만 실행하며, 테스트·CI에서는 빈 값으로 둡니다.
+Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이블을 준비하고
+`supabase/migrations/20261111042228_scoped_bge_m3_semantic_search.sql`을 적용합니다.
+운영 DB를 Preview에 연결하지 않습니다.
+
+### 검색 초안: BM25 + 의미 검색
+
+검색어가 있으면 선택된 `location_ids`에 대해 두 경로를 병렬 실행합니다.
+키워드 경로는 단어·글자 bigram BM25를 계산하고 기존 퍼지 검색을 오타 보조로 사용합니다.
+의미 경로는 OpenRouter의 `baai/bge-m3` 모델을 `deepinfra` 제공자로 고정해
+질의를 임베딩하고, `search_found_items_semantic` RPC로 같은 기관의 최신 벡터만 비교합니다.
+물품 벡터는 기존 `found_item_embeddings_bge_m3` 테이블의 1,024차원 벡터를 사용합니다.
+저장 입력은 `normalized_search_text`, 비어 있으면 `item_name`이며 해시가 일치해야 검색됩니다.
+
+키워드 점수는 `max(BM25 / (BM25 + 1), 0.7 × 기존 임계값을 통과한 퍼지 점수)`입니다.
+최종 점수는 `0.5 × 키워드 점수 + 0.5 × 코사인 유사도`로, 한쪽에만 있으면 다른 쪽을 0으로 둡니다.
+의미 검색은 유사도 0.55 이상 상위 200건을 합칩니다. 이 값과 가중치는 평가 전 초안입니다.
+임베딩·의미 검색 장애 시 키워드 결과를 반환하며 `semantic_status`는 `unavailable`입니다.
+키 미설정은 `disabled`, 의미 검색 성공은 `ok`입니다. 점수는 정렬용이고 화면에 표시하지 않습니다.
+검색어가 없는 목록의 커서 페이징과 기존 응답 필드는 유지합니다.
+
 Vercel에서는 Production·Preview·Development 환경을 구분해 값을 설정하고, Preview가
 의도치 않게 운영 Supabase에 연결되지 않게 관리하세요. `/api/institutions`의 공개 지도
 응답은 Vercel CDN에서 5분간 캐시되며, `/api/found-items`는 캐시하지 않습니다.

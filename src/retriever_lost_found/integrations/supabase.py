@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+from http.client import HTTPException
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -157,6 +159,31 @@ class SupabaseFoundItemClient:
             if len(payload) < FOUND_ITEM_PAGE_SIZE:
                 return items
             offset += FOUND_ITEM_PAGE_SIZE
+
+    def semantic_scores(self, location_ids: list[int], embedding: list[float]) -> dict[int, float]:
+        """PRD 4.1 · 5 — 벡터 자체는 DB 안에 두고 선택 기관의 점수만 받는다."""
+        unique_ids = _unique_location_ids(location_ids)
+        if not unique_ids:
+            return {}
+        request = urllib.request.Request(
+            f"{self.url}/rest/v1/rpc/search_found_items_semantic",
+            data=json.dumps({"p_location_ids": unique_ids, "p_embedding": embedding}).encode(),
+            method="POST", headers=_headers(self.secret_key, content_type=True),
+        )
+        try:
+            payload = _request_json(request, min(self.timeout, 5), "Supabase 의미 검색 API")
+        except (OSError, HTTPException):
+            raise RuntimeError("Supabase 의미 검색 API 연결에 실패했습니다.") from None
+        if not isinstance(payload, list):
+            raise RuntimeError("Supabase 의미 검색 응답 형식이 올바르지 않습니다.")
+        try:
+            scores = {int(row["item_id"]): float(row["similarity"]) for row in payload}
+            if any(item_id <= 0 or not math.isfinite(score) or not 0.55 <= score <= 1.000001
+                   for item_id, score in scores.items()):
+                raise ValueError
+            return {item_id: min(score, 1.0) for item_id, score in scores.items()}
+        except (KeyError, TypeError, ValueError):
+            raise RuntimeError("Supabase 의미 검색 응답 형식이 올바르지 않습니다.") from None
 
 
 def map_location_from_rpc(row: Any) -> dict[str, Any] | None:

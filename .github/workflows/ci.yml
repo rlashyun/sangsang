@@ -24,6 +24,7 @@ jobs:
       KAKAO_JAVASCRIPT_KEY: test-kakao-js-key
       SUPABASE_URL: https://example.supabase.co
       SUPABASE_SECRET_KEY: test-supabase-secret
+      OPENROUTER_API_KEY: ""
 
     steps:
       - name: Check out repository

@@ -51,13 +51,15 @@
 
 GET /api/found-items?location_ids=...&q=...
   ① 후보 조회   location_ids 묶음으로 습득물 조회      ← 공간 1차 필터
-  ② 랭킹        rank_found_items(candidates, q)       ← 검색 2차 필터
+  ② 랭킹        BM25 키워드 + BGE-M3 의미 병렬 검색 → 점수 합산 ← 검색 2차 필터
 
 GET /api/found-items?location_ids=...[&cursor=등록일:id]   ← q가 없을 때
   RPC found_items_page로 최신순 50건씩. 첫 페이지에 total_count, 다음 페이지가 있으면 next_cursor
 ```
 
 **검색은 언제나 `location_ids` 스코프 안에서만 일어난다.** 전국 단위 물품 검색 경로는 없다. 후보가 수백 건으로 줄어 있기 때문에 느슨한 임계값을 써도 오탐이 감당 가능한 범위에 머문다 — 이 전제가 깨지면 임계값도 다시 잡아야 한다. (PRD 4.1 차별점 1)
+
+2026-11-11 김성현 승인 검색 초안은 `search/hybrid.py`에 있다. BM25와 기존 퍼지 보조 점수로 키워드 결과를 만들고, `integrations/embeddings.py`의 BGE-M3 질의 벡터와 `search_found_items_semantic` RPC 결과를 합산한다. 의미 검색이 불가능하면 키워드 결과를 유지한다. 가중치·임계값은 PRD 4.5와 README를 따른다.
 
 ### 보관기관 매칭 (수집 시)
 
