@@ -48,6 +48,18 @@ Vercel 프로젝트는 `sangsang-retriever-mvp` (`prj_Jiq8KU3koMpltvjcBgKkHO0EHX
 
 ## 이후 실험 기록 규칙
 
+### 5초 목표 검색 경로 개선 — 2026-11-11, 기준 f8826b8
+
+- 사용자 요청: 의미 검색 시간 초과 해결, 5초 응답 목표, 오탐 억제, 오타 보조 실험. 작업 계획은 `tasks/plan.md`, 체크리스트는 `tasks/todo.md`다.
+- 운영 적용: `20261111103818_lossless_scoped_search.sql`. 새 파생 테이블 `found_item_search_documents`와 `found_item_search_vectors`, 새 이름의 fast semantic/candidate/detail RPC와 원본 변경 동기화 트리거를 추가했다. 기존 물품·원본 벡터·원래 의미 검색 RPC는 덮어쓰지 않았다. 버전은 원격 migration list와 일치시켰다.
+- 벡터는 halfvec → vector 왕복이 원본 vector와 정확히 같을 때만 halfvec으로 저장하며, 그렇지 않으면 원래 fp32 vector를 보관한다. 두 컬럼은 STORAGE PLAIN으로 원본의 out-of-line 벡터 접근 비용을 줄인다. 근사 인덱스나 손실 양자화가 아니다. 새 자료는 원본의 현재 hash/is_current/model/provider/input_version을 검증해 생성한다.
+- 물품 변경·위치 변경·임베딩 변경/삭제 시 동기화한다. 현재 벡터가 없거나 오래되면 키워드 검색용 문서는 유지하고 벡터만 제외한다. 새 임베딩을 자동으로 API 생성하는 기능은 추가하지 않았다.
+- 검증: 물품 업데이트→문서/벡터 생성, 임베딩 stale 전환→검색 벡터 제외를 실제 트랜잭션에서 검사하고 rollback했다. 보안 advisor는 service_role 전용 테이블에 대한 RLS/no-policy INFO만 반환했다.
+- 초기 적재는 파생 테이블만 채우며 `scripts/seed_search_projection.py --after ID`로 재개할 수 있다. 기존 값과 충돌하면 동기화 트리거의 새 값이 우선한다. 최초 110,000행 처리 후 재개 ID는 140892였다.
+- 초기 적재의 전체 원문 복합행 materialization 비용을 줄이는 후속 migration `20261111104850_optimize_search_seed.sql`도 적용했다. 기존 원문 raw_payload는 읽어 복제하지 않는다. 이 후속 변경은 초기 적재 함수만 교체하며 앱 계약을 바꾸지 않는다.
+- 복구 SQL: `supabase/rollbacks/20261111103818_lossless_scoped_search.sql`. 이전 앱으로 복구한 뒤 이 파일을 검토하여 **새 forward migration**으로 적용한다. 새 트리거·새 RPC·파생 테이블만 제거하며, 원본 물품과 임베딩 및 기존 함수 정의는 그대로 남는다. 원격 적용 이력을 삭제하지 않는다. rollback 파일은 보관용이며 아직 실행하지 않았다.
+- 기존 이력 주의: 예전 scoped_bge_m3_semantic_search는 로컬 파일 버전 `20261111042228`, 원격 적용 버전 `20261111042456`으로 차이가 있었다. 이번 새 migration 2개는 원격 적용 버전에 맞췄다. 이 기록만으로 전체 과거 migration drift가 해소된 것은 아니다.
+
 ### 첨부 개선안의 첫 적용분 — 2026-11-11 KST
 
 - 기준: `9230092`(기능 코드는 `ebae393`와 같음). 아래 변경은 DB나 Vercel 환경변수를 수정하지 않는 앱 변경이다. 새 SQL 마이그레이션은 없다.
