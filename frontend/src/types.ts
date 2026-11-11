@@ -51,14 +51,15 @@ export interface FoundItem {
 
 export interface FoundItemsPayload {
   items?: FoundItem[];
-  /** 검색어가 있을 때만 — 퍼지 점수를 매긴 후보 전체 수 */
-  candidate_count?: number;
-  /** 검색어가 없을 때 첫 페이지에서만 — 선택 기관의 보관 물품 총수. 다음 페이지부터는 null */
+  /** 검색어가 있을 때 — 선택 기관 범위의 전체 물품 수 */
+  candidate_count?: number | null;
+  /** 검색 결과 총수. 검색어 없는 목록은 첫 페이지에서만 제공하고 다음부터 null */
   total_count?: number | null;
-  /** 검색어가 없을 때 다음 50건을 받을 커서. 마지막 페이지이거나 검색어가 있으면 null */
+  /** 다음 50건 커서. 검색은 search:offset, 일반 목록은 등록일:id. 마지막 페이지는 null */
   next_cursor?: string | null;
   query?: string;
-  semantic_status?: "ok" | "disabled" | "unavailable";
+  semantic_status?: "ok" | "disabled" | "unavailable" | "skipped";
+  match_count?: number;
 }
 
 export interface InstitutionPayload {

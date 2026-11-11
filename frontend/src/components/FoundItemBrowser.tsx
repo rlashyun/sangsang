@@ -109,7 +109,7 @@ export function FoundItemBrowser({
           : "현재 조건에 해당하는 습득물이 없습니다.");
       } else {
         setStatus(searchQuery
-          ? `후보 ${(payload.candidate_count ?? 0).toLocaleString("ko-KR")}건 중 유사한 물품 ${nextItems.length.toLocaleString("ko-KR")}건`
+          ? `검색 결과 상위 ${(payload.match_count ?? nextItems.length).toLocaleString("ko-KR")}건`
           : storedItemsStatus(nextTotal ?? nextItems.length));
       }
     } catch (error) {
@@ -151,7 +151,9 @@ export function FoundItemBrowser({
       setNextCursor(result.nextCursor);
       setItemPage(result.page);
       setStatusIsError(false);
-      setStatus(storedItemsStatus(totalCount ?? result.items.length));
+      setStatus(submittedQueryRef.current
+        ? `검색 결과 상위 ${(totalCount ?? result.items.length).toLocaleString("ko-KR")}건`
+        : storedItemsStatus(totalCount ?? result.items.length));
     } catch (error) {
       if (sequence !== requestSequence.current) return;
       // 이미 보여 준 목록은 유지하고, 같은 버튼으로 다시 시도할 수 있게 둔다.

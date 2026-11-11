@@ -20,7 +20,7 @@ from ..integrations.supabase import (
     apply_item_counts,
     validate_location_ids,
 )
-from ..search.hybrid import search_found_items
+from ..search.hybrid import search_with_deadline, SearchDeadlineExceeded
 
 
 DEFAULT_STATIC_DIR = Path(__file__).with_name("static")
@@ -186,20 +186,29 @@ def create_app(
                     ),
                 }
             )
+        offset = 0
         if cursor.strip():
-            raise ValueError("검색어 결과는 페이지로 나눠 받지 않습니다.")
+            if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
+                raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
+            offset = int(cursor.strip().split(":")[1])
         # PRD 4.1 · 4.5 — 키워드와 의미 검색을 같은 기관 범위에서 병렬 실행한다.
-        matched_items, candidate_count, semantic_status = search_found_items(
-            found_item_client, search_query, validated_ids, embedding_client,
-        )
+        try:
+            matched_items, candidate_count, semantic_status = search_with_deadline(
+                found_item_client, search_query, validated_ids, embedding_client, offset=offset,
+            )
+        except SearchDeadlineExceeded as error:
+            return JSONResponse(status_code=504, content={"error": str(error)})
+        match_count = len(matched_items)
+        page_items = matched_items[offset:offset+FOUND_ITEM_PAGE_LIMIT]
         return JSONResponse(
             content={
-                "items": matched_items,
+                "items": page_items,
                 "candidate_count": candidate_count,
                 "semantic_status": semantic_status,
-                "match_count": len(matched_items),
+                "match_count": match_count,
+                "total_count": match_count,
                 "query": search_query,
-                "next_cursor": None,
+                "next_cursor": f"search:{offset+FOUND_ITEM_PAGE_LIMIT}" if offset+FOUND_ITEM_PAGE_LIMIT<match_count else None,
             }
         )
 

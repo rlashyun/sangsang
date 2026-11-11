@@ -53,7 +53,7 @@
 
 GET /api/found-items?location_ids=...&q=...
   ① 후보 조회   location_ids 묶음으로 습득물 조회      ← 공간 1차 필터
-  ② 랭킹        BM25 키워드 + BGE-M3 의미 병렬 검색 → 점수 합산 ← 검색 2차 필터
+  ② 랭킹        키워드 후보/BM25 ∥ 질의 임베딩 → 후보 200건 의미 재정렬 ← 검색 2차 필터
 
 GET /api/found-items?location_ids=...[&cursor=등록일:id]   ← q가 없을 때
   RPC found_items_page로 최신순 50건씩. 첫 페이지에 total_count, 다음 페이지가 있으면 next_cursor
@@ -61,7 +61,11 @@ GET /api/found-items?location_ids=...[&cursor=등록일:id]   ← q가 없을 �
 
 **검색은 언제나 `location_ids` 스코프 안에서만 일어난다.** 전국 단위 물품 검색 경로는 없다. 후보가 수백 건으로 줄어 있기 때문에 느슨한 임계값을 써도 오탐이 감당 가능한 범위에 머문다 — 이 전제가 깨지면 임계값도 다시 잡아야 한다. (PRD 4.1 차별점 1)
 
-2026-11-11 김성현 승인 검색 초안은 `search/hybrid.py`에 있다. BM25와 기존 퍼지 보조 점수로 키워드 결과를 만들고, `integrations/embeddings.py`의 BGE-M3 질의 벡터와 `search_found_items_semantic` RPC 결과를 합산한다. 의미 검색이 불가능하면 키워드 결과를 유지한다. 가중치·임계값은 PRD 4.5와 README를 따른다.
+2026-11-11 최신 사용자 지시: 키워드 후보 조회/BM25와 BGE-M3 질의 임베딩을 병렬 실행한다.
+키워드 상위 200건만 벡터를 읽어 RAM에서 재정렬하고, 나머지 키워드 일치 결과도 유지한다.
+기관 전체 의미 벡터 검색·물품별 퍼지는 호출하지 않는다. 키워드 후보 밖 의미 단독 결과를 찾지 못하는 한계가 있다.
+검색 결과도 50건 커서로 이어 받는다. 전체 대기 상한 4.6초와 정상 성공 5초 목표를 구분한다.
+최신 마이그레이션·완료된 일회성 유지보수 및 복구 상태는 `docs/search-experiment-recovery.md`를 따른다.
 
 ### 보관기관 매칭 (수집 시)
 
