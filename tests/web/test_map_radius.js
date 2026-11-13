@@ -26,10 +26,10 @@ test("radius geometry and marker labels", async () => {
   const seoul = { latitude: 37.5665, longitude: 126.9780 };
   assert.equal(distanceMeters(seoul, seoul), 0);
 
-  assert.deepEqual(SEARCH_RADIUS_OPTIONS_METERS, [1000, 2000, 3000]);
+  assert.deepEqual(SEARCH_RADIUS_OPTIONS_METERS, [1000, 1500, 2000]);
   assert.equal(DEFAULT_SEARCH_RADIUS_METERS, 1000);
   assert.equal(radiusKilometersLabel(1000), "1km");
-  assert.equal(radiusKilometersLabel(3000), "3km");
+  assert.equal(radiusKilometersLabel(1500), "1.5km");
   assert.equal(radiusKilometersLabel(2000), "2km");
 
   const aboutOneKilometerNorth = { latitude: 37.5754932, longitude: 126.9780 };
@@ -48,10 +48,12 @@ test("radius geometry and marker labels", async () => {
   assert.equal(markerCountLabel(1500), "999+");
 });
 
-test("manual radius expands one step at a time and stops at 3km", async () => {
-  const { nextSearchRadiusMeters } = await import("../../frontend/src/lib/geo.js");
-  assert.equal(nextSearchRadiusMeters(1000), 2000);
-  assert.equal(nextSearchRadiusMeters(2000), 3000);
-  assert.equal(nextSearchRadiusMeters(3000), null);
-  assert.equal(nextSearchRadiusMeters(5000), null);
+test("search radius moves one step at a time between 1km and 2km", async () => {
+  const { nextSearchRadiusMeters, previousSearchRadiusMeters } = await import("../../frontend/src/lib/geo.js");
+  assert.equal(nextSearchRadiusMeters(1000), 1500);
+  assert.equal(nextSearchRadiusMeters(1500), 2000);
+  assert.equal(nextSearchRadiusMeters(2000), null);
+  assert.equal(previousSearchRadiusMeters(2000), 1500);
+  assert.equal(previousSearchRadiusMeters(1500), 1000);
+  assert.equal(previousSearchRadiusMeters(1000), null);
 });

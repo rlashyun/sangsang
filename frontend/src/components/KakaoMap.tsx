@@ -42,9 +42,11 @@ interface KakaoMapProps {
   institutionsLoaded: boolean;
   institutionError: string;
   countsAvailable: boolean;
+  countsLoading: boolean;
   places: Place[];
   placeNumbers: number[];
   selectedPlace: Place | null;
+  searchCenters: Place[];
   previewPlace: Place | null;
   radiusMeters: number;
   visibleInstitutions: Institution[];
@@ -60,26 +62,28 @@ function coordinateKey(institution: Institution) {
 
 function compactMarkerImage(kakao: any, mapColors: MapColorTokens, source: string | undefined, selected = false, number?: number) {
   const police = source === "police";
-  const color = police ? mapColors.pinPolice : mapColors.pinPartner;
-  const width = 28;
-  const height = 36;
-  // PRD 4.4 — 범례와 같은 색을 사용하고 클러스터보다 진하게 표시한다.
+  const institution = number === undefined;
+  const color = number !== undefined ? mapColors.pinPlace : police ? mapColors.pinPolice : mapColors.pinPartner;
+  const width = institution ? 34 : 28;
+  const height = institution ? 44 : 36;
+  const borderWidth = selected ? 2.5 : institution ? 2 : 1.5;
+  // PRD 4.4 — 기관은 범례 색과 흰 표식으로 검색 후보 및 지도 기호와 구분한다.
   const pinPath = "M15 3C8.9 3 4 7.9 4 14c0 8.2 11 18 11 18s11-9.8 11-18C26 7.9 21.1 3 15 3Z";
   const innerShape = number !== undefined
     ? `<text x="15" y="18" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="700" fill="${mapColors.textOnSolid}">${number}</text>`
     : police
-    ? `<path d="M15 9l4 2v3c0 2-2 3.5-4 4.5-2-1-4-2.5-4-4.5v-3z" fill="${mapColors.pinShadow}" fill-opacity=".65"/>`
-    : `<circle cx="15" cy="14" r="3" fill="${mapColors.pinShadow}" fill-opacity=".65"/>`;
+    ? `<path d="M15 9l4 2v3c0 2-2 3.5-4 4.5-2-1-4-2.5-4-4.5v-3z" fill="${mapColors.textOnSolid}"/>`
+    : `<circle cx="15" cy="14" r="3.3" fill="${mapColors.textOnSolid}"/>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 30 38">`
     + `<filter id="soft-shadow" x="-40%" y="-30%" width="180%" height="180%"><feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="${mapColors.pinShadow}" flood-opacity=".16"/></filter>`
     + (selected ? `<circle cx="15" cy="15" r="14" fill="${color}" fill-opacity=".2"/>` : "")
     + `<path d="${pinPath}" fill="${mapColors.textOnSolid}" filter="url(#soft-shadow)"/>`
-    + `<path d="${pinPath}" fill="${color}" fill-opacity="1" stroke="${mapColors.textOnSolid}" stroke-width="${selected ? 2.5 : 1.5}"/>`
+    + `<path d="${pinPath}" fill="${color}" fill-opacity="1" stroke="${mapColors.textOnSolid}" stroke-width="${borderWidth}"/>`
     + innerShape + "</svg>";
   return new kakao.maps.MarkerImage(
     `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
     new kakao.maps.Size(width, height),
-    { offset: new kakao.maps.Point(14, 30) },
+    { offset: new kakao.maps.Point(width / 2, Math.round(height * 32 / 38)) },
   );
 }
 
@@ -87,8 +91,8 @@ function placePreviewMarkerImage(kakao: any, colors: MapColorTokens) {
   // PRD 4.3-A — 확인 중인 장소는 기존 기관 핀보다 큰 흰색 핀으로 구분한다.
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="38" height="48" viewBox="0 0 38 48">`
     + `<filter id="s" x="-40%" y="-30%" width="180%" height="180%"><feDropShadow dx="0" dy="2" stdDeviation="1.8" flood-color="${colors.pinShadow}" flood-opacity=".22"/></filter>`
-    + `<path d="M19 3C10.7 3 4 9.7 4 18c0 11 15 25 15 25s15-14 15-25C34 9.7 27.3 3 19 3Z" fill="${colors.textOnSolid}" stroke="${colors.pinPartner}" stroke-width="1.5" filter="url(#s)"/>`
-    + `<circle cx="19" cy="18" r="5" fill="${colors.pinPartner}"/>`
+    + `<path d="M19 3C10.7 3 4 9.7 4 18c0 11 15 25 15 25s15-14 15-25C34 9.7 27.3 3 19 3Z" fill="${colors.textOnSolid}" stroke="${colors.pinPlace}" stroke-width="1.5" filter="url(#s)"/>`
+    + `<circle cx="19" cy="18" r="5" fill="${colors.pinPlace}"/>`
     + "</svg>";
   return new kakao.maps.MarkerImage(
     `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`,
@@ -150,19 +154,15 @@ function institutionDetails(
     + "</div>";
 }
 
-function circleBounds(kakao: any, center: Place, radiusMeters: number) {
+function circleBounds(kakao: any, centers: Place[], radiusMeters: number) {
   const latitudeDelta = radiusMeters / 111320;
-  const longitudeScale = Math.max(0.1, Math.cos(center.latitude * Math.PI / 180));
-  const longitudeDelta = radiusMeters / (111320 * longitudeScale);
   const bounds = new kakao.maps.LatLngBounds();
-  bounds.extend(new kakao.maps.LatLng(
-    center.latitude - latitudeDelta,
-    center.longitude - longitudeDelta,
-  ));
-  bounds.extend(new kakao.maps.LatLng(
-    center.latitude + latitudeDelta,
-    center.longitude + longitudeDelta,
-  ));
+  for (const center of centers) {
+    const longitudeScale = Math.max(0.1, Math.cos(center.latitude * Math.PI / 180));
+    const longitudeDelta = radiusMeters / (111320 * longitudeScale);
+    bounds.extend(new kakao.maps.LatLng(center.latitude - latitudeDelta, center.longitude - longitudeDelta));
+    bounds.extend(new kakao.maps.LatLng(center.latitude + latitudeDelta, center.longitude + longitudeDelta));
+  }
   return bounds;
 }
 
@@ -172,9 +172,11 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   institutionsLoaded,
   institutionError,
   countsAvailable,
+  countsLoading,
   places,
   placeNumbers,
   selectedPlace,
+  searchCenters,
   previewPlace,
   radiusMeters,
   visibleInstitutions,
@@ -414,24 +416,34 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     });
 
     const selectedMarker = searchMarkersRef.current.find(({ place }) => place === selectedPlace)?.marker;
-    if (selectedMarker) {
+    if (selectedMarker && searchCenters.length === 1) {
       infoWindowRef.current.setContent(
         `<div class="info-window"><strong>${escapeHtml(selectedPlace.name)}</strong>`
         + `<span>${escapeHtml([selectedPlace.address, selectedPlace.phone].filter(Boolean).join(" · "))}</span></div>`,
       );
       infoWindowRef.current.open(map, selectedMarker);
+    } else {
+      infoWindowRef.current?.close();
     }
     if (!preserveViewportRef.current) {
-      map.setBounds(circleBounds(kakao, selectedPlace, radiusMeters), 48, 48, 48, 48);
+      map.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48);
     }
     preserveViewportRef.current = false;
-  }, [institutions, mapColors, mapReady, radiusMeters, selectedPlace, visibleInstitutions, softenedMarkers]);
+  }, [institutions, mapColors, mapReady, radiusMeters, searchCenters, selectedPlace, visibleInstitutions, softenedMarkers]);
 
   useEffect(() => {
-    if (!mapReady || !mapRef.current || !selectedPlace) return;
-    const halo = createRadiusHalo(window.kakao, mapRef.current, selectedPlace, radiusMeters, mapColors.radiusFill);
-    return () => halo.setMap(null);
-  }, [mapColors, mapReady, radiusMeters, selectedPlace]);
+    const map = mapRef.current;
+    if (!mapReady || !map || !searchCenters.length) return;
+    const kakao = window.kakao;
+    const halos = searchCenters.map(place => createRadiusHalo(kakao, map, place, radiusMeters, mapColors.radiusFill));
+    const markers = searchCenters.filter(place => place !== selectedPlace || !places.includes(place)).map(place => (
+      new kakao.maps.Marker({ map, position: new kakao.maps.LatLng(place.latitude, place.longitude), image: placePreviewMarkerImage(kakao, mapColors), title: place.name, zIndex: 5 })
+    ));
+    return () => {
+      halos.forEach(halo => halo.setMap(null));
+      markers.forEach(marker => marker.setMap(null));
+    };
+  }, [mapColors, mapReady, places, radiusMeters, searchCenters, selectedPlace]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || selectedPlace || !previewPlace) return;
@@ -479,7 +491,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
             {selectedPlace && <b>반경 {radiusKilometersLabel(radiusMeters)}</b>}
             <span className="source-count"><span className="source-dot partner" />연계기관 <strong>{sourceCounts.partner.toLocaleString("ko-KR")}곳</strong></span>
             <span className="source-count"><span className="source-dot police" />경찰청 <strong>{sourceCounts.police.toLocaleString("ko-KR")}곳</strong></span>
-            {!countsAvailable && <span className="count-warning">물품 수 미연결</span>}
+            {!countsAvailable && <span className="count-warning">{countsLoading ? "물품 수 불러오는 중…" : "물품 수 미연결"}</span>}
           </>
         )}
       </div>

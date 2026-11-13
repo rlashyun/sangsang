@@ -57,7 +57,7 @@ export default defineConfig(({ command, mode }) => {
     ],
     server: {
       proxy: {
-        "/api": "http://127.0.0.1:8000",
+        "/api": env.RETRIEVER_DEV_API_TARGET || "http://127.0.0.1:8000",
       },
     },
     build: {

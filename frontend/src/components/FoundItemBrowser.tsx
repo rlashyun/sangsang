@@ -10,13 +10,16 @@ import {
 import {
   radiusKilometersLabel,
   nextSearchRadiusMeters,
+  previousSearchRadiusMeters,
 } from "../lib/geo.js";
 import type { FoundItem, Institution } from "../types";
 import { FoundItemDetail } from "./FoundItemDetail";
 import { FoundItemThumbnail } from "./FoundItemThumbnail";
 
 interface FoundItemBrowserProps {
+  initialQuery?: string;
   scope: Institution[];
+  previousRadiusLocationIds: ReadonlySet<number>;
   scopeTitle: string;
   canShowRadiusScope: boolean;
   radiusMeters: number;
@@ -24,11 +27,13 @@ interface FoundItemBrowserProps {
   onRadiusChange: (radiusMeters: number) => void;
   canExpandRadius: boolean;
   onSubmittedQueryChange: (query: string) => void;
-  onAlertRequest: () => void;
+  onAlertRequest?: () => void;
 }
 
 export function FoundItemBrowser({
+  initialQuery = "",
   scope,
+  previousRadiusLocationIds,
   scopeTitle,
   canShowRadiusScope,
   radiusMeters,
@@ -46,10 +51,11 @@ export function FoundItemBrowser({
     historyKey: string;
   } | null>(null);
   const detailIsOpen = detail !== null && location.state?.foundItemDetail === detail.historyKey;
-  const [query, setQuery] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
-  const submittedQueryRef = useRef("");
+  const [query, setQuery] = useState(initialQuery);
+  const [submittedQuery, setSubmittedQuery] = useState(initialQuery);
+  const submittedQueryRef = useRef(initialQuery);
   const [items, setItems] = useState<FoundItem[]>([]);
+  const [loadedRadius, setLoadedRadius] = useState<number | null>(null);
   const [itemPage, setItemPage] = useState(0);
   const pageSize = 4;
   const [status, setStatus] = useState(
@@ -65,8 +71,10 @@ export function FoundItemBrowser({
   const locationIds = useMemo(() => institutionLocationIds(scope), [scope]);
   const showCenteredStatus = items.length === 0 && !isLoading && !statusIsError;
   const nextRadius = nextSearchRadiusMeters(radiusMeters);
+  const previousRadius = previousSearchRadiusMeters(radiusMeters);
   const loadedPages = Math.ceil(items.length / pageSize);
   const visibleItems = items.slice(itemPage * pageSize, (itemPage + 1) * pageSize);
+  const showLoadingOverCards = (isLoading || isLoadingMore) && visibleItems.length > 0;
   const pageNumbers = itemPageNumbers(itemPage, loadedPages);
 
   async function load(searchQuery: string, signal?: AbortSignal) {
@@ -98,6 +106,7 @@ export function FoundItemBrowser({
       const nextItems = payload.items || [];
       const nextTotal = payload.total_count ?? (payload.next_cursor ? null : nextItems.length);
       setItems(nextItems);
+      setLoadedRadius(radiusMeters);
       setNextCursor(payload.next_cursor ?? null);
       setTotalCount(nextTotal);
       if (!nextItems.length) {
@@ -235,12 +244,14 @@ export function FoundItemBrowser({
       </form>
 
       <div
-        className={`found-item-status${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
+        className={`found-item-status${(isLoading || isLoadingMore) && !showLoadingOverCards ? " search-loading" : ""}${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
+        aria-hidden={showLoadingOverCards || undefined}
         role="status"
         aria-live="polite"
       >
-        {status}
+        {showLoadingOverCards ? "습득물 목록" : status}
       </div>
+      <div className={`found-items-region${visibleItems.length ? "" : " empty"}`}>
       <ol className="found-items" data-page-size={pageSize} aria-label="습득물 목록" aria-busy={isLoading || isLoadingMore}>
         {visibleItems.map((item, index) => {
           // PRD 3.1-6 · 4.5 · D2 — 유사도 %는 화면에 노출하지 않는다(match_score는 내부 평가용).
@@ -259,6 +270,9 @@ export function FoundItemBrowser({
                 <div className="item-card-top">
                   <span className="item-category">{item.raw_category_name}</span>
                   {item.color_name?.trim() && <span className="item-color" title={item.color_name}>{item.color_name}</span>}
+                  {!isLoading && loadedRadius === radiusMeters && previousRadius !== null && item.storage_location_id != null && previousRadiusLocationIds.has(item.storage_location_id) && (
+                    <span className="item-previous-radius">{radiusKilometersLabel(previousRadius)} 이내</span>
+                  )}
                 </div>
                 <strong className="item-name" title={item.item_name || "이름 미상"}>{item.item_name || "이름 미상"}</strong>
                 <dl className="item-meta">
@@ -270,6 +284,10 @@ export function FoundItemBrowser({
           );
         })}
       </ol>
+      {showLoadingOverCards && <div className="found-items-loading search-loading" role="status">
+        {isLoadingMore ? "다음 물품 불러오는 중…" : "검색 중…"}
+      </div>}
+      </div>
       {items.length > 0 && (
         <nav className="place-pagination item-pagination" aria-label="물품 검색 결과 페이지">
           <button type="button" aria-label="이전 물품 페이지" disabled={isLoading || isLoadingMore || itemPage === 0}
@@ -280,17 +298,22 @@ export function FoundItemBrowser({
           </span>)}
           <button type="button" aria-label="다음 물품 페이지" disabled={isLoading || isLoadingMore || ((itemPage + 1) * pageSize >= items.length && !nextCursor)}
             onClick={() => { void changeItemPage(itemPage + 1); }}>›</button>
-          <span className="sr-only" role="status">{isLoadingMore ? "다음 물품을 불러오고 있습니다." : `물품 ${itemPage + 1}페이지`}</span>
+          <span className="sr-only" role="status">{`물품 ${itemPage + 1}페이지`}</span>
         </nav>
       )}
-      {submittedQuery && canExpandRadius && (
+      {canExpandRadius && (
         <div className="item-search-followup" aria-label="검색 범위 다시 살펴보기">
-          <p>찾는 물건이 없나요?</p>
+          {submittedQuery && <p>찾는 물건이 없나요?</p>}
           <div className="item-followup-actions">
-          {nextRadius !== null && <button type="button" disabled={isLoading || isLoadingMore} onClick={() => onRadiusChange(nextRadius)}>
-              {radiusKilometersLabel(nextRadius)}로 넓혀보기
-            </button>}
-          <button type="button" className="item-alert-button" aria-haspopup="dialog" disabled={isLoading || isLoadingMore} onClick={onAlertRequest}>새 물건 알림 받기</button>
+            {(previousRadius !== null || nextRadius !== null) && <div className="item-radius-actions">
+              {previousRadius !== null && <button type="button" disabled={isLoading || isLoadingMore} onClick={() => onRadiusChange(previousRadius)}>
+                {radiusKilometersLabel(previousRadius)}로 돌아가기
+              </button>}
+              {submittedQuery && nextRadius !== null && <button type="button" disabled={isLoading || isLoadingMore} onClick={() => onRadiusChange(nextRadius)}>
+                {radiusKilometersLabel(nextRadius)}로 넓혀보기
+              </button>}
+            </div>}
+            {submittedQuery && onAlertRequest && <button type="button" className="item-alert-button" aria-haspopup="dialog" disabled={isLoading || isLoadingMore} onClick={onAlertRequest}>새 물건 알림 받기</button>}
           </div>
         </div>
       )}

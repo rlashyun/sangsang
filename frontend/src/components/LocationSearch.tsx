@@ -6,6 +6,7 @@ import type { Place } from "../types";
 export const PLACE_PAGE_SIZE = 4;
 
 interface LocationSearchProps {
+  addingWaypoint: boolean;
   results: Place[];
   selectedPlace: Place | null;
   status: string;
@@ -19,6 +20,7 @@ interface LocationSearchProps {
 }
 
 export function LocationSearch({
+  addingWaypoint,
   results,
   selectedPlace,
   status,
@@ -46,8 +48,8 @@ export function LocationSearch({
     <>
       <header className="landing-header">
         <p className="eyebrow">RETRIEVER MAP</p>
-        <h1 id="page-title">어디서 잃어버렸어요?</h1>
-        <p className="lede">기억나는 장소를 입력하면 근처 습득물을 보여줘요.</p>
+        <h1 id="page-title">{addingWaypoint ? "추가할 장소를 찾아주세요" : "어디서 잃어버렸어요?"}</h1>
+        <p className="lede">{addingWaypoint ? "장소를 추가하면 각 장소 주변의 습득물을 함께 찾아요." : "기억나는 장소를 입력하면 근처 습득물을 보여줘요."}</p>
       </header>
 
       <div className="location-search-view">
@@ -61,6 +63,7 @@ export function LocationSearch({
                 type="search"
                 maxLength={200}
                 autoComplete="off"
+                autoFocus={addingWaypoint}
                 placeholder="장소명 또는 주소를 입력하세요"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -83,7 +86,7 @@ export function LocationSearch({
         </form>
 
         <div
-          className={`status${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
+          className={`status${isSearching ? " search-loading" : ""}${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
           role="status"
           aria-live="polite"
         >
@@ -103,19 +106,18 @@ export function LocationSearch({
                   aria-pressed={isActive}
                 >
                   <span className="result-copy">
-                    <span className="result-title" title={place.name}>{start + index + 1}. {place.name}</span>
-                    <span className="result-address" title={place.address}>{place.address}</span>
+                    <span className="result-title">{start + index + 1}. {place.name}</span>
+                    <span className="result-address">{place.address}</span>
                     {category && <span className="place-category-tag">{category}</span>}
                   </span>
                 </button>
-                <div className="place-card-action">
+                {isActive && <div className="place-card-action">
                   <button
                     type="button"
                     onClick={onConfirm}
-                    disabled={isSearching || !isActive}
-                    className={isActive ? "" : "place-confirm-hidden"}
-                  >이 위치 선택하기</button>
-                </div>
+                    disabled={isSearching}
+                  >{addingWaypoint ? "이 장소 추가하기" : "이 장소 선택하기"}</button>
+                </div>}
               </li>
             );
           })}

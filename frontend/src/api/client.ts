@@ -16,8 +16,9 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return payload;
 }
 
-export function fetchInstitutions(signal?: AbortSignal) {
-  return fetchJson<InstitutionPayload>("/api/institutions", signal);
+export function fetchInstitutions(signal?: AbortSignal, withCounts = true) {
+  const url = withCounts ? "/api/institutions" : "/api/institutions?with_counts=false";
+  return fetchJson<InstitutionPayload>(url, signal);
 }
 
 export function searchPlaces(params: URLSearchParams, signal?: AbortSignal) {

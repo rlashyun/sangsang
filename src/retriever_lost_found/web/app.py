@@ -102,15 +102,17 @@ def create_app(
         return client.geocode_address(address)
 
     @app.get("/api/institutions")
-    def institution_list() -> JSONResponse:
+    def institution_list(with_counts: bool = True) -> JSONResponse:
         count_error = None
         if map_location_client is None:
             locations = map_locations
             counts_available = False
         else:
             try:
-                database_locations = map_location_client.fetch_locations()
+                database_locations = map_location_client.fetch_locations(with_counts=with_counts)
             except RuntimeError as error:
+                if not with_counts:
+                    raise
                 # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
                 database_locations = map_location_client.fetch_locations(with_counts=False)
                 count_error = str(error)
@@ -132,7 +134,7 @@ def create_app(
                 locations = apply_item_counts(map_locations, counts, location_ids)
             else:
                 locations = database_locations
-            counts_available = count_error is None
+            counts_available = with_counts and count_error is None
         # 개수 없는 응답은 짧게만 캐시해 집계가 회복되면 곧 다시 반영되게 한다.
         cdn_cache = (
             "public, s-maxage=300, stale-while-revalidate=600"
