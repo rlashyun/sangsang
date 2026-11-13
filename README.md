@@ -130,6 +130,45 @@ Hobby 요금제는 단일 리전만 허용하므로 `regions`에는 한 곳만 �
 
 ## 일일 데이터 동기화
 
+### 물품 임베딩 자동 생성
+
+운영 물품 검색의 기존 퍼지 로직은 유지합니다. 수집 완료 뒤의 임베딩 생성만 별도로 연결합니다.
+경찰·연계기관 실행이 모두 종료되면 DB가 작업을 등록하고, 인증된
+`POST /api/cron/embedding-sync`가 별도 실행을 시작합니다. 미완료 작업은
+한국시간 오전 11시 예약의 `GET /api/cron/embedding-sync`가 복구합니다.
+Hobby 예약은 해당 시간대 안에서 지연될 수 있습니다.
+
+Production 서버에 `OPENROUTER_API_KEY`를 Secret으로 설정해야 합니다.
+선택 설정인 `EMBEDDING_WORKER_URL`은 콜백 전체 URL이며, 비워두면 Vercel의
+`VERCEL_PROJECT_PRODUCTION_URL`에 `/api/cron/embedding-sync`를 붙입니다.
+요청의 Host 헤더로 콜백 주소를 만들지 않습니다. 모든 크론은 기존 `CRON_SECRET`으로 인증합니다.
+
+입력은 DB 생성 컬럼 `found_items.embedding_input`입니다. 색상의 괄호 안 한국어와
+원본 물품명을 공백으로 연결합니다(`블랙(검정)` + `구찌 카드지갑` → `검정 구찌 카드지갑`).
+괄호 없는 한국어 색상과 `기타`는 유지하고, 미상 영문 색상은 생략합니다.
+설명·분류·`normalized_search_text`는 넣지 않으며 원본 컬럼도 변경하지 않습니다.
+
+모델은 BGE-M3/DeepInfra 1,024차원, 입력 버전은 `color_ko_item_name:v2`입니다.
+원본·검색용 벡터는 모두 half로 저장합니다. 이미 생성한 물품은 이름·색상이 수정돼도
+재생성하지 않고, 당시 입력을 `embedded_input`에 보관합니다. 신규/벡터 누락 물품만 처리합니다.
+배치는 32건, API 동시 요청은 2개이고, 실행마다 240초 뒤 진행 상태를 저장해 이어갑니다.
+`embedding_runs`의 상태·성공/실패 시도 건수·잔여 건수·입력 없음 건수를 확인하세요.
+새 v2의 모델·제공자·문장·해시가 모두 같은 경우에만 벡터를 재사용하며,
+`reused_count`는 성공 건수에 포함된 재사용 건수를 따로 표시합니다.
+API 키 누락·API 실패는 성공으로 기록하지 않습니다.
+
+전량 보충 또는 중단 후 재개는 아래 명령을 사용합니다. 이 명령은 벡터를 삭제하지 않습니다.
+
+```powershell
+uv run python -m retriever_lost_found.embedding.cli --until-complete
+```
+
+DB 마이그레이션 `color_item_half_embeddings_v2`에는 **기존 벡터 초기화**가 포함됩니다.
+운영에서 이미 적용한 동일 버전을 다시 실행하지 말고 마이그레이션 이력을 확인하세요.
+원본·검색용 벡터 테이블과 검색 문서 구조의 선행 마이그레이션도 함께 보관합니다.
+DB 통합 검증은 두 물품과 빈 벡터 테이블을 둔 격리된 테스트 DB에서
+`tests/database/embedding_v2_integration.sql`로 수행하며 마지막에 롤백합니다. 운영 DB에서는 실행하지 않습니다.
+
 두 경찰청 API에서 6개 서비스 카테고리만 선별해 Supabase에 멱등 upsert합니다.
 각 출처의 마지막 등록일을 다시 포함해 누락된 늦은 등록 건을 보충하므로 매일 전체
 6개월 구간을 다시 내려받지 않습니다. 오늘은 미완료 날짜로 보고 어제 등록분까지만

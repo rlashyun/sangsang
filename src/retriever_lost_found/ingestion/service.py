@@ -347,15 +347,16 @@ def _sync_source(
     source_code = SOURCE_CODES[source]
     window_start = retention_start(today, SOURCE_RETENTION_MONTHS[source])
     window_end = today - timedelta(days=1)
-    latest_registered_on = store.latest_registered_on(source_code)
-    if incremental_only:
-        # 전날 등록분을 다시 읽어 늦게 공개된 항목도 반영합니다.
+    trigger = "vercel_cron_incremental" if incremental_only else "manual_catchup"
+    start_date = window_start
+    lookup_error = None
+    try:
+        latest_registered_on = store.latest_registered_on(source_code)
         start_candidate = min(latest_registered_on or window_start, window_end)
-        trigger = "vercel_cron_incremental"
-    else:
-        start_candidate = min(latest_registered_on or window_start, window_end)
-        trigger = "manual_catchup"
-    start_date = max(window_start, start_candidate)
+        start_date = max(window_start, start_candidate)
+    except Exception as error:
+        # Still create and close an audit, so the embedding barrier can recover.
+        lookup_error = error
     result = _empty_result(source_code, "running")
 
     try:
@@ -372,6 +373,8 @@ def _sync_source(
     upsert_completed = False
     client = None
     try:
+        if lookup_error is not None:
+            raise lookup_error
         category_ids = store.load_category_ids(source_code)
         aliases = store.load_aliases(source_code)
         locations = store.load_locations(source_code)
@@ -460,6 +463,8 @@ def _audit_values(
     upsert_completed: bool = True,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
+        "business_date": (end_date + timedelta(days=1)).isoformat(),
+        "upsert_completed": upsert_completed,
         "window_start": start_date.isoformat(),
         "window_end": end_date.isoformat(),
         "trigger": trigger,
