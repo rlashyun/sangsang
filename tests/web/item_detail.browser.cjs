@@ -7,6 +7,7 @@ async (page) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   let responseMode = "success";
+  let minimumInstitutionId = 77;
   let itemRequests = 0;
   let lastItemQuery = null;
   let placeRequests = 0;
@@ -77,11 +78,18 @@ async (page) => {
         `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#543b2b"/><text x="20" y="80" fill="white">TEST WALLET</text></svg>` });
     }
     if (url.hostname !== "127.0.0.1") return route.abort();
+    if (url.pathname === "/__KAKAO_SDK_URL__") return route.fulfill({
+      contentType: "application/javascript",
+      body: "",
+    });
     if (url.pathname === "/api/institutions") return route.fulfill({ json: {
       institutions: [
         { storage_location_id: 77, name: "서울역 유실물센터", address: "서울시 중구 시험로 1", phone: "02-1234-5678", latitude: 37.55, longitude: 126.97 },
         { storage_location_id: 88, name: "서울역 유실물센터", address: "", phone: "", latitude: 37.55, longitude: 126.97 },
-      ], counts_available: true,
+        { storage_location_id: 89, name: "1.5km 범위 기관", address: "", latitude: 37.561, longitude: 126.97 },
+        { storage_location_id: 90, name: "2km 범위 기관", address: "", latitude: 37.566, longitude: 126.97 },
+        { storage_location_id: 91, name: "2km 밖 기관", address: "", latitude: 37.570, longitude: 126.97 },
+      ].filter(institution => institution.storage_location_id >= minimumInstitutionId), counts_available: true,
     } });
     if (url.pathname === "/api/places") {
       placeRequests += 1;
@@ -179,7 +187,7 @@ async (page) => {
   check(await page.locator(".item-description").count() === 0, "긴 설명은 목록에서 표시하지 않는다");
   check(await page.getByRole("heading", { name: "서울역 주변 습득물", exact: true }).count() === 1,
     "선택 장소 제목은 한 번만 안내해야 한다");
-  check(await page.getByRole("button", { name: "2km로 넓혀보기", exact: true }).count() === 0,
+  check(await page.getByRole("button", { name: "1.5km로 넓혀보기", exact: true }).count() === 0,
     "물품 검색 전에는 수동 반경 확장 버튼을 숨겨야 한다");
   const itemRows = page.getByRole("list", { name: "습득물 목록" }).locator("li");
   const alertDialog = page.getByRole("dialog", { name: "새 물건 알림", exact: true });
@@ -217,18 +225,19 @@ async (page) => {
   const search = page.getByRole("searchbox", { name: "습득물 검색어" });
   await search.fill("검정 지갑");
   await page.getByRole("button", { name: "물품 검색", exact: true }).click();
-  await page.getByText("후보 60건 중 유사한 물품 60건", { exact: true }).waitFor();
+  await page.getByText("검색 결과 상위 60건", { exact: true }).waitFor();
   await search.fill("아직 제출하지 않은 검색어");
   await Promise.all([
     page.waitForResponse(response => {
       const url = new URL(response.url());
-      return url.pathname === "/api/found-items" && url.searchParams.get("q") === "검정 지갑";
+      return url.pathname === "/api/found-items" && url.searchParams.get("q") === "검정 지갑"
+        && url.searchParams.get("location_ids") === "77,88,89";
     }),
-    page.getByRole("button", { name: "2km로 넓혀보기", exact: true }).click(),
+    page.getByRole("button", { name: "1.5km로 넓혀보기", exact: true }).click(),
   ]);
   await page.waitForFunction(() => document.getElementById("found-item-input").value === "검정 지갑");
   check(lastItemQuery === "검정 지갑", "반경 확장은 미제출 문구 대신 제출 검색어를 유지해야 한다");
-  await page.getByRole("button", { name: "3km로 넓혀보기", exact: true }).waitFor();
+  await page.getByRole("button", { name: "2km로 넓혀보기", exact: true }).waitFor();
   await showItem(8);
   await search.fill("입력 중인 다른 물건");
   const alertTrigger = page.getByRole("button", { name: "새 물건 알림 받기", exact: true });
@@ -237,18 +246,20 @@ async (page) => {
   await alertTrigger.click();
   await alertDialog.waitFor();
   check(await alertDialog.locator(".alert-query").innerText() === "검정 지갑", "알림에는 마지막 제출 검색어만 전달해야 한다");
-  check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("서울역") && text.includes("2km")), "알림에 선택 장소와 현재 반경을 전달해야 한다");
+  check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("서울역") && text.includes("1.5km")), "알림에 선택 장소와 현재 반경을 전달해야 한다");
   check(await page.locator('.app-navigation button[aria-current="page"]').innerText() === "새 물건 알림", "알림 메뉴를 활성 표시해야 한다");
   check(await page.locator(".alert-backdrop").evaluate(el => el.getBoundingClientRect().top >= document.querySelector(".app-header").getBoundingClientRect().bottom - 1), "알림 블러 영역은 상단 메뉴 아래에서 시작해야 한다");
   await alertDialog.getByRole("button", { name: "알림 조건 수정하기", exact: true }).click();
   check(await alertDialog.locator('.alert-condition-form input').count() === 0, "알림 장소와 물품명은 편집할 수 없어야 한다");
-  await alertDialog.getByRole("button", { name: "3km", exact: true }).click();
+  const alertOptions = alertDialog.getByRole("group", { name: "알림 탐색 반경" }).getByRole("button");
+  check((await alertOptions.allTextContents()).join(",") === "1km,1.5km,2km", "알림 반경은 탐색 반경과 같아야 한다");
+  await alertDialog.getByRole("button", { name: "2km", exact: true }).click();
   await alertDialog.getByRole("button", { name: "수정 완료", exact: true }).click();
-  check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("3km")), "알림 반경 수정이 요약에 반영되어야 한다");
+  check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("2km")), "알림 반경 수정이 요약에 반영되어야 한다");
   await alertDialog.getByRole("button", { name: "알림 조건 수정하기", exact: true }).click();
   await alertDialog.getByRole("button", { name: "1km", exact: true }).click();
   await alertDialog.getByRole("button", { name: "취소", exact: true }).click();
-  check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("3km")), "수정 취소 시 이전 알림 반경을 유지해야 한다");
+  check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("2km")), "수정 취소 시 이전 알림 반경을 유지해야 한다");
   const emailInput = alertDialog.getByRole("textbox", { name: "알림 받을 이메일", exact: true });
   await emailInput.fill("wrong");
   await alertDialog.getByRole("button", { name: "이 조건으로 알림 받기" }).click();
@@ -266,7 +277,7 @@ async (page) => {
   check(await search.inputValue() === "입력 중인 다른 물건", "알림을 닫아도 입력 중이던 검색어를 보존해야 한다");
   check(await page.locator('.item-pagination button[aria-current="page"]').innerText() === pageBeforeAlert, "알림 종료 시 기존 물품 페이지를 보존해야 한다");
   check(itemRequests === requestsBeforeAlert, "알림 열기와 미리보기 제출은 물품 재검색을 일으키지 않아야 한다");
-  check(await page.locator(".selection-radius").innerText().then(text => text.includes("2km")), "알림 반경 변경은 검색 화면의 반경을 바꾸면 안 된다");
+  check(await page.locator(".selection-radius").innerText().then(text => text.includes("1.5km")), "알림 반경 변경은 검색 화면의 반경을 바꾸면 안 된다");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await alertTrigger.click();
   await alertDialog.waitFor();
@@ -432,7 +443,7 @@ async (page) => {
   check(await cards.first().isDisabled(), "목록 갱신 중 상세 열기를 막아야 한다");
   check(await page.getByRole("button", { name: "물품 검색", exact: true }).isDisabled(), "중복 검색을 막아야 한다");
   releaseResponse();
-  await page.getByText("후보 60건 중 유사한 물품 60건", { exact: true }).waitFor();
+  await page.getByText("검색 결과 상위 60건", { exact: true }).waitFor();
   responseMode = "empty";
   await page.getByRole("button", { name: "물품 검색", exact: true }).click();
   await page.getByText("'검정 지갑'와 유사한 습득물이 없습니다.", { exact: true }).waitFor();
@@ -442,6 +453,42 @@ async (page) => {
   await page.getByText("습득물 로딩 실패: 시험용 외부 장애", { exact: true }).waitFor();
   check(await cards.count() === 0, "오류 결과에서는 상세 열기가 없어야 한다");
   check(await search.inputValue() === "검정 지갑", "오류 후에도 재검색할 입력을 유지해야 한다");
+  responseMode = "success";
+  await Promise.all([
+    page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/found-items" && url.searchParams.get("q") === "검정 지갑"
+        && url.searchParams.get("location_ids") === "77,88,89,90";
+    }),
+    page.getByRole("button", { name: "2km로 넓혀보기", exact: true }).click(),
+  ]);
+  await page.getByText("현재 반경 2km", { exact: true }).waitFor();
+  await alertTrigger.waitFor();
+  check(await page.getByRole("button", { name: /로 넓혀보기/ }).count() === 0, "2km에서는 추가 확장 버튼을 숨겨야 한다");
+  // PRD 4.5 — 기관이 발견된 단계에서 멈추고, 최대 반경까지 비어 있으면 물품 API를 호출하지 않는다.
+  async function confirmPlaceWithInstitutionsFrom(minimumId) {
+    minimumInstitutionId = minimumId;
+    await page.reload();
+    await page.getByRole("searchbox", { name: "검색어", exact: true }).fill("서울역");
+    await page.getByRole("button", { name: "장소 검색", exact: true }).click();
+    await page.getByRole("button", { name: /서울역.*서울시 중구/ }).first().click();
+    await previewCard.getByRole("button", { name: "이 위치 선택하기", exact: true }).click();
+  }
+  await Promise.all([
+    page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/found-items" && url.searchParams.get("location_ids") === "89";
+    }),
+    confirmPlaceWithInstitutionsFrom(89),
+  ]);
+  await page.getByText("현재 반경 1.5km", { exact: true }).waitFor();
+  await page.getByText("1km 안에 보관기관이 없어 1.5km로 넓혔어요.", { exact: true }).waitFor();
+  const requestsBeforeEmptyScope = itemRequests;
+  await confirmPlaceWithInstitutionsFrom(91);
+  await page.getByText("현재 반경 2km", { exact: true }).waitFor();
+  await page.getByText("1.5km 안에 보관기관이 없어 2km로 넓혔어요.", { exact: true }).waitFor();
+  await page.getByText("반경 2km 안에 등록된 보관기관이 없습니다.", { exact: true }).waitFor();
+  check(itemRequests === requestsBeforeEmptyScope, "최대 반경에도 기관이 없으면 물품 API를 호출하지 않아야 한다");
   check(errors.length === 0, `브라우저 오류: ${errors.join(", ")}`);
-  return "PASS: lazy list photos/fallbacks, paging, desktop/mobile details, missing fields, keyboard scrolling, history, scroll, loading/empty/error/disabled";
+  return "PASS: manual and automatic radius expansion, alert radius, paging, desktop/mobile details, loading/empty/error/disabled";
 }

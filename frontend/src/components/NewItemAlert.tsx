@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { radiusKilometersLabel } from "../lib/geo.js";
+import { DEFAULT_SEARCH_RADIUS_METERS, radiusKilometersLabel, SEARCH_RADIUS_OPTIONS_METERS } from "../lib/geo.js";
 import type { Place } from "../types";
 
 interface NewItemAlertProps {
@@ -87,8 +87,8 @@ export function NewItemAlert({ place, query, radiusMeters, onClose }: NewItemAle
             <div><dt>찾는 물건</dt><dd className="alert-query">{query}</dd></div>
             <div><dt>기준 장소</dt><dd>{place.name}<span className="alert-address">{place.address || "주소 정보 없음"}</span></dd></div>
             <div><dt>탐색 반경</dt><dd>{editing
-              ? <div className="alert-radius-options" role="group" aria-label="알림 탐색 반경">{[1000, 2000, 3000].map(radius =>
-                <button ref={radius === 1000 ? radiusButtonRef : undefined} type="button" key={radius} aria-pressed={draftRadius === radius} onClick={() => setDraftRadius(radius)}>{radiusKilometersLabel(radius)}</button>)}</div>
+              ? <div className="alert-radius-options" role="group" aria-label="알림 탐색 반경">{SEARCH_RADIUS_OPTIONS_METERS.map(radius =>
+                <button ref={radius === DEFAULT_SEARCH_RADIUS_METERS ? radiusButtonRef : undefined} type="button" key={radius} aria-pressed={draftRadius === radius} onClick={() => setDraftRadius(radius)}>{radiusKilometersLabel(radius)}</button>)}</div>
               : radiusKilometersLabel(alertRadius)}</dd></div>
             <div><dt>알림 기간</dt><dd>등록 다음날부터 7일간<span className="alert-address">한국시간 기준</span></dd></div>
           </dl>

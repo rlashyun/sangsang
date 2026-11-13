@@ -1,4 +1,5 @@
-export const SEARCH_RADIUS_OPTIONS_METERS = Object.freeze([1000, 2000, 3000]);
+// PRD 4.2 · 4.5 — 탐색과 알림에 같은 반경 단계(미터)를 사용한다.
+export const SEARCH_RADIUS_OPTIONS_METERS = Object.freeze([1000, 1500, 2000]);
 export const DEFAULT_SEARCH_RADIUS_METERS = SEARCH_RADIUS_OPTIONS_METERS[0];
 /** @param {number} radiusMeters */
 export function nextSearchRadiusMeters(radiusMeters) {
