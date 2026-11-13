@@ -58,6 +58,7 @@ class FakeStore:
         end_date: date,
         *,
         trigger: str,
+        cleanup_expired: bool = True,
     ) -> int:
         if self.already_running:
             raise RunAlreadyActive(source_code)
@@ -128,7 +129,9 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertTrue(store.deleted)
         self.assertEqual(store.upserted[0]["storage_location_id"], 123)
         self.assertEqual(store.upserted[0]["location_match_status"], "matched")
-        self.assertEqual(store.windows, [(date(2026, 2, 27), date(2026, 8, 26))])
+        self.assertEqual(store.windows, [(date(2026, 2, 27), date(2026, 8, 27))])
+        self.assertEqual(collect_rows.call_args.kwargs["end_date"], date(2026, 8, 27))
+        self.assertEqual(store.finished[0]["metadata"]["business_date"], "2026-08-27")
         self.assertEqual(store.finished[0]["status"], "succeeded")
 
     @patch.object(daily_ingestion, "collect_selected_rows")
@@ -144,7 +147,7 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertFalse(store.deleted)
         self.assertEqual(store.finished[0]["deleted_count"], 0)
-        self.assertEqual(store.windows, [(date(2026, 2, 27), date(2026, 8, 26))])
+        self.assertEqual(store.windows, [(date(2026, 2, 27), date(2026, 8, 27))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
@@ -294,7 +297,7 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 26))])
+        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 27))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
@@ -322,7 +325,7 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 26))])
+        self.assertEqual(store.windows, [(date(2026, 8, 25), date(2026, 8, 27))])
 
     @patch.object(daily_ingestion, "collect_selected_rows")
     @patch.object(daily_ingestion, "create_source_client")
@@ -350,9 +353,9 @@ class DailyIngestionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["status"], "succeeded")
-        self.assertEqual(store.windows, [(date(2026, 8, 26), date(2026, 8, 26))])
+        self.assertEqual(store.windows, [(date(2026, 8, 26), date(2026, 8, 27))])
 
-    def test_calendar_six_month_window_includes_march_26_not_today(self) -> None:
+    def test_calendar_six_month_window_includes_march_26_through_today(self) -> None:
         self.assertEqual(retention_start(date(2026, 9, 26)), date(2026, 3, 26))
         self.assertEqual(retention_start(date(2026, 8, 31)), date(2026, 2, 28))
         self.assertEqual(retention_start(date(2028, 8, 31)), date(2028, 2, 29))
@@ -370,7 +373,35 @@ class DailyIngestionTests(unittest.TestCase):
                 },
             )
             daily_ingestion._sync_source(store, source="partner", today=date(2026, 9, 26))
-        self.assertEqual(store.windows, [(date(2026, 3, 26), date(2026, 9, 25))])
+        self.assertEqual(store.windows, [(date(2026, 3, 26), date(2026, 9, 26))])
+
+    @patch.object(daily_ingestion, "create_source_client")
+    def test_afternoon_ingests_today_without_deleting_expired_items(self, create_client) -> None:
+        store = FakeStore()
+        store.latest_date = date(2026, 8, 27)
+        create_client.return_value.fetch_page.return_value = ([
+            {"atcId": "TODAY", "fdSn": "1", "fdYmd": "2026-08-27",
+             "prdtClNm": "지갑 > 남성용 지갑", "depPlace": "테스트역", "fdPrdtNm": "지갑"},
+            {"atcId": "LATE", "fdSn": "1", "fdYmd": "2026-08-26",
+             "prdtClNm": "지갑 > 남성용 지갑", "depPlace": "테스트역", "fdPrdtNm": "지갑"},
+            {"atcId": "FUTURE", "fdSn": "1", "fdYmd": "2026-08-28",
+             "prdtClNm": "지갑 > 남성용 지갑", "depPlace": "테스트역", "fdPrdtNm": "지갑"},
+        ], 3)
+
+        result = daily_ingestion._sync_source(
+            store, source="partner", today=date(2026, 8, 27),
+            incremental_only=True, cleanup_expired=False,
+        )
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual({row["atc_id"] for row in store.upserted}, {"TODAY", "LATE"})
+        self.assertFalse(store.deleted)
+        self.assertEqual(result["deleted"], 0)
+        metadata = store.finished[0]["metadata"]
+        self.assertEqual(metadata["business_date"], "2026-08-27")
+        self.assertFalse(metadata["cleanup_enabled"])
+        filters = create_client.return_value.fetch_page.call_args.kwargs
+        self.assertEqual(filters, {"START_YMD": "20260826", "END_YMD": "20260827"})
 
 
 if __name__ == "__main__":

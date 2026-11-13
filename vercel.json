@@ -20,6 +20,18 @@
     {
       "path": "/api/cron/embedding-sync",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/partner-sync-afternoon",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/police-sync-afternoon",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/embedding-sync-afternoon",
+      "schedule": "0 14 * * *"
     }
   ]
 }

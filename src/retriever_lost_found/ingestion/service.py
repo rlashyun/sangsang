@@ -337,6 +337,7 @@ def _sync_source(
     source: str,
     today: date,
     incremental_only: bool = False,
+    cleanup_expired: bool = True,
 ) -> dict[str, Any]:
     """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다."""
     sync_started = time.monotonic()
@@ -346,18 +347,20 @@ def _sync_source(
         raise ValueError(f"지원하지 않는 수집원입니다: {source}")
     source_code = SOURCE_CODES[source]
     window_start = retention_start(today, SOURCE_RETENTION_MONTHS[source])
-    window_end = today - timedelta(days=1)
+    # PRD 4.5 — collect today's arrivals too; always overlap yesterday.
+    window_end = today
     trigger = "vercel_cron_incremental" if incremental_only else "manual_catchup"
     start_date = window_start
     lookup_error = None
     try:
         latest_registered_on = store.latest_registered_on(source_code)
-        start_candidate = min(latest_registered_on or window_start, window_end)
+        start_candidate = min(latest_registered_on or window_start, today - timedelta(days=1))
         start_date = max(window_start, start_candidate)
     except Exception as error:
         # Still create and close an audit, so the embedding barrier can recover.
         lookup_error = error
     result = _empty_result(source_code, "running")
+    result["cleanup_enabled"] = cleanup_expired
 
     try:
         run_id = store.create_run(
@@ -365,6 +368,7 @@ def _sync_source(
             start_date,
             window_end,
             trigger=trigger,
+            cleanup_expired=cleanup_expired,
         )
     except RunAlreadyActive:
         return _empty_result(source_code, "already_running")
@@ -420,8 +424,10 @@ def _sync_source(
         result["unmatched"] = store.upsert_found_items(database_rows, statistics=upsert_statistics)
         result["excluded_overseas"] = upsert_statistics.get("excluded_overseas", 0)
         upsert_completed = True
-        result["deleted"] = store.delete_expired(source_code)
-        result["cleanup_deferred"] = getattr(store, "cleanup_deferred", False) is True
+        # PRD 4.5 — the afternoon cron only ingests; cleanup stays in the morning.
+        if cleanup_expired:
+            result["deleted"] = store.delete_expired(source_code)
+            result["cleanup_deferred"] = getattr(store, "cleanup_deferred", False) is True
         result["status"] = "succeeded"
         result["duration_seconds"] = round(time.monotonic() - sync_started, 3)
         audit = _audit_values(
@@ -463,11 +469,12 @@ def _audit_values(
     upsert_completed: bool = True,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
-        "business_date": (end_date + timedelta(days=1)).isoformat(),
+        "business_date": end_date.isoformat(),
         "upsert_completed": upsert_completed,
         "window_start": start_date.isoformat(),
         "window_end": end_date.isoformat(),
         "trigger": trigger,
+        "cleanup_enabled": result["cleanup_enabled"],
         "excluded_overseas_count": result.get("excluded_overseas", 0),
     }
     if fetch_summary is not None:
@@ -523,6 +530,8 @@ def _finish_audit(
 def run_incremental_sync(
     source: str,
     today: date | None = None,
+    *,
+    cleanup_expired: bool = True,
 ) -> dict[str, Any]:
     """Vercel Cron용: 누락분과 전날 등록분을 포함해 멱등 동기화합니다."""
     target_date = today or datetime.now(KOREA_TIMEZONE).date()
@@ -531,6 +540,7 @@ def run_incremental_sync(
         source=source,
         today=target_date,
         incremental_only=True,
+        cleanup_expired=cleanup_expired,
     )
     return {
         "date": target_date.isoformat(),

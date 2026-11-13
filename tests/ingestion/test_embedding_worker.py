@@ -100,3 +100,22 @@ def test_recovery_continues_after_an_older_job_completes(monkeypatch):
          patch("retriever_lost_found.embedding.orchestration.dispatch_embeddings") as dispatch:
         process_pending_embeddings()
     dispatch.assert_called_once()
+
+
+def test_midnight_callback_continues_previous_day_without_new_day_ingestion(monkeypatch):
+    from datetime import date
+    from unittest.mock import Mock, patch
+    from retriever_lost_found.embedding.orchestration import process_pending_embeddings
+    store = Mock()
+    store.ensure.return_value = None
+    store.claim.return_value = {"id": 1, "business_date": "2026-11-14"}
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only")
+    with patch("retriever_lost_found.embedding.orchestration.EmbeddingStore.from_environment", return_value=store), \
+         patch("retriever_lost_found.embedding.orchestration.datetime") as clock, \
+         patch("retriever_lost_found.embedding.orchestration.run_slice", return_value={"status": "succeeded"}) as work, \
+         patch("retriever_lost_found.embedding.orchestration.dispatch_embeddings"):
+        clock.now.return_value.date.return_value = date(2026, 11, 15)
+        result = process_pending_embeddings()
+    assert result == {"status": "succeeded"}
+    store.ensure.assert_called_once_with(date(2026, 11, 15))
+    work.assert_called_once()
