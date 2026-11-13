@@ -17,6 +17,7 @@ class VercelConfigTests(unittest.TestCase):
             [
                 {"path": "/api/cron/partner-sync", "schedule": "0 0 * * *"},
                 {"path": "/api/cron/police-sync", "schedule": "0 0 * * *"},
+                {"path": "/api/cron/embedding-sync", "schedule": "0 2 * * *"},
             ],
         )
         self.assertGreaterEqual(config["functions"]["api/index.py"]["maxDuration"], 300)

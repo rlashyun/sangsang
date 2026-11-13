@@ -169,6 +169,8 @@ class SupabaseIngestionStore:
             "item_source_code": source_code,
             "status": "running",
             "metadata": {
+                "business_date": (end_date + timedelta(days=1)).isoformat(),
+                "upsert_completed": False,
                 "window_start": start_date.isoformat(),
                 "window_end": end_date.isoformat(),
                 "trigger": trigger,

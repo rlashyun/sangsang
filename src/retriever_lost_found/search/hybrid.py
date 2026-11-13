@@ -9,7 +9,9 @@ import math
 from time import monotonic
 from typing import Any
 
-from .fuzzy import normalize_fuzzy_text, levenshtein_ratio
+from .fuzzy import levenshtein_ratio
+from . import synonyms
+from .synonyms import ALIASES
 
 RERANK_LIMIT = 200
 SEMANTIC_BUDGET_SECONDS = 4.0
@@ -18,10 +20,7 @@ _semantic_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="semantic"
 _semantic_slots = BoundedSemaphore(4)
 _search_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="found-items")
 _search_slots = BoundedSemaphore(4)
-# PRD 4.5 — 검토한 소규모 표현만 검색 시 통일하며 원문은 바꾸지 않는다.
-ALIASES = (("검은색", "검정"), ("검정색", "검정"), ("하얀색", "흰색"),
-           ("하얀", "흰색"), ("핑크", "분홍"), ("브라운", "갈색"),
-           ("엠엘비", "mlb"), ("큐씨와이", "qcy"), ("선캡", "썬캡"))
+# PRD 4.5 — fixed, corpus-reviewed expressions; original records stay untouched.
 KINDS = (("카드지갑", "지갑", "장지갑", "반지갑", "머니클립"),
          ("휴대폰", "핸드폰", "스마트폰", "아이폰"),
          ("이어폰", "에어팟", "버즈"), ("모자", "썬캡", "캡모자"),
@@ -29,10 +28,7 @@ KINDS = (("카드지갑", "지갑", "장지갑", "반지갑", "머니클립"),
 
 
 def search_text(text: str) -> str:
-    text = normalize_fuzzy_text(text, keep_spaces=True)
-    for source, target in ALIASES:
-        text = text.replace(source, target)
-    return text
+    return synonyms.normalize_text(text)
 
 
 def query_text(text: str) -> str:
@@ -41,7 +37,7 @@ def query_text(text: str) -> str:
     The work depends on query length, never the number of found items.
     """
     vocabulary = {word for group in KINDS for word in group}
-    words = search_text(text).split()
+    words = synonyms.normalize_text(text, query=True).split()
     for index, word in enumerate(words):
         if len(word)<3 or any(term in word for term in vocabulary):
             continue
@@ -53,14 +49,10 @@ def query_text(text: str) -> str:
 
 
 def query_kinds(query: str) -> list[tuple[str, ...]]:
-    # 카드지갑의 '카드'처럼 겹치는 표현은 긴 표현을 먼저 소비한다.
+    names = synonyms.kind_names(query)
+    groups = [group for name, group in zip(synonyms.KIND_NAMES, KINDS) if name in names]
+    # Keep the reviewed descriptive hints used by the existing search path.
     remaining = query.replace(" ", "")
-    groups = []
-    for group in KINDS:
-        if any(word in remaining for word in group):
-            groups.append(group)
-            for word in sorted(group, key=len, reverse=True):
-                remaining = remaining.replace(word, "")
     # 명시한 종류가 있으면 이를 우선한다. '블루투스'만으로 이어폰을 단정하지 않는다.
     if not groups:
         if any(word in remaining for word in ("귀에끼", "귀에넣", "귀에착용")):
@@ -70,14 +62,25 @@ def query_kinds(query: str) -> list[tuple[str, ...]]:
     return groups
 
 
-def supports_kind(item: dict, wanted: list[tuple[str, ...]], query: str) -> bool:
+def _description_kinds(item: dict, normalized_document: str | None):
+    if item.get("description"):
+        return query_kinds(search_text(str(item["description"])))
+    if normalized_document is not None:
+        return query_kinds(normalized_document)
+    return query_kinds(search_text(str(item.get("search_text") or "")))
+
+
+def supports_kind(item: dict, wanted: list[tuple[str, ...]], query: str,
+                  *, normalized_document: str | None = None) -> bool:
     # 자유 설명의 잘못된 '아이폰' 표기가 명확한 이어폰 이름을 뒤집지 않게 한다.
     primary = search_text(str(item.get("item_name") or ""))
     groups = query_kinds(primary)
+    description_groups = None
     if not groups:
         groups = query_kinds(search_text(str(item.get("raw_category_name") or "")))
     if not groups:
-        groups = query_kinds(search_text(str(item.get("description") or item.get("search_text") or "")))
+        description_groups = _description_kinds(item, normalized_document)
+        groups = description_groups
     if "아이폰" in query:
         identity = primary + search_text(str(item.get("raw_category_name") or ""))
         if any(word in identity for word in ("삼성", "갤럭시", "엘지", "샤오미")) and "아이폰" not in identity:
@@ -87,12 +90,17 @@ def supports_kind(item: dict, wanted: list[tuple[str, ...]], query: str) -> bool
     if KINDS[1] in wanted and groups == [KINDS[2]]:
         return False
     # 한 행에 함께 보관된 다른 물품이 설명에 명시된 경우는 보존한다.
-    description_groups = query_kinds(search_text(str(item.get("description") or item.get("search_text") or "")))
+    if description_groups is None:
+        description_groups = _description_kinds(item, normalized_document)
     return any(group in description_groups for group in wanted)
 
 
 def tokenize(text: str) -> list[str]:
-    words = search_text(text).split()
+    return _tokens(search_text(text))
+
+
+def _tokens(normalized_text: str) -> list[str]:
+    words = normalized_text.split()
     # 한국어 띄어쓰기·조사에 덜 민감하도록 단어와 글자 bigram을 함께 쓴다.
     return [token for word in words for token in (
         ["w:" + word] + ["c:" + word[i:i + 2] for i in range(len(word) - 1)]
@@ -126,16 +134,18 @@ def keyword_scores(items: list[dict[str, Any]], query: str, *, timings: dict | N
     terms = set(tokenize(query))
     # Small, reviewed kind synonyms also retrieve descriptive phrases such as cash storage.
     for group in kinds:
-        terms.update(tokenize(" ".join(group)))
-    docs = [Counter(tokenize(item.get("search_text") or " ".join(
+        name = next(name for name, legacy in zip(synonyms.KIND_NAMES, KINDS) if legacy == group)
+        terms.update(tokenize(" ".join(synonyms.KIND_TERMS[name])))
+    texts = [search_text(item.get("search_text") or " ".join(
         str(item.get(field) or "") for field in ("item_name", "raw_category_name", "color_name", "description")
-    ))) for item in items]
+    )) for item in items]
+    docs = [Counter(_tokens(text)) for text in texts]
     lengths = [sum(doc.values()) for doc in docs]
     average = sum(lengths)/max(1,len(docs)) or 1
     frequencies = {term:sum(term in doc for doc in docs) for term in terms}
     scores = {}
-    for item,doc,length in zip(items,docs,lengths):
-        if "item_name" in item and not supports_kind(item,kinds,query):
+    for item,doc,length,text in zip(items,docs,lengths,texts):
+        if "item_name" in item and not supports_kind(item,kinds,query,normalized_document=text):
             continue
         score = 0.0
         for term in terms:
@@ -159,15 +169,15 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     if embedding_client is not None and _semantic_slots.acquire(blocking=False):
         vector_future = _semantic_pool.submit(embedding_client.embed,query,timeout=min(semantic_budget,4.0))
         vector_future.add_done_callback(lambda _: _semantic_slots.release())
-    terms = {term[2:] for term in tokenize(query)}
     kinds = query_kinds(query)
-    kind_terms = {word for group in kinds for word in group}
-    terms.update(kind_terms)
-    for source,target in ALIASES:
-        if target in query or target in kind_terms:
-            terms.add(source)
+    names = {name for name, group in zip(synonyms.KIND_NAMES, KINDS) if group in kinds}
+    # PRD 4.1/4.5: one scoped RPC; literal type expressions also recover aliases
+    # absent from the legacy DB kind_mask. Attribute-only hits cannot widen it.
+    terms = synonyms.kind_candidate_terms(names) if kinds else (
+        {term[2:] for term in tokenize(query)} | synonyms.expanded_terms(query)
+    )
     if hasattr(client,"fetch_candidate_bundle"):
-        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),kind_terms=sorted(kind_terms) or None,
+        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),kind_terms=None,
                                                timeout=1.8)
         items,count = bundle["items"],bundle.get("candidate_count")
     else:
