@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import json
+import base64
+import struct
+import gzip
+import math
+from http.client import HTTPException
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -128,22 +133,94 @@ class SupabaseFoundItemClient:
             "total_count": int(total_count) if total_count is not None else None,
         }
 
-    def fetch_items(self, location_ids: list[int]) -> list[dict[str, Any]]:
+    def fetch_search_candidates(self, location_ids: list[int]) -> list[dict[str, Any]]:
+        """PRD 4.5 — 상세/사진/중복 정규화 텍스트를 순위 계산 전에 전송하지 않는다."""
+        return self.fetch_items(location_ids, search_only=True)
+
+    def fetch_candidate_bundle(self, location_ids: list[int], terms: list[str], *, timeout: float,
+                               kind_terms: list[str] | None = None) -> dict:
+        payload = self._search_rpc("keyword_found_item_candidates", {
+            "p_location_ids": _unique_location_ids(location_ids), "p_terms": terms,
+            "p_kinds": kind_terms}, timeout)
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise RuntimeError("검색 후보 응답 형식이 올바르지 않습니다.")
+        return payload
+
+    def fetch_rerank_items(self, location_ids: list[int], item_ids: list[int], *, timeout: float):
+        ids = sorted(set(int(item_id) for item_id in item_ids))
+        if not ids:
+            return []
+        if len(ids)>200 or any(item_id<=0 for item_id in ids):
+            raise ValueError("재정렬 후보는 최대 200건입니다.")
+        rows = self._search_rpc("keyword_rerank_vectors", {
+            "p_location_ids": _unique_location_ids(location_ids), "p_item_ids": ids}, timeout)
+        try:
+            if not isinstance(rows,list):
+                raise ValueError
+            for row in rows:
+                detail = row["detail"]
+                if (int(row["item_id"]) not in ids or int(detail["id"])!=int(row["item_id"])
+                    or detail.get("storage_location_id") not in location_ids):
+                    raise ValueError
+                if row["vector"] is not None:
+                    raw = base64.b64decode(row["vector"].replace("\n",""),validate=True)
+                    values = struct.unpack("!hh1024f",raw)
+                    vector = values[2:]
+                    if values[:2]!=(1024,0) or not all(math.isfinite(v) for v in vector) or not any(vector):
+                        raise ValueError
+                    row["vector"] = vector
+        except (KeyError,TypeError,ValueError,AttributeError,struct.error):
+            raise RuntimeError("검색 벡터 응답 형식이 올바르지 않습니다.") from None
+        return rows
+
+    def _search_rpc(self, name: str, payload: dict, timeout: float):
+        if timeout <= 0:
+            raise RuntimeError("검색 시간이 초과되었습니다. 범위를 좁혀 다시 검색해주세요.")
+        request = urllib.request.Request(f"{self.url}/rest/v1/rpc/{name}",
+            data=json.dumps(payload).encode(), method="POST",
+            headers={**_headers(self.secret_key, content_type=True), "Accept-Encoding": "gzip"})
+        try:
+            return _request_json(request, timeout, "검색 API")
+        except (RuntimeError, OSError, HTTPException, EOFError, UnicodeError):
+            raise RuntimeError("검색 요청을 완료하지 못했습니다. 다시 검색해주세요.") from None
+
+    def fetch_item_details(self, location_ids: list[int], item_ids: list[int], *, timeout: float = 1) -> list[dict[str, Any]]:
+        rows = []
+        ids = sorted(set(item_ids))
+        if len(ids)>200:
+            raise ValueError("한 번에 상세 조회할 수 있는 검색 후보는 200건입니다.")
+        if ids:
+            payload = self._search_rpc("search_found_item_details", {
+                "p_location_ids": _unique_location_ids(location_ids), "p_item_ids": ids}, timeout)
+            if not isinstance(payload, list):
+                raise RuntimeError("검색 상세 응답 형식이 올바르지 않습니다.")
+            rows.extend(row for row in payload if isinstance(row, dict))
+        return rows
+
+    def fetch_items(self, location_ids: list[int], *, search_only: bool = False,
+                    item_ids: list[int] | None = None) -> list[dict[str, Any]]:
         unique_ids = _unique_location_ids(location_ids)
-        if not unique_ids:
+        if not unique_ids or item_ids == []:
             return []
 
         items: list[dict[str, Any]] = []
         offset = 0
         id_filter = f"in.({','.join(str(value) for value in unique_ids)})"
+        after_id = 0
         while True:
+            filters = {}
+            if item_ids is not None:
+                filters["id"] = f"in.({','.join(str(int(value)) for value in item_ids)})"
+            elif search_only:
+                filters["id"] = f"gt.{after_id}"
             query = urllib.parse.urlencode(
                 {
-                    "select": self.SELECT_FIELDS,
+                    "select": "id,storage_location_id,item_name,raw_category_name,color_name,description" if search_only else self.SELECT_FIELDS,
                     "storage_location_id": id_filter,
-                    "order": "registered_on.desc,id.desc",
+                    "order": "id.asc" if search_only else "registered_on.desc,id.desc",
                     "limit": FOUND_ITEM_PAGE_SIZE,
-                    "offset": offset,
+                    **({} if search_only else {"offset": offset}),
+                    **filters,
                 }
             )
             request = urllib.request.Request(
@@ -156,7 +233,13 @@ class SupabaseFoundItemClient:
             items.extend(row for row in payload if isinstance(row, dict))
             if len(payload) < FOUND_ITEM_PAGE_SIZE:
                 return items
+            if search_only:
+                next_id = int(payload[-1]["id"])
+                if next_id <= after_id:
+                    raise RuntimeError("검색 후보 페이지가 진행되지 않았습니다.")
+                after_id = next_id
             offset += FOUND_ITEM_PAGE_SIZE
+
 
 
 def map_location_from_rpc(row: Any) -> dict[str, Any] | None:
@@ -255,7 +338,10 @@ def _headers(secret_key: str, *, content_type: bool = False) -> dict[str, str]:
 def _request_json(request: urllib.request.Request, timeout: float, label: str) -> Any:
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read()
+            if getattr(response,"headers",{}).get("Content-Encoding","").lower() == "gzip":
+                raw = gzip.decompress(raw)
+            return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"{label} HTTP {error.code}: {body[:240]}") from None

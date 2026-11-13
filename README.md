@@ -103,7 +103,7 @@ FastAPI `app`을 진입점으로 사용합니다.
 - 검색 결과가 여러 개면 목록에서 기준 위치를 변경하고 `전체 기관 보기`로 필터 해제
 - 위치 검색 직후 반경 1km 기관들이 보관 중인 습득물 전체 목록 표시
 - 개별 기관 핀을 누르면 해당 기관 물품만 다시 조회
-- 위치 검색 후 물품명·색상·카테고리·설명 대상 퍼지 검색 활성화
+- 위치 검색 후 동의어·BM25·BGE-M3 혼합 검색 활성화
 
 카카오 REST API 키와 Supabase secret 키는 브라우저로 전달되지 않고 Python 서버에서만 사용됩니다.
 지도 위치와 기관별 물품 수는 `map_locations_with_item_counts` Supabase RPC에서 함께 읽습니다.
@@ -115,6 +115,35 @@ FastAPI `app`을 진입점으로 사용합니다.
 - `SUPABASE_SECRET_KEY` 또는 기존 프로젝트용 `SUPABASE_SERVICE_ROLE_KEY`
 - `DATA_GO_KR_SERVICE_KEY`
 - `CRON_SECRET`
+
+검색 의미 확장에는 서버 전용 `OPENROUTER_API_KEY`를 선택적으로 설정합니다.
+키가 없으면 키워드 검색만 실행하며, 테스트·CI에서는 빈 값으로 둡니다.
+Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이블을 준비하고
+`supabase/migrations/20261111042228_scoped_bge_m3_semantic_search.sql`을 적용합니다.
+운영 DB를 Preview에 연결하지 않습니다.
+
+단, 2026-11-11 김성현이 명시적으로 승인한 `seonghyun_search` 검색 실험 Preview는
+운영 Supabase를 사용합니다. 변경 내역과 중단·복구 절차 및 복구 한계는
+[검색 실험 복구 기록](docs/measurements.md)에 남깁니다.
+
+### 검색 초안: 키워드 후보 + 의미 재정렬
+
+검색은 기관 범위의 `keyword_found_item_candidates`로 작은 검색 필드만 읽고 BM25를 계산합니다.
+종류 판정은 저장된 `kind_mask`를 사용하고, 반복 정규화·전체 상세 JSON 조립·전체 범위 건수 조회를 제거했습니다.
+이와 병렬로 OpenRouter → DeepInfra BGE-M3 질의 벡터를 생성합니다. 키워드 상위 200건의 현재 벡터만
+`keyword_rerank_vectors`로 읽어 Python 메모리에서 코사인 유사도를 계산합니다. 기관 전체 벡터 검색은 호출하지 않습니다.
+최종 점수는 `0.5 × BM25/(BM25+1) + 0.5 × max(0, cosine)`이며, 재정렬 대상 밖의 키워드 결과는 의미 점수 0으로 유지합니다.
+키워드 일치 결과의 개수·날짜 상한은 없습니다. 50건씩 `search:offset` 커서로 이어 받고 전체 결과 수를 제공합니다.
+초기 전체 기관 물품 수 `candidate_count`는 생략(null)합니다. 상세는 재정렬 200건과 현재 표시할 페이지에 대해서만 읽습니다.
+고비용 물품별 퍼지는 제거하고 작은 단어 사전의 질의 1회 오타 보정과 BM25 bigram을 유지합니다.
+명확한 종류 충돌·아이폰과 다른 제조사 충돌은 제외하되, 함께 보관된 물품의 설명 근거도 인정합니다.
+질의 벡터만 최대 128개/1시간 재사용하며 물품 응답은 캐시하지 않습니다.
+전체 검색 대기 상한은 4.6초(초과 504), 질의 임베딩 예산은 4.0초입니다. 임베딩 실패 시 키워드 결과를 반환합니다.
+`semantic_status`는 ok/unavailable/disabled/skipped(키워드 후보 없음)입니다.
+키워드 후보에 없는 의미 단독 물품은 이 구조에서 복구하지 못합니다. 모든 질의의 미탐 0이나 첫 요청 시간 보장은 아닙니다.
+실제 29,922건 범위/지갑은 키워드 1.954초·전체 3.743초, 28,620건/무선 이어폰은 1.000초·1.836초였습니다.
+둘 다 의미 재정렬 성공이며 로컬 PC→실제 API/DB 각 1회입니다. 배포 성능·p95 측정과 구분합니다.
+마이그레이션과 복구는 [실험 복구 기록](docs/measurements.md)을 따릅니다.
 
 Vercel에서는 Production·Preview·Development 환경을 구분해 값을 설정하고, Preview가
 의도치 않게 운영 Supabase에 연결되지 않게 관리하세요. `/api/institutions`의 공개 지도
@@ -129,45 +158,6 @@ AWS `ap-northeast-2`)** 에서 실행합니다. Supabase·경찰청 API·카카�
 Hobby 요금제는 단일 리전만 허용하므로 `regions`에는 한 곳만 적습니다.
 
 ## 일일 데이터 동기화
-
-### 물품 임베딩 자동 생성
-
-운영 물품 검색의 기존 퍼지 로직은 유지합니다. 수집 완료 뒤의 임베딩 생성만 별도로 연결합니다.
-경찰·연계기관 실행이 모두 종료되면 DB가 작업을 등록하고, 인증된
-`POST /api/cron/embedding-sync`가 별도 실행을 시작합니다. 미완료 작업은
-한국시간 오전 11시 예약의 `GET /api/cron/embedding-sync`가 복구합니다.
-Hobby 예약은 해당 시간대 안에서 지연될 수 있습니다.
-
-Production 서버에 `OPENROUTER_API_KEY`를 Secret으로 설정해야 합니다.
-선택 설정인 `EMBEDDING_WORKER_URL`은 콜백 전체 URL이며, 비워두면 Vercel의
-`VERCEL_PROJECT_PRODUCTION_URL`에 `/api/cron/embedding-sync`를 붙입니다.
-요청의 Host 헤더로 콜백 주소를 만들지 않습니다. 모든 크론은 기존 `CRON_SECRET`으로 인증합니다.
-
-입력은 DB 생성 컬럼 `found_items.embedding_input`입니다. 색상의 괄호 안 한국어와
-원본 물품명을 공백으로 연결합니다(`블랙(검정)` + `구찌 카드지갑` → `검정 구찌 카드지갑`).
-괄호 없는 한국어 색상과 `기타`는 유지하고, 미상 영문 색상은 생략합니다.
-설명·분류·`normalized_search_text`는 넣지 않으며 원본 컬럼도 변경하지 않습니다.
-
-모델은 BGE-M3/DeepInfra 1,024차원, 입력 버전은 `color_ko_item_name:v2`입니다.
-원본·검색용 벡터는 모두 half로 저장합니다. 이미 생성한 물품은 이름·색상이 수정돼도
-재생성하지 않고, 당시 입력을 `embedded_input`에 보관합니다. 신규/벡터 누락 물품만 처리합니다.
-배치는 32건, API 동시 요청은 2개이고, 실행마다 240초 뒤 진행 상태를 저장해 이어갑니다.
-`embedding_runs`의 상태·성공/실패 시도 건수·잔여 건수·입력 없음 건수를 확인하세요.
-새 v2의 모델·제공자·문장·해시가 모두 같은 경우에만 벡터를 재사용하며,
-`reused_count`는 성공 건수에 포함된 재사용 건수를 따로 표시합니다.
-API 키 누락·API 실패는 성공으로 기록하지 않습니다.
-
-전량 보충 또는 중단 후 재개는 아래 명령을 사용합니다. 이 명령은 벡터를 삭제하지 않습니다.
-
-```powershell
-uv run python -m retriever_lost_found.embedding.cli --until-complete
-```
-
-DB 마이그레이션 `color_item_half_embeddings_v2`에는 **기존 벡터 초기화**가 포함됩니다.
-운영에서 이미 적용한 동일 버전을 다시 실행하지 말고 마이그레이션 이력을 확인하세요.
-원본·검색용 벡터 테이블과 검색 문서 구조의 선행 마이그레이션도 함께 보관합니다.
-DB 통합 검증은 두 물품과 빈 벡터 테이블을 둔 격리된 테스트 DB에서
-`tests/database/embedding_v2_integration.sql`로 수행하며 마지막에 롤백합니다. 운영 DB에서는 실행하지 않습니다.
 
 두 경찰청 API에서 6개 서비스 카테고리만 선별해 Supabase에 멱등 upsert합니다.
 각 출처의 마지막 등록일을 다시 포함해 누락된 늦은 등록 건을 보충하므로 매일 전체
@@ -227,7 +217,12 @@ src/retriever_lost_found/
 ├─ web/                      웹 앱·Cron·정적 UI
 ├─ integrations/             Kakao·Supabase·경찰청 API 연동
 ├─ ingestion/                카테고리 선별·수집·저장·동기화
-└─ search/                   퍼지 검색과 순위화
+└─ search/                   동의어·BM25·의미 재정렬
 supabase/migrations/         재현 가능한 DB 스키마
 tests/                       기능 영역별 테스트
 ```
+
+
+2026-11-14 운영 검색 전환: 사용자 승인으로 검색어 경로를 최신 동의어·BM25·상위 200건 BGE-M3 재정렬·50건 페이지 반환으로 변경한다. 기존 fuzzy.py와 물품별 퍼지 순위 계산은 제거한다. 질의 측의 작은 사전 오타 보정은 유지한다. 일일 v2 half 임베딩 자동화는 기존 main 구현을 유지한다. LUNA/LLM 실험은 포함하지 않는다. 과거의 “운영 퍼지 유지/검색 실험 브랜치 한정” 서술은 당시 기록이며 이번 변경으로 대체한다.
+
+운영 복구: 검색 앱을 이전 배포로 되돌려도 v2 half 벡터와 일일 생성 작업은 유지한다. 과거 검색 SQL·rollback 파일을 운영 DB에 자동 실행하지 않는다. 특히 v2 초기화 migration은 재실행하지 않는다. 전환 전 전체 v1 벡터 백업은 없으며 v1 전체 복원은 보장하지 않는다.
