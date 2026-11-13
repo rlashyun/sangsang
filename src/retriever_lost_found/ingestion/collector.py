@@ -38,14 +38,14 @@ CSV_FIELDS = (
     "raw_payload",
 )
 
-# PRD 3.1-2, 4.1 — 완료된 어제까지 달력 기준 6개월을 보존합니다.
+# PRD 3.1-2, 4.1 — 오늘까지 달력 기준 6개월을 보존합니다.
 SOURCE_RETENTION_MONTHS = {"partner": 6, "police": 6}
 SOURCE_CODES = {"partner": "partner_api", "police": "police_api"}
 KOREA_TIMEZONE = timezone(timedelta(hours=9))
 
 
 def retention_start(today: date, months: int = 6) -> date:
-    """오늘을 제외한 최근 달력상 months개월의 첫날을 반환합니다."""
+    """오늘 기준 최근 달력상 months개월의 첫날을 반환합니다."""
     month_index = today.year * 12 + today.month - 1 - months
     year, month_zero_based = divmod(month_index, 12)
     month = month_zero_based + 1

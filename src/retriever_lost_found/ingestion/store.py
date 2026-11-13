@@ -148,6 +148,7 @@ class SupabaseIngestionStore:
         end_date: date,
         *,
         trigger: str,
+        cleanup_expired: bool = True,
     ) -> int:
         stale_before = datetime.now(timezone.utc) - timedelta(hours=2)
         self._request(
@@ -169,11 +170,13 @@ class SupabaseIngestionStore:
             "item_source_code": source_code,
             "status": "running",
             "metadata": {
-                "business_date": (end_date + timedelta(days=1)).isoformat(),
+                # PRD 4.5 — the collection window now ends on the KST business date.
+                "business_date": end_date.isoformat(),
                 "upsert_completed": False,
                 "window_start": start_date.isoformat(),
                 "window_end": end_date.isoformat(),
                 "trigger": trigger,
+                "cleanup_enabled": cleanup_expired,
             },
         }
         try:

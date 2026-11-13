@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class VercelConfigTests(unittest.TestCase):
-    def test_daily_sync_runs_at_nine_am_korea_time(self) -> None:
+    def test_separate_daily_crons_sync_at_nine_am_and_nine_pm_korea_time(self) -> None:
         config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
 
         self.assertEqual(
@@ -18,6 +18,9 @@ class VercelConfigTests(unittest.TestCase):
                 {"path": "/api/cron/partner-sync", "schedule": "0 0 * * *"},
                 {"path": "/api/cron/police-sync", "schedule": "0 0 * * *"},
                 {"path": "/api/cron/embedding-sync", "schedule": "0 2 * * *"},
+                {"path": "/api/cron/partner-sync-afternoon", "schedule": "0 12 * * *"},
+                {"path": "/api/cron/police-sync-afternoon", "schedule": "0 12 * * *"},
+                {"path": "/api/cron/embedding-sync-afternoon", "schedule": "0 14 * * *"},
             ],
         )
         self.assertGreaterEqual(config["functions"]["api/index.py"]["maxDuration"], 300)
