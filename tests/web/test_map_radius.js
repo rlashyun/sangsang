@@ -26,32 +26,33 @@ test("radius geometry and marker labels", async () => {
   const seoul = { latitude: 37.5665, longitude: 126.9780 };
   assert.equal(distanceMeters(seoul, seoul), 0);
 
-  assert.deepEqual(SEARCH_RADIUS_OPTIONS_METERS, [1000, 2000, 3000]);
+  assert.deepEqual(SEARCH_RADIUS_OPTIONS_METERS, [1000, 1500, 2000]);
   assert.equal(DEFAULT_SEARCH_RADIUS_METERS, 1000);
   assert.equal(radiusKilometersLabel(1000), "1km");
-  assert.equal(radiusKilometersLabel(3000), "3km");
+  assert.equal(radiusKilometersLabel(1500), "1.5km");
   assert.equal(radiusKilometersLabel(2000), "2km");
 
   const aboutOneKilometerNorth = { latitude: 37.5754932, longitude: 126.9780 };
   const distance = distanceMeters(seoul, aboutOneKilometerNorth);
   assert.ok(distance >= 999 && distance <= 1001, `expected about 1000m, received ${distance}`);
-  const aboutTwoKilometersNorth = { latitude: 37.5844864, longitude: 126.9780 };
-  const aboutFourKilometersNorth = { latitude: 37.6024728, longitude: 126.9780 };
-  const aboutSixKilometersNorth = { latitude: 37.6204592, longitude: 126.9780 };
-  assert.equal(isWithinRadius(seoul, aboutTwoKilometersNorth, 1000), false);
-  assert.equal(isWithinRadius(seoul, aboutTwoKilometersNorth, 3000), true);
-  assert.equal(isWithinRadius(seoul, aboutFourKilometersNorth, 3000), false);
-  assert.equal(isWithinRadius(seoul, aboutFourKilometersNorth, 5000), true);
-  assert.equal(isWithinRadius(seoul, aboutSixKilometersNorth, 5000), false);
+  const betweenOneAndOnePointFive = { latitude: 37.5775, longitude: 126.9780 };
+  const betweenOnePointFiveAndTwo = { latitude: 37.5825, longitude: 126.9780 };
+  const beyondTwo = { latitude: 37.5865, longitude: 126.9780 };
+  assert.equal(isWithinRadius(seoul, seoul, 1000), true);
+  assert.equal(isWithinRadius(seoul, betweenOneAndOnePointFive, 1000), false);
+  assert.equal(isWithinRadius(seoul, betweenOneAndOnePointFive, 1500), true);
+  assert.equal(isWithinRadius(seoul, betweenOnePointFiveAndTwo, 1500), false);
+  assert.equal(isWithinRadius(seoul, betweenOnePointFiveAndTwo, 2000), true);
+  assert.equal(isWithinRadius(seoul, beyondTwo, 2000), false);
   assert.equal(markerCountLabel(0), "0");
   assert.equal(markerCountLabel(403), "403");
   assert.equal(markerCountLabel(1500), "999+");
 });
 
-test("manual radius expands one step at a time and stops at 3km", async () => {
+test("radius expands one step at a time and stops at 2km", async () => {
   const { nextSearchRadiusMeters } = await import("../../frontend/src/lib/geo.js");
-  assert.equal(nextSearchRadiusMeters(1000), 2000);
-  assert.equal(nextSearchRadiusMeters(2000), 3000);
+  assert.equal(nextSearchRadiusMeters(1000), 1500);
+  assert.equal(nextSearchRadiusMeters(1500), 2000);
+  assert.equal(nextSearchRadiusMeters(2000), null);
   assert.equal(nextSearchRadiusMeters(3000), null);
-  assert.equal(nextSearchRadiusMeters(5000), null);
 });

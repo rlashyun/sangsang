@@ -85,7 +85,7 @@ export function App() {
   const visibleInstitutions = selectedPlace ? radiusScope : institutions;
   const activeScope = selectedInstitutionScope ?? radiusScope;
   useEffect(() => {
-    // PRD 4.5 — 기관 조회가 정상 완료되고 0곳일 때만 1→2→3km로 확장한다.
+    // PRD 4.5 — 기관 조회가 정상 완료되고 0곳일 때만 다음 반경으로 확장한다.
     if (!selectedPlace || !institutionsLoaded || institutionError || radiusScope.length) return;
     const nextRadius = nextSearchRadiusMeters(radiusMeters);
     if (nextRadius === null) return;
