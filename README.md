@@ -206,7 +206,7 @@ Hobby도 프로젝트당 크론 100개를 지원하며 각 크론은 하루 한 
 지정한 한 시간 안에서 실행이 지연될 수 있으므로 정확한 시각을 보장하지 않습니다.
 [Vercel Cron 제한](https://vercel.com/docs/schedules/cron-jobs/usage-and-pricing)
 
-배포 순서: `20261113174811_distinguish_twice_daily_embedding_barrier.sql`을 먼저 적용한 뒤
+배포 순서: `20261113184917_distinguish_twice_daily_embedding_barrier.sql`을 먼저 적용한 뒤
 앱과 크론 설정을 배포합니다. 기존 감사 기록은 오전 실행으로 취급하므로 먼저 적용해도
 기존 앱과 호환됩니다. 이 마이그레이션은 완료 판정·복구 함수만 교체하며 물품·벡터를
 수정하거나 초기화하지 않습니다.

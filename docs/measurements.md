@@ -1,5 +1,12 @@
 # 실측 기록
 
+## 하루 두 번 수집 DB 마이그레이션 운영 적용 — 2026-11-14 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `distinguish_twice_daily_embedding_barrier`를 MCP migration으로 적용했다. 운영 이력 버전은 `20261113184917`이며, 재적용을 막기 위해 기존 SQL 파일의 버전을 운영 이력과 맞췄다. SQL 내용은 앞서 격리 DB에서 검증한 것과 동일하다.
+- 적용 전 수집 running 0건·유효 임베딩 lease 0건을 확인했다. 적용 전후 물품 295,271건·원본 임베딩 295,271건으로 동일했다. 물품·벡터 수정이나 수동 수집·임베딩 생성은 실행하지 않았다.
+- 적용 후 함수 4개의 SECURITY INVOKER·빈 search_path·service_role 실행 허용·anon/authenticated 실행 차단을 확인했다. ensure의 회차 확인, claim의 작업 날짜 확인, 오후 복구 분기와 운영 migration 이력도 확인했다. service_role 읽기 전용 트랜잭션에서 당일 미완료 및 기록 없는 날짜의 준비 판정은 모두 false였고, 완료 기록이 있는 2026-11-13은 true였다.
+- 보안 advisor는 정책 없는 RLS 테이블 안내(INFO)만 반환했다. service_role 전용 접근 방침을 유지했다. 기존 앱과의 호환 상태에서 DB 적용만 완료했고, PR 병합·Vercel 배포는 사용자가 진행한다. 복구는 앱을 이전 배포로 되돌릴 수 있으며 기존 벡터는 유지한다. 이번 SQL에는 데이터 초기화·재생성이 없고 DB 함수를 자동으로 원복하지 않는다.
+
 ## 하루 두 번 수집 및 오전 전용 만료 정리 검증 — 2026-11-14 KST
 
 - 조건: `feat/twice-daily-ingestion`, 로컬 Windows/Python 3.12, 외부 설정은 모두 더미 값으로 두고 TEMP 작업 폴더에서 `pytest -q -p no:cacheprovider tests` 상당의 전체 경로 검사를 실행했다. 207 passed / 1.11초, 기존 Starlette/httpx deprecation 경고 1개다. 최초 전체 검사는 이전 3개 크론만 기대하던 설정 테스트가 실패했고(206 passed), 실제 요구인 별도 6개 하루 한 번 크론으로 기대값을 갱신한 뒤 통과했다.
