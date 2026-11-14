@@ -36,7 +36,13 @@ class SupabaseMapLocationClient:
             raise ValueError("Supabase URL과 서버 전용 secret key가 필요합니다.")
 
     def fetch_locations(self, *, with_counts: bool = True) -> list[dict[str, Any]]:
-        rpc_name = "map_locations_with_item_counts" if with_counts else "map_locations"
+        # PRD 3.1-4 · 5 — 기관별 물품 수와 좌표를 한 번에 가져온다.
+        if with_counts:
+            return self._convert_locations(
+                self._request_locations("map_locations_with_item_counts_json")
+            )
+
+        # PRD 6 — 집계 실패 시 기존 좌표 RPC를 페이지 단위로 읽는다.
         locations: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -47,22 +53,30 @@ class SupabaseMapLocationClient:
                     "offset": offset,
                 }
             )
-            request = urllib.request.Request(
-                f"{self.url}/rest/v1/rpc/{rpc_name}?{query}",
-                data=b"{}",
-                method="POST",
-                headers=_headers(self.secret_key, content_type=True),
-            )
-            payload = _request_json(request, self.timeout, "Supabase 지도 위치 API")
-            if not isinstance(payload, list):
-                raise RuntimeError("Supabase 지도 위치 API 응답 형식이 올바르지 않습니다.")
-            for row in payload:
-                location = map_location_from_rpc(row)
-                if location is not None:
-                    locations.append(location)
+            payload = self._request_locations(f"map_locations?{query}")
+            locations.extend(self._convert_locations(payload))
             if len(payload) < self.page_size:
                 return locations
             offset += self.page_size
+
+    def _request_locations(self, rpc_path: str) -> list[dict[str, Any]]:
+        request = urllib.request.Request(
+            f"{self.url}/rest/v1/rpc/{rpc_path}",
+            data=b"{}",
+            method="POST",
+            headers=_headers(self.secret_key, content_type=True),
+        )
+        payload = _request_json(request, self.timeout, "Supabase 지도 위치 API")
+        if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+            raise RuntimeError("Supabase 지도 위치 API 응답 형식이 올바르지 않습니다.")
+        return payload
+
+    @staticmethod
+    def _convert_locations(payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            location for row in payload
+            if (location := map_location_from_rpc(row)) is not None
+        ]
 
 
 class SupabaseFoundItemClient:
