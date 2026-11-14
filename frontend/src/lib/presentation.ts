@@ -17,13 +17,6 @@ export function normalizePlace(document: KakaoPlaceDocument): Place {
   };
 }
 
-export function placeCategoryLabel(category: string) {
-  // PRD 4.4 — 원문은 유지하고 화면에는 중간 단계 분류만 표시한다.
-  const parts = category.split(">").map((part) => part.trim()).filter(Boolean);
-  const label = parts[1] ?? parts[0] ?? "";
-  return label === "지하철,전철" ? "지하철" : label;
-}
-
 export function institutionLocationIds(scope: Institution[]) {
   return [...new Set(scope
     .map((institution) => Number(institution.storage_location_id))

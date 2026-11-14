@@ -152,10 +152,10 @@ async (page) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("http://127.0.0.1:5178/");
   await institutionCountsHeld;
-  await page.getByText("물품 수 불러오는 중…", { exact: true }).waitFor();
+  check(await page.getByText("물품 수 불러오는 중…", { exact: true }).count() === 0, "물품 수가 로딩되는 동안 지도 범례에 로딩 문구를 표시하지 않는다");
   await page.waitForFunction(() => window.testMapMarkerCount === 5);
   releaseInstitutionCounts();
-  await page.getByText("물품 수 불러오는 중…", { exact: true }).waitFor({ state: "hidden" });
+
   const mapSettings = page.getByRole("button", { name: "지도 설정", exact: true });
   await mapSettings.waitFor();
   check(await page.getByRole("button", { name: "지도 확대", exact: true }).count() === 0, "확대 버튼은 기본 화면에서 숨겨야 한다");
@@ -170,13 +170,11 @@ async (page) => {
   await page.getByRole("button", { name: "장소 검색", exact: true }).click();
   const placeRows = page.getByRole("list", { name: "위치 검색 결과" }).locator("li");
   await placeRows.first().waitFor();
-  check(await placeRows.count() === 4, "장소 첫 페이지는 4곳이어야 한다");
+  check(await placeRows.count() === 5, "장소 첫 페이지는 5곳이어야 한다");
   const requestsBeforePaging = placeRequests;
   await page.getByRole("button", { name: "장소 2페이지", exact: true }).click();
-  check(await placeRows.count() === 4, "장소 두 번째 페이지도 4곳이어야 한다");
-  check((await placeRows.first().innerText()).startsWith("5."), "장소 번호는 페이지 간 이어져야 한다");
-  await page.getByRole("button", { name: "장소 3페이지", exact: true }).click();
-  check(await placeRows.count() === 1, "마지막 장소 페이지만 나머지 개수를 표시한다");
+  check(await placeRows.count() === 4, "마지막 장소 페이지만 나머지 개수를 표시한다");
+  check((await placeRows.first().innerText()).startsWith("6."), "장소 번호는 페이지 간 이어져야 한다");
   check(placeRequests === requestsBeforePaging, "장소 페이지 이동은 재검색하지 않아야 한다");
   await page.getByRole("button", { name: "장소 1페이지", exact: true }).click();
   const cardHeightBefore = await placeRows.first().evaluate(el => el.getBoundingClientRect().height);
@@ -272,7 +270,7 @@ async (page) => {
   check(await page.locator(".item-search-followup").isVisible(), "검색 전부터 페이지 아래 구분선을 표시해야 한다");
   await search.fill("검정 지갑");
   await page.getByRole("button", { name: "물품 검색", exact: true }).click();
-  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건 · 유사도 높은 순", { exact: true }).waitFor();
   check(Math.abs((await itemPagination.boundingBox()).y - paginationBeforeSearch.y) < 1, "검색 전후 페이지 번호의 세로 위치를 유지해야 한다");
   check(await page.locator(".item-previous-radius").count() === 0, "기본 반경에는 이전 범위 표식을 표시하지 않는다");
   const requestsBeforeSearchCursor = itemRequests;
@@ -302,7 +300,7 @@ async (page) => {
   check(await page.getByText("1km 이내", { exact: true }).count() === 0, "2km 결과의 이전 범위 표식은 1.5km로 통일한다");
   await page.getByRole("button", { name: "1.5km로 돌아가기", exact: true }).click();
   check(await page.locator(".selection-radius strong").innerText() === "1.5km", "반경 돌아가기는 한 단계 줄여야 한다");
-  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건 · 유사도 높은 순", { exact: true }).waitFor();
   await showItem(8);
   await search.fill("입력 중인 다른 물건");
   const alertTrigger = page.getByRole("button", { name: "새 물건 알림 받기", exact: true });
@@ -540,7 +538,7 @@ async (page) => {
   check(await cards.first().isDisabled(), "목록 갱신 중 상세 열기를 막아야 한다");
   check(await page.getByRole("button", { name: "물품 검색", exact: true }).isDisabled(), "중복 검색을 막아야 한다");
   releaseResponse();
-  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건 · 유사도 높은 순", { exact: true }).waitFor();
   check(await page.locator(".found-item-status.search-loading").count() === 0, "검색 완료 후 로딩 표시를 제거해야 한다");
   check(await page.locator(".found-item-card").first().evaluate(card => getComputedStyle(card).opacity === "1"), "검색 완료 후 카드 밝기를 복원해야 한다");
   responseMode = "empty";
@@ -563,7 +561,7 @@ async (page) => {
   await page.getByRole("button", { name: "이 장소 선택하기", exact: true }).click();
   await search.fill("검정 지갑");
   await page.getByRole("button", { name: "물품 검색", exact: true }).click();
-  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건 · 유사도 높은 순", { exact: true }).waitFor();
   await page.getByText("선택한 장소 1곳", { exact: false }).click();
   await page.getByText("추가로 입력하고 싶은 장소가 있나요?", { exact: true }).waitFor();
   await page.getByRole("button", { name: "+ 장소 추가", exact: true }).click();
@@ -585,7 +583,7 @@ async (page) => {
   await page.getByRole("button", { name: /세 번째 장소.*서울시 중구/ }).click();
   await page.getByRole("button", { name: "이 장소 추가하기", exact: true }).click();
   await page.getByRole("heading", { name: "3개 장소 주변 습득물" }).waitFor();
-  check(await page.getByRole("button", { name: "+ 장소 추가", exact: true }).isDisabled(), "장소는 3곳까지만 선택할 수 있어야 한다");
+  await page.getByRole("button", { name: "+ 장소 추가", exact: true }).waitFor({ state: "detached" });
 
   await page.getByRole("button", { name: "새 물건 알림 받기", exact: true }).click();
   const alertPlaces = alertDialog.locator(".alert-place-list li");

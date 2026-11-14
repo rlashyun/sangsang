@@ -1,9 +1,8 @@
 import { useState, type FormEvent } from "react";
 
-import { placeCategoryLabel } from "../lib/presentation";
 import type { Place } from "../types";
 
-export const PLACE_PAGE_SIZE = 4;
+export const PLACE_PAGE_SIZE = 5;
 
 interface LocationSearchProps {
   addingWaypoint: boolean;
@@ -95,7 +94,6 @@ export function LocationSearch({
         <ol className="results location-results" aria-label="위치 검색 결과">
           {visibleResults.map((place, index) => {
             const isActive = selectedPlace === place;
-            const category = placeCategoryLabel(place.category);
             return (
               <li className={`result-item location-result-card${isActive ? " previewing" : ""}`} key={`${place.latitude}:${place.longitude}:${index}`}>
                 <button
@@ -108,7 +106,6 @@ export function LocationSearch({
                   <span className="result-copy">
                     <span className="result-title">{start + index + 1}. {place.name}</span>
                     <span className="result-address">{place.address}</span>
-                    {category && <span className="place-category-tag">{category}</span>}
                   </span>
                 </button>
                 {isActive && <div className="place-card-action">

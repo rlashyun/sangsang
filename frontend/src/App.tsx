@@ -344,7 +344,12 @@ export function App() {
             disabled={addingWaypoint}
             aria-haspopup="dialog" onClick={() => { if (!alertIsOpen) void navigate(`${location.pathname}${location.search}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}>새 물건 알림</button>
         </nav>
-        <button className="app-guide-link" type="button" disabled title="이용안내 화면 준비 중">이용안내</button>
+        <div className="app-header-actions">
+          <button className="app-guide-link" type="button" disabled title="이용안내 화면 준비 중">이용안내</button>
+          <button className="app-guide-link" type="button" disabled title="의견 접수 폼 준비 중">
+            의견 보내기 <span aria-hidden="true">↗</span>
+          </button>
+        </div>
       </header>
       <main className="app-shell">
         <section ref={searchPanelRef} className={`search-panel${selection ? " items-view" : places.length ? " has-place-results" : ""}`} data-expanded={sheetExpanded} aria-label="장소와 습득물 검색">
@@ -401,7 +406,7 @@ export function App() {
               </details>
               {addingWaypoint
                 ? <button type="button" disabled={isSearching} onClick={cancelAddingWaypoint}>추가 취소</button>
-                : <button type="button" disabled={!canAddWaypoint} onClick={startAddingWaypoint}>+ 장소 추가</button>}
+                : canAddWaypoint && <button type="button" onClick={startAddingWaypoint}>+ 장소 추가</button>}
             </section>
           )}
           <LocationSearch
@@ -423,7 +428,6 @@ export function App() {
             <SelectionSummary
               selection={selection}
               onChangeLocation={resetLocation}
-              radiusMeters={selectedPlace ? radiusMeters : undefined}
               notice={radiusNotice}
             />
           )}
@@ -453,7 +457,6 @@ export function App() {
           institutionsLoaded={institutionsLoaded}
           institutionError={institutionError}
           countsAvailable={countsAvailable}
-          countsLoading={countsLoading}
           places={pagePlaces}
           placeNumbers={placeNumbers}
           selectedPlace={selectedPlace}
