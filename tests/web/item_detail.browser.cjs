@@ -131,7 +131,7 @@ async (page) => {
         const laterPage = url.searchParams.has("cursor");
         return route.fulfill({ json: {
           items: laterPage ? items.slice(50) : items.slice(0, 50),
-          total_count: laterPage ? null : items.length,
+          total_count: laterPage ? null : 120,
           next_cursor: laterPage ? null : "2026-11-07:50",
         } });
       }
@@ -139,7 +139,7 @@ async (page) => {
       const offset = Number(url.searchParams.get("cursor")?.split(":")[1] ?? 0);
       return route.fulfill({ json: {
         items: matches.slice(offset, offset + 50),
-        candidate_count: items.length,
+        candidate_count: null,
         match_count: matches.length,
         total_count: matches.length,
         semantic_status: "ok",
@@ -272,7 +272,7 @@ async (page) => {
   check(await page.locator(".item-search-followup").isVisible(), "검색 전부터 페이지 아래 구분선을 표시해야 한다");
   await search.fill("검정 지갑");
   await page.getByRole("button", { name: "물품 검색", exact: true }).click();
-  await page.getByText("검색 결과 상위 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
   check(Math.abs((await itemPagination.boundingBox()).y - paginationBeforeSearch.y) < 1, "검색 전후 페이지 번호의 세로 위치를 유지해야 한다");
   check(await page.locator(".item-previous-radius").count() === 0, "기본 반경에는 이전 범위 표식을 표시하지 않는다");
   const requestsBeforeSearchCursor = itemRequests;
@@ -294,7 +294,7 @@ async (page) => {
   const expandedLocationIds = new URL(expandedResponse.url()).searchParams.get("location_ids").split(",");
   check(expandedLocationIds.includes("77") && expandedLocationIds.includes("89"), "확장하면 기존 기관과 새 범위 기관을 함께 검색해야 한다");
   await page.waitForFunction(() => document.getElementById("found-item-input").value === "검정 지갑");
-  check(lastItemQuery === "검정 지갑", "반경 확장은 미제출 문구 대신 제출 검색어를 유지해야 한다");
+  check(new URL(expandedResponse.url()).searchParams.get("q") === "검정 지갑", "반경 확장은 미제출 문구 대신 제출 검색어를 유지해야 한다");
   check(await page.locator(".item-previous-radius").first().innerText() === "1km 이내", "1.5km 결과에는 1km 이내를 표시한다");
   check(await page.locator(".item-radius-actions button").count() === 2, "반경 축소와 확장 버튼을 같은 그룹에 둔다");
   await page.getByRole("button", { name: "2km로 넓혀보기", exact: true }).click();
@@ -302,7 +302,7 @@ async (page) => {
   check(await page.getByText("1km 이내", { exact: true }).count() === 0, "2km 결과의 이전 범위 표식은 1.5km로 통일한다");
   await page.getByRole("button", { name: "1.5km로 돌아가기", exact: true }).click();
   check(await page.locator(".selection-radius strong").innerText() === "1.5km", "반경 돌아가기는 한 단계 줄여야 한다");
-  await page.getByText("검색 결과 상위 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
   await showItem(8);
   await search.fill("입력 중인 다른 물건");
   const alertTrigger = page.getByRole("button", { name: "새 물건 알림 받기", exact: true });
@@ -540,7 +540,7 @@ async (page) => {
   check(await cards.first().isDisabled(), "목록 갱신 중 상세 열기를 막아야 한다");
   check(await page.getByRole("button", { name: "물품 검색", exact: true }).isDisabled(), "중복 검색을 막아야 한다");
   releaseResponse();
-  await page.getByText("검색 결과 상위 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
   check(await page.locator(".found-item-status.search-loading").count() === 0, "검색 완료 후 로딩 표시를 제거해야 한다");
   check(await page.locator(".found-item-card").first().evaluate(card => getComputedStyle(card).opacity === "1"), "검색 완료 후 카드 밝기를 복원해야 한다");
   responseMode = "empty";
@@ -563,7 +563,7 @@ async (page) => {
   await page.getByRole("button", { name: "이 장소 선택하기", exact: true }).click();
   await search.fill("검정 지갑");
   await page.getByRole("button", { name: "물품 검색", exact: true }).click();
-  await page.getByText("검색 결과 상위 60건", { exact: true }).waitFor();
+  await page.getByText("전체 120건 중 검색 결과 60건", { exact: true }).waitFor();
   await page.getByText("선택한 장소 1곳", { exact: false }).click();
   await page.getByText("추가로 입력하고 싶은 장소가 있나요?", { exact: true }).waitFor();
   await page.getByRole("button", { name: "+ 장소 추가", exact: true }).click();

@@ -67,9 +67,12 @@ export function FoundItemBrowser({
   // PRD 3.3 · 5 — 검색어 없는 목록은 서버가 50건씩 준다. 다음 페이지 커서와 총수를 기억한다.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [candidateCount, setCandidateCount] = useState<number | null>(null);
+  const inventoryCount = useRef<{ scope: string; total: number } | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const requestSequence = useRef(0);
   const locationIds = useMemo(() => institutionLocationIds(scope), [scope]);
+  const scopeKey = locationIds.join(",");
   const showCenteredStatus = items.length === 0 && !isLoading && !statusIsError;
   const nextRadius = nextSearchRadiusMeters(radiusMeters);
   const previousRadius = previousSearchRadiusMeters(radiusMeters);
@@ -86,6 +89,7 @@ export function FoundItemBrowser({
     setSemanticUnavailable(false);
     setNextCursor(null);
     setTotalCount(null);
+    setCandidateCount(null);
     setIsLoadingMore(false);
     if (!locationIds.length) {
       setItems([]);
@@ -108,17 +112,27 @@ export function FoundItemBrowser({
       const nextItems = payload.items || [];
       setSemanticUnavailable(Boolean(searchQuery.trim()) && payload.semantic_status === "unavailable");
       const nextTotal = payload.total_count ?? (payload.next_cursor ? null : nextItems.length);
+      if (!searchQuery && nextTotal !== null) inventoryCount.current = { scope: scopeKey, total: nextTotal };
+      let candidates = payload.candidate_count ?? (inventoryCount.current?.scope === scopeKey ? inventoryCount.current.total : null);
+      if (searchQuery && candidates === null) {
+        // The search endpoint may omit the scope count. The unfiltered first page supplies it.
+        const inventory = await fetchFoundItems(new URLSearchParams({ location_ids: scopeKey }), signal).catch(() => null);
+        if (sequence !== requestSequence.current || signal?.aborted) return;
+        candidates = inventory?.total_count ?? null;
+        if (candidates !== null) inventoryCount.current = { scope: scopeKey, total: candidates };
+      }
       setItems(nextItems);
       setLoadedRadius(radiusMeters);
       setNextCursor(payload.next_cursor ?? null);
       setTotalCount(nextTotal);
+      setCandidateCount(candidates);
       if (!nextItems.length) {
         setStatus(searchQuery
           ? `'${searchQuery}'와 유사한 습득물이 없습니다.`
           : "현재 조건에 해당하는 습득물이 없습니다.");
       } else {
         setStatus(searchQuery
-          ? `검색 결과 상위 ${(payload.match_count ?? nextItems.length).toLocaleString("ko-KR")}건`
+          ? matchedItemsStatus(candidates, payload.match_count ?? nextTotal ?? nextItems.length)
           : storedItemsStatus(nextTotal ?? nextItems.length));
       }
     } catch (error) {
@@ -161,7 +175,7 @@ export function FoundItemBrowser({
       setItemPage(result.page);
       setStatusIsError(false);
       setStatus(submittedQueryRef.current
-        ? `검색 결과 상위 ${(totalCount ?? result.items.length).toLocaleString("ko-KR")}건`
+        ? matchedItemsStatus(candidateCount, totalCount ?? result.items.length)
         : storedItemsStatus(totalCount ?? result.items.length));
     } catch (error) {
       if (sequence !== requestSequence.current) return;
@@ -333,6 +347,11 @@ export function FoundItemBrowser({
       )}
     </section>
   );
+}
+
+function matchedItemsStatus(candidates: number | null, matches: number) {
+  const result = `검색 결과 ${matches.toLocaleString("ko-KR")}건`;
+  return candidates === null ? result : `전체 ${candidates.toLocaleString("ko-KR")}건 중 ${result}`;
 }
 
 function storedItemsStatus(total: number) {
