@@ -49,10 +49,12 @@ test("radius geometry and marker labels", async () => {
   assert.equal(markerCountLabel(1500), "999+");
 });
 
-test("radius expands one step at a time and stops at 2km", async () => {
-  const { nextSearchRadiusMeters } = await import("../../frontend/src/lib/geo.js");
+test("search radius moves one step at a time between 1km and 2km", async () => {
+  const { nextSearchRadiusMeters, previousSearchRadiusMeters } = await import("../../frontend/src/lib/geo.js");
   assert.equal(nextSearchRadiusMeters(1000), 1500);
   assert.equal(nextSearchRadiusMeters(1500), 2000);
   assert.equal(nextSearchRadiusMeters(2000), null);
-  assert.equal(nextSearchRadiusMeters(3000), null);
+  assert.equal(previousSearchRadiusMeters(2000), 1500);
+  assert.equal(previousSearchRadiusMeters(1500), 1000);
+  assert.equal(previousSearchRadiusMeters(1000), null);
 });

@@ -4,6 +4,7 @@ export interface MapColorTokens {
   clusterShadow: string;
   textOnSolid: string;
   pinPartner: string;
+  pinPlace: string;
   pinPolice: string;
   pinBadge: string;
   pinShadow: string;
@@ -70,6 +71,7 @@ export function readMapColorTokens(): MapColorTokens {
     clusterShadow: cssColor("--color-map-cluster-shadow"),
     textOnSolid: cssColor("--color-text-on-solid"),
     pinPartner: cssColor("--color-source-partner"),
+    pinPlace: cssColor("--color-map-pin-place"),
     pinPolice: cssColor("--color-source-police"),
     pinBadge: cssColor("--color-map-pin-badge"),
     pinShadow: cssColor("--color-text-primary"),

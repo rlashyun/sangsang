@@ -646,6 +646,21 @@ class KakaoLocalClientTests(unittest.TestCase):
             "public, s-maxage=300, stale-while-revalidate=600",
         )
 
+    def test_institution_endpoint_can_load_locations_without_count_query(self) -> None:
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=FakeMapLocationClient(counts_error=True),
+        )
+
+        response = TestClient(app).get("/api/institutions?with_counts=false")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["institutions"][0]["storage_location_id"], 77)
+        self.assertFalse(payload["counts_available"])
+        self.assertIsNone(payload["count_error"])
+
     @patch("urllib.request.urlopen")
     def test_institution_endpoint_keeps_map_when_item_counts_fail(self, urlopen) -> None:
         # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
