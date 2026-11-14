@@ -19,7 +19,7 @@ from retriever_lost_found.integrations.supabase import (
     SupabaseMapLocationClient,
     apply_item_counts,
 )
-from retriever_lost_found.search.fuzzy import fuzzy_item_score, rank_found_items
+from retriever_lost_found.search.hybrid import keyword_scores
 from retriever_lost_found.web.app import (
     content_security_policy as _content_security_policy,
     create_app,
@@ -50,6 +50,10 @@ class FakeResponse:
 
 
 class FakeFoundItemClient:
+    def fetch_rerank_items(self, location_ids, item_ids, **kwargs):
+        return [{"item_id": row["id"], "detail": row, "vector": None}
+                for row in self.fetch_items(location_ids) if row["id"] in item_ids]
+
     def __init__(self, *, page_has_more: bool = False) -> None:
         self.page_has_more = page_has_more
         self.fetch_items_calls: list[list[int]] = []
@@ -404,7 +408,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.fetch_item_page(list(range(1, 302)), limit=50)
 
-    def test_fuzzy_search_matches_korean_typo_and_rejects_unrelated_item(self) -> None:
+    def test_keyword_search_matches_query_correction_and_rejects_unrelated_item(self) -> None:
         phone = {
             "id": 1,
             "item_name": "애플 아이폰 15 프로",
@@ -422,12 +426,12 @@ class KakaoLocalClientTests(unittest.TestCase):
             "registered_on": "2026-08-25",
         }
 
-        ranked = rank_found_items([wallet, phone], "아이퐁")
+        scores = keyword_scores([wallet, phone], "아이퐁")
 
-        self.assertEqual([item["id"] for item in ranked], [1])
-        self.assertGreater(fuzzy_item_score("아이퐁", phone), 0.5)
+        self.assertEqual(set(scores), {1})
+        self.assertGreater(scores[1], 0)
 
-    def test_fuzzy_search_combines_color_and_item_tokens(self) -> None:
+    def test_keyword_search_combines_color_and_item_tokens(self) -> None:
         item = {
             "id": 1,
             "item_name": "남성용 지갑",
@@ -437,10 +441,10 @@ class KakaoLocalClientTests(unittest.TestCase):
             "registered_on": "2026-08-25",
         }
 
-        ranked = rank_found_items([item], "검정 지갑")
+        scores = keyword_scores([item], "검정 지갑")
 
-        self.assertEqual(len(ranked), 1)
-        self.assertGreaterEqual(ranked[0]["match_score"], 0.8)
+        self.assertEqual(set(scores), {1})
+        self.assertGreater(scores[1], 0)
 
     def test_found_item_http_endpoint_returns_ranked_items(self) -> None:
         app = create_app(
@@ -590,7 +594,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(found_item_client.fetch_items_calls, [[77]])
+        self.assertEqual(found_item_client.fetch_items_calls, [[77], [77]])
         self.assertEqual(found_item_client.page_calls, [])
         self.assertIsNone(response.json()["next_cursor"])
 
@@ -610,7 +614,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.json()["error"],
-            "검색어 결과는 페이지로 나눠 받지 않습니다.",
+            "검색 결과 페이지 위치가 올바르지 않습니다.",
         )
 
     def test_institution_endpoint_uses_database_locations_and_vercel_cdn_cache(self) -> None:

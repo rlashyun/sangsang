@@ -12,6 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from ..config import read_env_value, read_optional_env_value
+from ..integrations.embeddings import BgeM3Client
 from ..integrations.kakao import KakaoLocalClient, kakao_sdk_url
 from ..integrations.supabase import (
     SupabaseFoundItemClient,
@@ -19,7 +20,7 @@ from ..integrations.supabase import (
     apply_item_counts,
     validate_location_ids,
 )
-from ..search.fuzzy import rank_found_items
+from ..search.hybrid import search_with_deadline, SearchDeadlineExceeded
 
 
 DEFAULT_STATIC_DIR = Path(__file__).with_name("static")
@@ -34,6 +35,7 @@ def create_app(
     institutions: list[dict[str, Any]] | None = None,
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
+    embedding_client: BgeM3Client | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
     sdk_url = kakao_sdk_url(javascript_key)
@@ -186,18 +188,29 @@ def create_app(
                     ),
                 }
             )
+        offset = 0
         if cursor.strip():
-            raise ValueError("검색어 결과는 페이지로 나눠 받지 않습니다.")
-        # PRD 4.5 — 퍼지 점수는 후보 전체를 봐야 매길 수 있어 검색어가 있으면 전체를 읽는다.
-        candidates = found_item_client.fetch_items(validated_ids)
-        matched_items = rank_found_items(candidates, search_query)
+            if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
+                raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
+            offset = int(cursor.strip().split(":")[1])
+        # PRD 4.1 · 4.5 — 키워드와 의미 검색을 같은 기관 범위에서 병렬 실행한다.
+        try:
+            matched_items, candidate_count, semantic_status = search_with_deadline(
+                found_item_client, search_query, validated_ids, embedding_client, offset=offset,
+            )
+        except SearchDeadlineExceeded as error:
+            return JSONResponse(status_code=504, content={"error": str(error)})
+        match_count = len(matched_items)
+        page_items = matched_items[offset:offset+FOUND_ITEM_PAGE_LIMIT]
         return JSONResponse(
             content={
-                "items": matched_items,
-                "candidate_count": len(candidates),
-                "match_count": len(matched_items),
+                "items": page_items,
+                "candidate_count": candidate_count,
+                "semantic_status": semantic_status,
+                "match_count": match_count,
+                "total_count": match_count,
                 "query": search_query,
-                "next_cursor": None,
+                "next_cursor": f"search:{offset+FOUND_ITEM_PAGE_LIMIT}" if offset+FOUND_ITEM_PAGE_LIMIT<match_count else None,
             }
         )
 
@@ -225,11 +238,13 @@ def create_runtime_app() -> FastAPI:
 
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
+    embedding_key = read_optional_env_value("OPENROUTER_API_KEY")
     app = create_app(
         KakaoLocalClient(rest_api_key),
         javascript_key,
         map_location_client=map_location_client,
         found_item_client=found_item_client,
+        embedding_client=BgeM3Client(embedding_key) if embedding_key else None,
     )
     app.state.location_source = "supabase"
     app.state.item_counts_available = True

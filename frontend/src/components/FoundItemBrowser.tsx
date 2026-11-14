@@ -62,6 +62,7 @@ export function FoundItemBrowser({
     () => `위치를 검색하면 반경 ${radiusKilometersLabel(radiusMeters)}의 습득물을 보여드립니다.`,
   );
   const [statusIsError, setStatusIsError] = useState(false);
+  const [semanticUnavailable, setSemanticUnavailable] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   // PRD 3.3 · 5 — 검색어 없는 목록은 서버가 50건씩 준다. 다음 페이지 커서와 총수를 기억한다.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -82,6 +83,7 @@ export function FoundItemBrowser({
     setDetail(null);
     setItemPage(0);
     const sequence = ++requestSequence.current;
+    setSemanticUnavailable(false);
     setNextCursor(null);
     setTotalCount(null);
     setIsLoadingMore(false);
@@ -104,6 +106,7 @@ export function FoundItemBrowser({
       const payload = await fetchFoundItems(params, signal);
       if (sequence !== requestSequence.current) return;
       const nextItems = payload.items || [];
+      setSemanticUnavailable(Boolean(searchQuery.trim()) && payload.semantic_status === "unavailable");
       const nextTotal = payload.total_count ?? (payload.next_cursor ? null : nextItems.length);
       setItems(nextItems);
       setLoadedRadius(radiusMeters);
@@ -115,7 +118,7 @@ export function FoundItemBrowser({
           : "현재 조건에 해당하는 습득물이 없습니다.");
       } else {
         setStatus(searchQuery
-          ? `후보 ${(payload.candidate_count ?? 0).toLocaleString("ko-KR")}건 중 유사한 물품 ${nextItems.length.toLocaleString("ko-KR")}건`
+          ? `검색 결과 상위 ${(payload.match_count ?? nextItems.length).toLocaleString("ko-KR")}건`
           : storedItemsStatus(nextTotal ?? nextItems.length));
       }
     } catch (error) {
@@ -157,7 +160,9 @@ export function FoundItemBrowser({
       setNextCursor(result.nextCursor);
       setItemPage(result.page);
       setStatusIsError(false);
-      setStatus(storedItemsStatus(totalCount ?? result.items.length));
+      setStatus(submittedQueryRef.current
+        ? `검색 결과 상위 ${(totalCount ?? result.items.length).toLocaleString("ko-KR")}건`
+        : storedItemsStatus(totalCount ?? result.items.length));
     } catch (error) {
       if (sequence !== requestSequence.current) return;
       // 이미 보여 준 목록은 유지하고, 같은 버튼으로 다시 시도할 수 있게 둔다.
@@ -250,6 +255,7 @@ export function FoundItemBrowser({
         aria-live="polite"
       >
         {showLoadingOverCards ? "습득물 목록" : status}
+        {semanticUnavailable && <span> 의미 검색에 연결하지 못해 키워드 검색 결과를 보여드리고 있어요.</span>}
       </div>
       <div className={`found-items-region${visibleItems.length ? "" : " empty"}`}>
       <ol className="found-items" data-page-size={pageSize} aria-label="습득물 목록" aria-busy={isLoading || isLoadingMore}>
