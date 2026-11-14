@@ -42,7 +42,6 @@ interface KakaoMapProps {
   institutionsLoaded: boolean;
   institutionError: string;
   countsAvailable: boolean;
-  countsLoading: boolean;
   places: Place[];
   placeNumbers: number[];
   selectedPlace: Place | null;
@@ -172,7 +171,6 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   institutionsLoaded,
   institutionError,
   countsAvailable,
-  countsLoading,
   places,
   placeNumbers,
   selectedPlace,
@@ -477,24 +475,19 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     <section className={`map-panel${softenedMarkers ? " map-panel-softened" : ""}`} aria-label="카카오 지도">
       <div id="map" ref={containerRef} />
       <MapControls map={mapReady ? mapRef.current : null} />
-      <div
+      {(institutionsLoaded || institutionError) && <div
         className={`institution-status${institutionError ? " error" : institutionsLoaded ? " loaded" : ""}${selectedPlace ? " filtered" : ""}`}
         aria-live="polite"
       >
-        {!institutionsLoaded && !institutionError && (
-          <><span className="status-dot" />연계기관과 경찰청 위치를 불러오는 중…</>
-        )}
-        {institutionError && <>기관 위치 로딩 실패: {institutionError}</>}
+        {institutionError && <span role="alert">기관 위치를 불러오지 못했어요.</span>}
         {institutionsLoaded && !institutionError && (
           <>
-            <span className="status-dot" />
             {selectedPlace && <b>반경 {radiusKilometersLabel(radiusMeters)}</b>}
             <span className="source-count"><span className="source-dot partner" />연계기관 <strong>{sourceCounts.partner.toLocaleString("ko-KR")}곳</strong></span>
             <span className="source-count"><span className="source-dot police" />경찰청 <strong>{sourceCounts.police.toLocaleString("ko-KR")}곳</strong></span>
-            {!countsAvailable && <span className="count-warning">{countsLoading ? "물품 수 불러오는 중…" : "물품 수 미연결"}</span>}
           </>
         )}
-      </div>
+      </div>}
       <div className="map-toolbar">
         <div className="map-badge">{mapBadge}</div>
         {selectedPlace && (

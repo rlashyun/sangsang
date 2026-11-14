@@ -270,6 +270,7 @@ export function FoundItemBrowser({
         </div>
       </form>
 
+      <div className={`found-item-status-row${showCenteredStatus ? " empty" : ""}`}>
       <div
         className={`found-item-status${(isLoading || isLoadingMore) && !showLoadingOverCards ? " search-loading" : ""}${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
         aria-hidden={showLoadingOverCards || undefined}
@@ -278,6 +279,8 @@ export function FoundItemBrowser({
       >
         {showLoadingOverCards ? "습득물 목록" : status}
         {semanticUnavailable && <span> 의미 검색에 연결하지 못해 키워드 검색 결과를 보여드리고 있어요.</span>}
+      </div>
+        {canExpandRadius && <p className="selection-radius">현재 반경 <strong>{radiusKilometersLabel(radiusMeters)}</strong></p>}
       </div>
       <div className={`found-items-region${visibleItems.length ? "" : " empty"}`}>
       <ol className="found-items" data-page-size={pageSize} aria-label="습득물 목록" aria-busy={isLoading || isLoadingMore}>
@@ -358,7 +361,7 @@ export function FoundItemBrowser({
 }
 
 function matchedItemsStatus(candidates: number | null, matches: number) {
-  const result = `검색 결과 ${matches.toLocaleString("ko-KR")}건`;
+  const result = `검색 결과 ${matches.toLocaleString("ko-KR")}건 · 유사도 높은 순`;
   return candidates === null ? result : `전체 ${candidates.toLocaleString("ko-KR")}건 중 ${result}`;
 }
 

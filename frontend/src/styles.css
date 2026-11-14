@@ -1082,7 +1082,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .institution-status strong { color: var(--color-action-text-strong); }
 .institution-status b { color: var(--color-info); font-weight: 800; }
-.count-warning { color: var(--color-warning); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .source-count { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .source-dot {
   width: 9px;
@@ -1094,25 +1093,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .source-dot.partner { background: var(--color-source-partner); }
 .source-dot.police { background: var(--color-source-police); }
 .institution-status.error { color: var(--color-error-map); border-color: var(--color-border-error); }
-.status-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--color-loading);
-  box-shadow: 0 0 0 4px var(--color-loading-ring);
-  animation: status-pulse 1.2s ease-in-out infinite;
-}
-.institution-status.loaded .status-dot {
-  background: var(--color-success);
-  box-shadow: 0 0 0 4px var(--color-success-ring);
-  animation: none;
-}
-.institution-status.filtered .status-dot {
-  background: var(--color-info);
-  box-shadow: 0 0 0 4px var(--color-info-ring);
-}
-@keyframes status-pulse { 50% { opacity: .38; } }
 .map-toolbar {
   position: absolute;
   z-index: 2;
@@ -1288,7 +1268,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }
   button:active { scale: 1; }
-  .status-dot { animation: none; }
 }
 
 /* PRD 4.4 — RETRIEVER의 기본 색상. 기존 의미 기반 토큰을 지도와 공유한다. */
@@ -1389,7 +1368,19 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .app-nav-link { border-bottom: 2px solid transparent; }
 .app-nav-link.active { border-bottom-color: var(--color-action); color: var(--color-action-text); }
-.app-guide-link { margin-left: auto; }
+.app-header-actions { display: flex; gap: 16px; margin-left: auto; align-items: center; }
+.app-header-actions .app-guide-link { white-space: nowrap; gap: 3px; }
+.app-header-actions .app-guide-link + .app-guide-link {
+  position: relative;
+}
+.app-header-actions .app-guide-link + .app-guide-link::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -8px;
+  width: 1px;
+  background: var(--color-border-section);
+}
 .app-header button:disabled { color: var(--color-text-disabled); cursor: default; }
 .app-header a:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 4px; }
 .landing-header h1 { font-weight: 600; }
@@ -1398,6 +1389,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .app-wordmark { font-size: 14px; letter-spacing: .05em; }
   .app-navigation { gap: 14px; }
   .app-nav-link, .app-guide-link { font-size: 11px; }
+  .app-header-actions { gap: 8px; }
+  .app-header-actions .app-guide-link + .app-guide-link::before { inset-inline-start: -4px; }
   .app-shell { min-height: calc(100vh - 64px); height: auto; }
 }
 @media (max-width: 360px) {
@@ -1485,20 +1478,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   overflow-wrap: anywhere;
 }
 .location-result-card .result-address { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
-.place-category-tag {
-  display: inline-block;
-  margin-top: 7px;
-  flex: 0 1 auto;
-  max-width: 100%;
-  padding: 2px 7px;
-  border-radius: 9px;
-  background: var(--color-bg-control);
-  color: var(--color-action-text);
-  font-size: 12px;
-  line-height: 1.5;
-  font-weight: 500;
-  overflow-wrap: anywhere;
-}
 .place-phone { display: block; margin-top: 6px; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
 .place-card-action { display: flex; justify-content: flex-end; padding: 0 14px 12px; }
 .place-card-action button {
@@ -1552,7 +1531,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .baseline-screen.visible { visibility: visible; pointer-events: auto; }
 @media (max-width: 480px) { .screen-comparison-bar { right: 8px; bottom: 8px; } .screen-comparison-bar > span { display: none; } }
 
-/* PRD 4.4 — 장소는 페이지당 4곳 고정, 카드와 페이지 영역을 분리한다. */
+/* PRD 4.4 — 장소는 페이지당 5곳 고정, 카드와 페이지 영역을 분리한다. */
 .has-place-results .landing-header .eyebrow,
 .has-place-results .landing-header .lede { display: none; }
 .has-place-results .landing-header { margin-bottom: 10px; }
@@ -1560,7 +1539,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .has-place-results .status { flex: 0 0 auto; }
 .location-results {
   display: grid;
-  grid-template-rows: repeat(4, minmax(0, 1fr));
+  grid-template-rows: repeat(5, minmax(0, 1fr));
   align-content: start;
   overflow: hidden;
   max-height: 500px;
@@ -1577,7 +1556,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .location-result-card .result-title { line-height: 1.4; margin-bottom: 4px; }
 .location-result-card .result-address { line-height: 1.45; }
-.location-result-card .place-category-tag { margin-top: 4px; max-width: 100%; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; vertical-align: top; }
 .place-pagination {
   display: flex; flex: 0 0 auto; align-items: center; justify-content: center;
   gap: 4px; padding: 10px 0 0; margin-top: auto;
@@ -1609,7 +1587,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .location-result-card .result-button { padding-block: 5px; }
   .location-result-card .result-title { font-size: 15px; }
   .location-result-card .result-address { font-size: 12px; }
-  .location-result-card .place-category-tag { font-size: 11px; }
 }
 
 /* PRD 4.4 — 실제 반경 끝에서 투명해지는 파란 면. 지도와 핀 조작을 막지 않는다. */
@@ -1638,7 +1615,9 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .selection-summary .change-location:hover { color: var(--color-action-text); background: transparent; }
 .selection-summary h2 { font-size: 24px; line-height: 1.35; font-weight: 600; overflow-wrap: anywhere; }
 .selection-summary .selection-description { margin-top: 10px; font-size: 13px; line-height: 1.5; }
-.selection-radius { margin: 12px 0 0; font-size: 13px; line-height: 1.5; color: var(--color-text-secondary); }
+.found-item-status-row { display: flex; align-items: baseline; justify-content: space-between; flex: none; gap: 8px; }
+.found-item-status-row.empty { flex: 1; align-items: stretch; }
+.selection-radius { flex: none; margin: 0 2px 0 auto; padding-block: 6px; font-size: 11px; line-height: 1.4; color: var(--color-text-secondary); white-space: nowrap; }
 .selection-radius strong { margin-left: 4px; color: var(--color-action); font-weight: 600; }
 .selection-notice { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--color-action-text); }
 .search-panel.items-view .item-browser { border-top: 0; padding-top: 0; }
@@ -1697,7 +1676,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .search-panel.items-view .selection-summary { padding-bottom: 16px; }
 .search-panel.items-view .change-location { min-height: 28px; margin-bottom: 6px; }
 .search-panel.items-view .selection-description { margin-top: 6px; }
-.search-panel.items-view .selection-radius { margin-top: 8px; }
 @media (max-width: 820px) {
   .search-panel.items-view .found-items { height: 354px; max-height: 354px; }
 }
@@ -1800,7 +1778,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .search-panel.items-view .change-location { min-height: 26px; margin-bottom: 4px; }
 .search-panel.items-view .selection-summary h2 { font-size: 22px; line-height: 1.35; }
 .search-panel.items-view .selection-description { margin-top: 5px; font-size: 12px; line-height: 1.4; }
-.search-panel.items-view .selection-radius { margin-top: 6px; font-size: 12px; line-height: 1.4; }
 .items-view .found-item-form { margin-bottom: 6px; }
 .items-view .found-item-form input { min-height: 46px; padding: 8px 48px 8px 16px; font-size: 13px; }
 .items-view .found-item-form .search-icon-button { top: 5px; bottom: 5px; width: 36px; min-height: 36px; }
