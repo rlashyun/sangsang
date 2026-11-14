@@ -111,7 +111,8 @@ FastAPI `app`을 진입점으로 사용합니다.
 - 위치 검색 후 동의어·BM25·BGE-M3 혼합 검색 활성화
 
 카카오 REST API 키와 Supabase secret 키는 브라우저로 전달되지 않고 Python 서버에서만 사용됩니다.
-지도 위치와 기관별 물품 수는 `map_locations_with_item_counts` Supabase RPC에서 함께 읽습니다.
+지도 위치와 기관별 물품 수는 `map_locations_with_item_counts_json` Supabase RPC로 한 번에 읽습니다.
+새 백엔드를 배포하기 전에 대상 DB에 `20261114063000_single_map_locations_rpc.sql`을 적용합니다.
 따라서 로컬과 Vercel 모두 다음 서버 환경 변수가 필수입니다.
 
 - `KAKAO_JAVASCRIPT_KEY`
