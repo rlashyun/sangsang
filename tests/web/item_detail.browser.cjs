@@ -555,7 +555,7 @@ async (page) => {
 
   responseMode = "success";
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("http://127.0.0.1:5178/?waypoints=1");
+  await page.goto("http://127.0.0.1:5178/");
   const placeInput = page.getByRole("searchbox", { name: "검색어", exact: true });
   await placeInput.fill("서울역");
   await page.getByRole("button", { name: "장소 검색", exact: true }).click();

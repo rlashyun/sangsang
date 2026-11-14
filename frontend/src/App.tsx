@@ -26,7 +26,6 @@ const MAX_WAYPOINT_PLACES = 3;
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
-  const waypointExperiment = import.meta.env.DEV && new URLSearchParams(location.search).get("waypoints") === "1";
   const alertIsOpen = location.state?.newItemAlert === true;
   const [alertQuery, setAlertQuery] = useState("");
   const mapRef = useRef<KakaoMapHandle>(null);
@@ -60,9 +59,8 @@ export function App() {
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [waypointPlaces, setWaypointPlaces] = useState<Place[]>([]);
   const [addingWaypoint, setAddingWaypoint] = useState(false);
-  useEffect(() => { if (!waypointExperiment) setAlertQuery(""); }, [selectedPlace, waypointExperiment]);
-  const searchCenters = useMemo(() => waypointExperiment && waypointPlaces.length
-    ? waypointPlaces : selectedPlace ? [selectedPlace] : [], [selectedPlace, waypointExperiment, waypointPlaces]);
+  const searchCenters = useMemo(() => waypointPlaces.length
+    ? waypointPlaces : selectedPlace ? [selectedPlace] : [], [selectedPlace, waypointPlaces]);
   const multiplePlaces = searchCenters.length > 1;
   const canAddWaypoint = waypointPlaces.length < MAX_WAYPOINT_PLACES;
   const [previewPlace, setPreviewPlace] = useState<Place | null>(null);
@@ -195,18 +193,16 @@ export function App() {
 
   function confirmPlace() {
     if (!previewPlace || isSearching) return;
-    if (waypointExperiment) {
-      if (addingWaypoint && !canAddWaypoint) return;
-      if (addingWaypoint && waypointPlaces.some(place => (
+    if (addingWaypoint && !canAddWaypoint) return;
+    if (addingWaypoint && waypointPlaces.some(place => (
         place.latitude === previewPlace.latitude && place.longitude === previewPlace.longitude
-      ))) {
-        setLocationStatus("이미 추가한 위치예요. 다른 장소를 선택해주세요.");
-        return;
-      }
-      setWaypointPlaces(addingWaypoint ? [...waypointPlaces, previewPlace] : [previewPlace]);
-      setAddingWaypoint(false);
-      if (!addingWaypoint) setAlertQuery("");
+    ))) {
+      setLocationStatus("이미 추가한 위치예요. 다른 장소를 선택해주세요.");
+      return;
     }
+    setWaypointPlaces(addingWaypoint ? [...waypointPlaces, previewPlace] : [previewPlace]);
+    setAddingWaypoint(false);
+    if (!addingWaypoint) setAlertQuery("");
     if (!addingWaypoint) manuallySetRadius.current = false;
     setSelectedPlace(previewPlace);
     setPreviewPlace(null);
@@ -380,7 +376,7 @@ export function App() {
             if (event.target instanceof HTMLInputElement && event.target.type === "search"
               && window.matchMedia("(max-width: 820px)").matches) setSheetExpanded(true);
           }}>
-          {waypointExperiment && waypointPlaces.length > 0 && (
+          {waypointPlaces.length > 0 && (
             <section className="waypoint-picker" aria-label="선택한 장소">
               <details key={addingWaypoint ? "adding" : "selected"} className="waypoint-menu"
                 onBlur={(event) => {
@@ -434,7 +430,7 @@ export function App() {
 
           {selection && (
             <FoundItemBrowser
-              initialQuery={waypointExperiment ? alertQuery : undefined}
+              initialQuery={alertQuery}
               scope={activeScope}
               previousRadiusLocationIds={previousRadiusLocationIds}
               scopeTitle={activeScopeTitle}

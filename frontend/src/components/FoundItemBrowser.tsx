@@ -91,6 +91,14 @@ export function FoundItemBrowser({
     setTotalCount(null);
     setCandidateCount(null);
     setIsLoadingMore(false);
+    // Keep the merged scope intact when it exceeds the server's institution limit.
+    if (locationIds.length > 300) {
+      setItems([]);
+      setStatus("보관기관이 300곳을 넘었어요. 반경을 줄이거나 선택한 장소를 빼주세요.");
+      setStatusIsError(true);
+      setIsLoading(false);
+      return;
+    }
     if (!locationIds.length) {
       setItems([]);
       setStatus(`반경 ${radiusKilometersLabel(radiusMeters)} 안에 등록된 보관기관이 없습니다.`);
