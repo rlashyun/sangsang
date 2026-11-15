@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from alert_fakes import NOW, TEST_SETTINGS, FakeAlertStore, FakeEmailSender, FakeMonotonic
 from retriever_lost_found.alerts.dispatch import run_send_pass
+from retriever_lost_found.alerts.links import KOREA_TIMEZONE
 from retriever_lost_found.alerts.sender import (
     DailyLimitExceeded,
     LoginFailed,
     PermanentSendError,
     TemporarySendError,
 )
-from retriever_lost_found.alerts.templates import CONFIRM_SUBJECT, EXPIRY_SUBJECT, MATCH_SUBJECT
+from retriever_lost_found.alerts.templates import CONFIRM_SUBJECT, EXPIRY_SUBJECT, FINAL_NOTICE, MATCH_SUBJECT
 
 
 class SendPassTests(unittest.TestCase):
@@ -147,8 +148,9 @@ class SendPassTests(unittest.TestCase):
         self.assertEqual(self.run_pass()["expiry_notices_queued"], 1)
         self.assertEqual([email.subject for email in self.sender.sent], [EXPIRY_SUBJECT, EXPIRY_SUBJECT])
 
-    def test_no_expiry_notice_two_days_before(self) -> None:
-        self.store.add_active_reservation(email="a@example.com", expires_at=self.store.now + timedelta(hours=48))
+    def test_no_expiry_notice_the_day_before_the_last_day(self) -> None:
+        # D+6 11시대 실행은 만료(D+8 0시)까지 약 37시간 — 종료 안내는 마지막 날에만 간다.
+        self.store.add_active_reservation(email="a@example.com", expires_at=self.store.now + timedelta(hours=37))
 
         self.assertEqual(self.run_pass()["expiry_notices_queued"], 0)
 
@@ -179,8 +181,46 @@ class SendPassTests(unittest.TestCase):
 
         self.assertEqual(self.store.reservations[created["reservation_id"]]["email"], "unconfirmed@example.com")
 
+    def test_last_day_schedule_d6_nothing_d7_one_final_mail_d8_cleanup(self) -> None:
+        # PRD 4.3-E — 11-06 15:00 KST 등록 → 만료 11-14 00:00 KST. 발송 실행은 매일 KST 11시대.
+        reservation_id = self.store.add_active_reservation(email="last@example.com")
+        self.store.now = NOW + timedelta(days=6, hours=-3, minutes=30)  # 11-12(D+6) 11:30 KST
+
+        self.assertEqual(self.run_pass()["expiry_notices_queued"], 0)
+        self.store.advance(days=1)  # 11-13(D+7) 11:30 KST
+        self.assertEqual(self.run_pass()["expiry_notices_queued"], 1)
+        self.assertEqual([email.subject for email in self.sender.sent], [EXPIRY_SUBJECT])
+        self.assertIn(FINAL_NOTICE, self.sender.sent[0].text)
+        self.assertIn("/alerts/extend", self.sender.sent[0].text)  # 그날 자정 전까지 연장할 수 있다
+        self.assertEqual(self.store.reservations[reservation_id]["status"], "active")
+
+        self.store.advance(days=1)  # 11-14(D+8) 11:30 KST — 종료 다음 날 이메일을 지운다
+        result = self.run_pass()
+        self.assertEqual((result["reservations_expired"], result["messages_sent"]), (1, 0))
+        self.assertIsNone(self.store.reservations[reservation_id]["email"])
+
+    def test_last_day_results_and_final_notice_go_out_as_one_mail(self) -> None:
+        # PRD 4.3-E 발송 단위(2026-11-15 결정) — 마지막 날 결과는 종료 안내 한 통에 합친다.
+        self.store.now = NOW + timedelta(days=7, hours=-3, minutes=30)  # 11-13(D+7) 11:30 KST
+        reservation_id, message_id = self.reservation_with_alert(
+            "last@example.com", expires_at=datetime(2026, 11, 14, 0, 0, tzinfo=KOREA_TIMEZONE)
+        )
+
+        result = self.run_pass()
+
+        self.assertEqual((result["expiry_notices_queued"], result["messages_sent"]), (1, 1))
+        (email,) = self.sender.sent
+        self.assertEqual(email.subject, EXPIRY_SUBJECT)
+        self.assertIn(FINAL_NOTICE, email.text)
+        self.assertIn("에어팟", email.text)
+        self.assertEqual(self.store.messages[message_id]["kind"], "expiry_notice")
+        self.assertEqual(self.store.messages[message_id]["status"], "sent")
+        self.assertEqual(self.match_statuses(), [])
+        self.assertEqual({note["message_id"] for note in self.store.notified.values()}, {message_id})
+        self.assertEqual(self.store.reservations[reservation_id]["status"], "active")
+
     def test_expiry_day_morning_matches_go_out_before_cleanup(self) -> None:
-        # 11:00 만료, 발송 크론은 11:30에 돌았다 — 그날 아침 매칭분을 보낸 뒤 정리한다(설계 5.3).
+        # 자정에 만료된 예약에 전날 다 못 보낸 알림 메일이 남았다 — 보낸 뒤 정리한다(설계 5.3).
         reservation_id, _ = self.reservation_with_alert(
             "last@example.com", expires_at=self.store.now - timedelta(minutes=30)
         )

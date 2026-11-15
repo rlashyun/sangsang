@@ -31,11 +31,11 @@ def reservation_row(**overrides: Any) -> dict[str, Any]:
         "email": "user@example.com",
         "query": "에어팟",
         "place_name": "서울역",
-        "radius_m": 3000,
+        "radius_m": 1500,
         "status": "active",
         "link_nonce": "nonce-7",
         "created_at": NOW.isoformat(),
-        "expires_at": "2026-11-13T02:00:00+00:00",
+        "expires_at": "2026-11-13T15:00:00+00:00",  # 11-14 00:00 KST = D+7(11-13)이 끝나는 순간
         "extension_count": 0,
     }
     row.update(overrides)
@@ -84,6 +84,7 @@ from datetime import timedelta  # noqa: E402
 
 from retriever_lost_found.alerts.links import (  # noqa: E402
     EXTENSION_DAYS,
+    KOREA_TIMEZONE,
     MAX_EXTENSIONS,
     expires_at_for,
 )
@@ -127,7 +128,7 @@ class FakeMonotonic:
 
 
 class FakeAlertStore:
-    """마이그레이션 20261106120000의 DB 함수와 같은 규칙을 메모리에서 흉내 낸다."""
+    """마이그레이션 20261115090000의 DB 함수와 같은 규칙을 메모리에서 흉내 낸다."""
 
     secret_key = "fake-supabase-secret"
 
@@ -303,11 +304,24 @@ class FakeAlertStore:
         self._end(reservation, "cancelled")
         return "cancelled"
 
+    def _kst_date(self, value):
+        return value.astimezone(KOREA_TIMEZONE).date()
+
+    def _final_notice_exists(self, reservation):
+        return any(
+            message["reservation_id"] == reservation["id"] and message["kind"] == "expiry_notice"
+            and message["expiry_for"] == reservation["expires_at"]
+            for message in self.messages.values()
+        )
+
     def match_queue(self, item_source_code):
+        # PRD 4.3-E — D+1부터, 이번 만료일의 종료 안내를 만든 뒤에는 비교하지 않는다(SQL과 같은 조건).
         rows = [
             (self.cursors[(reservation["id"], item_source_code)], reservation["id"], reservation)
             for reservation in self.reservations.values()
             if reservation["status"] == "active" and reservation["expires_at"] > self.now
+            and self._kst_date(reservation["created_at"]) < self._kst_date(self.now)
+            and not self._final_notice_exists(reservation)
         ]
         rows.sort(key=lambda row: (row[0], row[1]))
         return [{"id": row[2]["id"], "query": row[2]["query"], "checked_until": _iso(row[0])} for row in rows]
@@ -364,15 +378,21 @@ class FakeAlertStore:
         for reservation in self.reservations.values():
             if reservation["status"] != "active":
                 continue
-            if not (self.now < reservation["expires_at"] <= self.now + timedelta(hours=36)):
+            if not (self.now < reservation["expires_at"] <= self.now + timedelta(hours=24)):
                 continue
-            if any(
-                message["reservation_id"] == reservation["id"] and message["kind"] == "expiry_notice"
-                and message["expiry_for"] == reservation["expires_at"]
-                for message in self.messages.values()
-            ):
+            if self._final_notice_exists(reservation):
                 continue
-            self._insert_message(reservation["id"], "expiry_notice", expiry_for=reservation["expires_at"])
+            pending_match = next(
+                (message for message in self.messages.values()
+                 if message["reservation_id"] == reservation["id"] and message["kind"] == "match"
+                 and message["status"] == "pending"),
+                None,
+            )
+            if pending_match is not None:
+                # 그날 기다리는 알림 메일을 종료 안내로 바꿔 한 통으로 보낸다.
+                pending_match.update(kind="expiry_notice", expiry_for=reservation["expires_at"])
+            else:
+                self._insert_message(reservation["id"], "expiry_notice", expiry_for=reservation["expires_at"])
             count += 1
         return count
 

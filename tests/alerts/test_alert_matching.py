@@ -18,7 +18,9 @@ class MatchPassTests(unittest.TestCase):
         self.store.add_location(1, 37.5547 + 0.0089, 126.9707)  # 서울역 북쪽 약 990m — 1km 안
         self.store.add_location(2, 37.5547 + 0.0180, 126.9707)  # 약 2km — 1km 밖
         self.reservation_id = self.store.add_active_reservation(radius_m=1000)
-        self.store.advance(hours=1)  # 이후 추가하는 물품은 예약 뒤에 들어온 것이다
+        # 11-06 15:00 KST 예약 → 11-07 09:00 KST(D+1). PRD 4.3-E — 비교는 등록 다음날부터 한다.
+        # 이후 추가하는 물품은 예약 뒤에 들어온 것이다.
+        self.store.advance(hours=18)
 
     def run_pass(self, source: str = "partner_api", clock=None) -> dict:
         return run_match_pass(
@@ -78,6 +80,28 @@ class MatchPassTests(unittest.TestCase):
         self.assertEqual(len(matches), 1)
         self.assertEqual({note["message_id"] for note in self.store.notified.values()}, {matches[0]["id"]})
         self.assertEqual(self.queued_item_ids(), [10, 11])
+
+    def test_registration_day_is_skipped_and_its_items_wait_for_the_next_day(self) -> None:
+        # PRD 4.3-E — 등록일(D)에는 비교하지 않는다. 그날 들어온 물품은 D+1 첫 실행에서 본다.
+        self.store.now = NOW + timedelta(hours=2)  # 11-06 17:00 KST, 아직 등록일
+        self.store.add_found_item(10, storage_location_id=1)
+
+        same_day = self.run_pass()
+
+        self.assertEqual((same_day["reservations_checked"], self.queued_item_ids()), (0, []))
+        self.store.advance(hours=16)  # 11-07 09:00 KST
+        self.assertEqual(self.run_pass()["items_queued"], 1)
+        self.assertEqual(self.queued_item_ids(), [10])
+
+    def test_no_more_matching_once_the_final_notice_exists(self) -> None:
+        # PRD 4.3-E — 종료 안내 뒤에는 "이후에는 메일이 발송되지 않아요". 연장하면 다시 본다.
+        reservation = self.store.reservations[self.reservation_id]
+        self.store._insert_message(self.reservation_id, "expiry_notice", expiry_for=reservation["expires_at"])
+        self.store.add_found_item(10, storage_location_id=1)
+
+        self.assertEqual(self.run_pass()["reservations_checked"], 0)
+        self.store.extend_reservation(self.reservation_id)
+        self.assertEqual(self.run_pass()["items_queued"], 1)
 
     def test_expired_reservation_gets_nothing(self) -> None:
         self.store.reservations[self.reservation_id]["expires_at"] = self.store.now - timedelta(minutes=1)

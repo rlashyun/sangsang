@@ -17,7 +17,7 @@ def request_payload(**overrides):
         "query": "에어팟",
         "latitude": 37.5547,
         "longitude": 126.9707,
-        "radius_m": 3000,
+        "radius_m": 1500,
         "place_name": "서울역",
         "consent": True,
     }
@@ -72,9 +72,12 @@ class CreateReservationTests(AlertServiceTestCase):
                 self.create(query=query)
 
     def test_radius_must_be_one_of_the_screen_options(self) -> None:
-        self.create(radius_m=3000)
+        # PRD 4.3-E — 알림 반경은 1·1.5·2km(2026-11-09 결정). 옛 3·5km는 받지 않는다.
+        for index, radius in enumerate((1000, 1500, 2000)):
+            with self.subTest(radius=radius):
+                self.create(ip=f"203.0.113.{index + 10}", email=f"radius{index}@example.com", radius_m=radius)
 
-        for radius in (2000, True, "3000", 3000.5):
+        for radius in (3000, 5000, 500, True, "1500", 1500.5):
             with self.subTest(radius=radius), self.assertRaises(ValueError):
                 self.create(radius_m=radius)
 
@@ -229,9 +232,10 @@ class LinkActionTests(AlertServiceTestCase):
         summary = self.service.summary(self.token)
 
         self.assertEqual(summary["status"], "pending")
-        self.assertEqual(summary["radius_m"], 3000)
+        self.assertEqual(summary["radius_m"], 1500)
         self.assertEqual(summary["extensions_left"], 3)
-        self.assertEqual(summary["expires_at"], "2026-11-13T11:00:00+09:00")
+        self.assertEqual(summary["expires_at"], "2026-11-14T00:00:00+09:00")
+        self.assertEqual(summary["last_day"], "2026-11-13")
         self.assertEqual(self.reservation, before)
 
 

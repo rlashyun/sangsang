@@ -5,16 +5,16 @@ import hmac
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from .settings import AlertSettings
 
 KOREA_TIMEZONE = timezone(timedelta(hours=9))
-RESERVATION_DAYS = 7  # PRD 4.2 P1 — 등록한 날부터 1주일
+# PRD 4.3-E — 등록일을 D일로 할 때 D+1부터 D+7까지 한국시간 달력상 7일 알린다.
+RESERVATION_DAYS = 7
 EXTENSION_DAYS = 7  # 설계 2장 — 연장 한 번에 +7일
 MAX_EXTENSIONS = 3  # 설계 2장 — 최대 3회(최장 4주)
-EXPIRY_HOUR_KST = 11  # 설계 5.3 — 발송 크론(KST 11시대)과 맞춘다
 # 메일 속 링크가 여는 프런트 경로. 강지현과 합의가 남았다(설계 13장) — 바뀌면 여기만 고친다.
 LINK_PATHS = {
     "confirm": "/alerts/confirm",
@@ -67,11 +67,15 @@ def ip_hash(secret: str, ip: str) -> str | None:
 
 
 def expires_at_for(created_at: datetime) -> datetime:
-    """설계 5.3 — 등록한 날(KST 날짜) + 7일의 11:00 KST."""
+    """PRD 4.3-E — 마지막 날 D+7이 끝나는 순간, 곧 D+8 00:00 KST(2026-11-15 결정).
+
+    D+7 발송 실행에서 종료·연장 안내를 보내고, 그날 자정 전까지 연장할 수 있다.
+    이메일은 D+8 발송 실행의 정리 단계에서 지운다(화면 문구 "종료 다음 날 삭제").
+    """
     local_date = created_at.astimezone(KOREA_TIMEZONE).date()
     return datetime.combine(
-        local_date + timedelta(days=RESERVATION_DAYS),
-        time(EXPIRY_HOUR_KST),
+        local_date + timedelta(days=RESERVATION_DAYS + 1),
+        time(0),
         tzinfo=KOREA_TIMEZONE,
     )
 
@@ -80,6 +84,16 @@ def parse_timestamp(value: str | datetime) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(value)
+
+
+def first_alert_day(created_at: str | datetime) -> date:
+    """PRD 4.3-E — 알림은 등록 다음날(D+1)부터. 확인이 늦어도 일정은 등록일 기준이다."""
+    return parse_timestamp(created_at).astimezone(KOREA_TIMEZONE).date() + timedelta(days=1)
+
+
+def last_alert_day(expires_at: str | datetime) -> date:
+    """만료 시각(자정) 바로 전 날짜 — 처음 예약이면 D+7, 연장하면 7일씩 뒤로 간다."""
+    return (parse_timestamp(expires_at).astimezone(KOREA_TIMEZONE) - timedelta(seconds=1)).date()
 
 
 def mail_links(settings: AlertSettings, reservation: dict[str, Any], now: datetime) -> MailLinks:

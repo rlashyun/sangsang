@@ -59,7 +59,8 @@ def compose_message(
         items = payload.get("items") or []
         return match_email(email, reservation, links, items) if items else None
     if kind == "expiry_notice":
-        return expiry_notice_email(email, reservation, links)
+        # PRD 4.3-E — 마지막 날 안내는 결과가 없어도 보내고, 그날 매칭분이 붙어 있으면 함께 싣는다.
+        return expiry_notice_email(email, reservation, links, payload.get("items") or [])
     return None
 
 

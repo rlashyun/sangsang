@@ -29,7 +29,7 @@ create table public.alert_reservations (
     constraint alert_reservations_place_not_blank check (btrim(place_name) <> ''),
     constraint alert_reservations_position_valid
         check (latitude between -90 and 90 and longitude between -180 and 180),
-    constraint alert_reservations_radius_allowed check (radius_m in (1000, 3000, 5000)),
+    constraint alert_reservations_radius_allowed check (radius_m in (1000, 1500, 2000)),
     constraint alert_reservations_status_valid
         check (status in ('pending', 'active', 'expired', 'cancelled', 'unconfirmed_expired')),
     constraint alert_reservations_extension_range check (extension_count between 0 and 3),
@@ -352,6 +352,8 @@ end;
 $$;
 
 -- 설계 6.1 — 매칭할 활성 예약. 커서가 오래된 예약부터 처리해 시간 예산으로 멈춘 날 밀린 예약이 먼저 돈다.
+-- PRD 4.3-E — 등록 다음날(D+1)부터 비교한다. 등록일에 들어온 물품은 커서가 예약 시각이라 D+1에 함께 본다.
+-- 이번 만료일의 종료 안내를 만든 뒤에는 더 비교하지 않는다("이후에는 메일이 발송되지 않아요").
 create or replace function public.alert_match_queue(p_item_source_code text)
 returns table (id bigint, query text, checked_until timestamptz)
 language sql
@@ -366,6 +368,15 @@ as $$
      and match_cursor.item_source_code = p_item_source_code
     where reservation.status = 'active'
       and reservation.expires_at > now()
+      and (reservation.created_at at time zone 'Asia/Seoul')::date
+          < (now() at time zone 'Asia/Seoul')::date
+      and not exists (
+          select 1
+          from public.alert_messages as notice
+          where notice.reservation_id = reservation.id
+            and notice.kind = 'expiry_notice'
+            and notice.expiry_for = reservation.expires_at
+      )
     order by match_cursor.checked_until, reservation.id
 $$;
 
@@ -500,9 +511,11 @@ begin
 end;
 $$;
 
--- 설계 5.3 — 만료 시각이 11:00 KST로 고정이라 만료 전날 발송 실행에서만 36시간 안에 든다.
+-- PRD 4.3-E — 마지막 날(D+7) 종료·연장 안내. 만료 시각이 D+8 00:00 KST라 하루 한 번(KST 11시대) 도는
+-- 발송 실행 가운데 마지막 날 실행에서만 24시간 안에 든다(전날 실행은 약 37시간 전).
+-- 그날 기다리는 알림 메일이 있으면 새 행을 만들지 않고 그 메일을 종료 안내로 바꿔 한 통으로 보낸다.
 create or replace function public.enqueue_alert_expiry_notices(
-    p_window interval default interval '36 hours'
+    p_window interval default interval '24 hours'
 )
 returns integer
 language plpgsql
@@ -511,8 +524,27 @@ security invoker
 set search_path = ''
 as $$
 declare
-    v_count integer;
+    v_merged integer;
+    v_inserted integer;
 begin
+    update public.alert_messages as message
+    set kind = 'expiry_notice', expiry_for = reservation.expires_at
+    from public.alert_reservations as reservation
+    where message.reservation_id = reservation.id
+      and message.kind = 'match'
+      and message.status = 'pending'
+      and reservation.status = 'active'
+      and reservation.expires_at > now()
+      and reservation.expires_at <= now() + p_window
+      and not exists (
+          select 1
+          from public.alert_messages as notice
+          where notice.reservation_id = reservation.id
+            and notice.kind = 'expiry_notice'
+            and notice.expiry_for = reservation.expires_at
+      );
+    get diagnostics v_merged = row_count;
+
     insert into public.alert_messages (reservation_id, kind, expiry_for)
     select reservation.id, 'expiry_notice', reservation.expires_at
     from public.alert_reservations as reservation
@@ -520,8 +552,8 @@ begin
       and reservation.expires_at > now()
       and reservation.expires_at <= now() + p_window
     on conflict (reservation_id, expiry_for) where kind = 'expiry_notice' do nothing;
-    get diagnostics v_count = row_count;
-    return v_count;
+    get diagnostics v_inserted = row_count;
+    return v_merged + v_inserted;
 end;
 $$;
 

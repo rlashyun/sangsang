@@ -25,7 +25,7 @@ PAYLOAD = {
     "query": "에어팟",
     "latitude": 37.5547,
     "longitude": 126.9707,
-    "radius_m": 3000,
+    "radius_m": 1500,
     "place_name": "서울역",
     "consent": True,
 }

@@ -11,6 +11,7 @@ from .links import (
     MAX_EXTENSIONS,
     expires_at_for,
     ip_hash,
+    last_alert_day,
     mail_links,
     new_link_nonce,
     parse_timestamp,
@@ -20,9 +21,9 @@ from .links import (
 from .sender import EmailSender, SendError, with_idempotency_key
 from .settings import AlertSettings
 from .store import AlertStore
-from .templates import confirmation_email, format_expiry
+from .templates import alert_period, confirmation_email, format_day
 
-ALLOWED_RADII_METERS = (1000, 3000, 5000)  # PRD 3.1-3 · 4.2 — 화면의 1·3·5km
+ALLOWED_RADII_METERS = (1000, 1500, 2000)  # PRD 4.3-E — 알림 화면의 1·1.5·2km(2026-11-09 결정)
 MAX_QUERY_LENGTH = 30  # PRD 3.3 · D3 — 습득물 검색어 상한
 MAX_PLACE_NAME_LENGTH = 100
 MAX_EMAIL_LENGTH = 254
@@ -88,7 +89,7 @@ def _coordinate(value: Any, name: str, bounds: tuple[float, float]) -> float:
 
 def _radius(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value not in ALLOWED_RADII_METERS:
-        raise ValueError("반경은 1km, 3km, 5km 중 하나여야 합니다.")
+        raise ValueError("반경은 1km, 1.5km, 2km 중 하나여야 합니다.")
     return value
 
 
@@ -191,6 +192,8 @@ class AlertService:
             "radius_m": int(reservation["radius_m"]),
             "query": reservation["query"],
             "expires_at": parse_timestamp(reservation["expires_at"]).astimezone(KOREA_TIMEZONE).isoformat(),
+            # PRD 4.3-E — 화면이 자정 만료 시각을 날짜로 바꾸지 않아도 되게 마지막 알림 날짜를 준다.
+            "last_day": last_alert_day(reservation["expires_at"]).isoformat(),
             "extensions_left": MAX_EXTENSIONS - int(reservation["extension_count"]),
         }
 
@@ -198,7 +201,7 @@ class AlertService:
         reservation = self._reservation(token)
         result = self.store.confirm_reservation(int(reservation["id"]))
         messages = {
-            "confirmed": f"알림 예약이 켜졌습니다. {format_expiry(reservation['expires_at'])}까지 알려 드립니다.",
+            "confirmed": f"알림 예약이 켜졌습니다. {alert_period(reservation)} 알려 드립니다.",
             "already_active": "이미 켜져 있는 예약입니다.",
             "link_expired": "확인 링크의 유효 시간(24시간)이 지났습니다. 다시 예약해 주세요.",
             "ended": "이미 끝난 예약입니다.",
@@ -213,11 +216,13 @@ class AlertService:
         result = outcome.get("result")
         if result == "extended":
             expires_at = parse_timestamp(outcome["expires_at"]).astimezone(KOREA_TIMEZONE)
+            last_day = last_alert_day(expires_at)
             left = int(outcome["extensions_left"])
             return {
                 "result": "extended",
-                "message": f"알림을 {format_expiry(expires_at)}까지 연장했습니다. 남은 연장은 {left}회입니다.",
+                "message": f"알림을 {format_day(last_day)}까지 연장했습니다. 남은 연장은 {left}회입니다.",
                 "expires_at": expires_at.isoformat(),
+                "last_day": last_day.isoformat(),
                 "extensions_left": left,
             }
         if result == "limit_reached":

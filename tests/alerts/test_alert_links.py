@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from alert_fakes import NOW, TEST_SETTINGS, reservation_row
 from retriever_lost_found.alerts.links import (
     KOREA_TIMEZONE,
     expires_at_for,
+    first_alert_day,
     ip_hash,
+    last_alert_day,
     link_token,
     mail_links,
     new_link_nonce,
@@ -52,23 +54,25 @@ class IpHashTests(unittest.TestCase):
 
 
 class ExpiryTests(unittest.TestCase):
-    def test_expiry_is_eleven_kst_seven_days_after_registration(self) -> None:
-        # 11-06 15:00 KST 등록 → 11-13 11:00 KST (설계 5.3)
+    def test_expiry_is_the_end_of_d_plus_seven(self) -> None:
+        # PRD 4.3-E — 11-06 15:00 KST 등록(D) → D+1 11-07 ~ D+7 11-13, 만료는 11-14 00:00 KST
         registered = datetime(2026, 11, 6, 6, 0, tzinfo=timezone.utc)
 
-        self.assertEqual(
-            expires_at_for(registered),
-            datetime(2026, 11, 13, 11, 0, tzinfo=KOREA_TIMEZONE),
-        )
+        expires_at = expires_at_for(registered)
+
+        self.assertEqual(expires_at, datetime(2026, 11, 14, 0, 0, tzinfo=KOREA_TIMEZONE))
+        self.assertEqual(first_alert_day(registered), date(2026, 11, 7))
+        self.assertEqual(last_alert_day(expires_at), date(2026, 11, 13))
 
     def test_expiry_counts_from_the_korean_date_not_the_utc_date(self) -> None:
-        # 11-06 00:30 KST는 UTC로 아직 11-05다. 한국 날짜 기준이면 11-13, UTC 기준이면 11-12가 된다.
+        # 11-06 00:30 KST는 UTC로 아직 11-05다. 한국 날짜 기준이면 11-14 0시, UTC 기준이면 11-13 0시가 된다.
         registered = datetime(2026, 11, 5, 15, 30, tzinfo=timezone.utc)
 
         self.assertEqual(
             expires_at_for(registered),
-            datetime(2026, 11, 13, 11, 0, tzinfo=KOREA_TIMEZONE),
+            datetime(2026, 11, 14, 0, 0, tzinfo=KOREA_TIMEZONE),
         )
+        self.assertEqual(first_alert_day(registered), date(2026, 11, 7))
 
 
 class MailLinksTests(unittest.TestCase):

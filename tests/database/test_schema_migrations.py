@@ -150,7 +150,7 @@ class SchemaMigrationTests(unittest.TestCase):
 
     def _alert_migration(self) -> str:
         return " ".join(
-            (MIGRATIONS / "20261106120000_create_alert_scheduler.sql")
+            (MIGRATIONS / "20261115090000_create_alert_scheduler.sql")
             .read_text(encoding="utf-8")
             .lower()
             .split()
@@ -244,6 +244,16 @@ class SchemaMigrationTests(unittest.TestCase):
         # 커서 이후 새 물품을 바로 찾는 인덱스, 보존기간 삭제가 cascade로 이 표를 찾는 인덱스
         self.assertIn("on public.found_items (item_source_code, first_seen_at)", migration)
         self.assertIn("on public.alert_notified_items (found_item_id)", migration)
+        # PRD 4.3-E — 알림 반경은 1·1.5·2km, 비교는 D+1부터, 종료 안내는 마지막 날 실행에서만(24시간 창)
+        # 그날 알림 메일과 한 통으로 보낸다.
+        self.assertIn("check (radius_m in (1000, 1500, 2000))", migration)
+        self.assertIn(
+            "(reservation.created_at at time zone 'asia/seoul')::date"
+            " < (now() at time zone 'asia/seoul')::date",
+            migration,
+        )
+        self.assertIn("p_window interval default interval '24 hours'", migration)
+        self.assertIn("set kind = 'expiry_notice', expiry_for = reservation.expires_at", migration)
         # 설계 4.6 — 450통 계산이 동시 실행에서도 맞도록 잠근다.
         self.assertIn("pg_advisory_xact_lock(pg_catalog.hashtext('alert_messages_claim'))", migration)
         self.assertIn("for update skip locked", migration)
