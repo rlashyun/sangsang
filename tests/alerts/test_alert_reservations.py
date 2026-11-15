@@ -150,6 +150,18 @@ class CreateReservationTests(AlertServiceTestCase):
         self.assertEqual(len(self.store.reservations), 0)
         self.assertEqual(len(self.store.messages), 0)
 
+    def test_unexpected_send_error_also_leaves_no_reservation(self) -> None:
+        # SendError가 아닌 예외도 예약을 지운다 — 남으면 "보냄"으로 기록된 채 한도만 줄어든다.
+        self.sender.failures["user@example.com"] = [ValueError("unexpected")]
+
+        with self.assertRaisesRegex(RuntimeError, "확인 메일을 보내지 못했습니다"):
+            self.create()
+
+        self.assertEqual(len(self.store.reservations), 0)
+        self.assertEqual(len(self.store.messages), 0)
+        self.create()  # 바로 다시 시도할 수 있다
+        self.assertEqual(len(self.sender.sent), 1)
+
     def test_daily_send_limit_blocks_new_reservations(self) -> None:
         self.store.add_sent_messages(450, sent_at=self.store.now - timedelta(hours=1))
 

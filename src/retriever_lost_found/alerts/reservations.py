@@ -18,7 +18,7 @@ from .links import (
     token_matches,
     token_reservation_id,
 )
-from .sender import EmailSender, SendError, with_idempotency_key
+from .sender import EmailSender, with_idempotency_key
 from .settings import AlertSettings
 from .store import AlertStore
 from .templates import alert_period, confirmation_email, format_day
@@ -162,8 +162,9 @@ class AlertService:
                 session.send(message)
             finally:
                 session.close()
-        except SendError:
+        except Exception:
             # 설계 5.4 — 발송에 실패하면 예약을 남기지 않아 사용자가 바로 다시 시도할 수 있다.
+            # SendError가 아닌 예외도 같다. 남겨 두면 "보냄"으로 기록된 채 메일은 안 나가고 한도만 줄어든다.
             self._discard(reservation_id)
             raise RuntimeError("확인 메일을 보내지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
         return {"status": "pending", "message": PENDING_MESSAGE}

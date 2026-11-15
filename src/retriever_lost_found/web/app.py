@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from ..alerts.links import LINK_PATHS
 from ..alerts.reservations import AlertService
 from ..alerts.sender import create_email_sender
 from ..alerts.settings import load_alert_settings
@@ -92,6 +93,19 @@ def create_app(
     def index() -> HTMLResponse:
         html = (static_dir / "index.html").read_text(encoding="utf-8")
         return HTMLResponse(html.replace("__KAKAO_SDK_URL__", sdk_url))
+
+    def alert_link_page() -> HTMLResponse:
+        """설계 5.4 — 메일 속 확인·연장·취소 링크가 여는 화면. React 앱이 같은 index.html로 그린다.
+
+        여는 것만으로는 아무것도 바꾸지 않는다(화면이 요약을 보여 주고 버튼을 눌러야 POST한다).
+        주소에 링크 토큰이 있으므로 지도 SDK 등 외부 요청에 주소가 실려 나가지 않게 한다.
+        """
+        response = index()
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    for link_path in LINK_PATHS.values():
+        app.add_api_route(link_path, alert_link_page, methods=["GET"], response_class=HTMLResponse)
 
     def make_asset_response(asset_name: str, asset_media_type: str):
         def asset_response() -> FileResponse:

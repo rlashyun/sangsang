@@ -52,6 +52,27 @@ class AlertApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "pending")
         self.assertEqual(response.headers["cache-control"], "no-store")
 
+    def test_mail_link_paths_open_the_app_without_leaking_the_token(self) -> None:
+        # 설계 5.4 — 메일 링크가 404가 아니라 React 앱(index.html)을 연다. 토큰이 든 주소가
+        # 외부 요청의 Referer로 나가지 않고, 캐시되지 않는다.
+        for path in ("/alerts/confirm", "/alerts/extend", "/alerts/cancel"):
+            with self.subTest(path=path):
+                response = self.client.get(f"{path}?token=7.{'0' * 32}")
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("text/html", response.headers["content-type"])
+                self.assertEqual(response.headers["referrer-policy"], "no-referrer")
+                self.assertEqual(response.headers["cache-control"], "no-store")
+        # 정한 세 경로 밖은 그대로 404다.
+        self.assertEqual(self.client.get("/alerts/other").status_code, 404)
+
+    def test_opening_a_link_page_changes_nothing(self) -> None:
+        self.post()
+        before = {rid: dict(row) for rid, row in self.store.reservations.items()}
+
+        self.client.get("/alerts/confirm?token=1.0123456789abcdef0123456789abcdef")
+
+        self.assertEqual(self.store.reservations, before)
+
     def test_validation_errors_are_korean_400(self) -> None:
         response = self.post({**PAYLOAD, "consent": False})
 

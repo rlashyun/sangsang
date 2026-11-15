@@ -13,15 +13,17 @@ from ..alerts.dispatch import run_send_pass
 from ..alerts.matching import run_match_pass
 from ..alerts.sender import create_email_sender
 from ..alerts.settings import load_alert_settings
-from ..alerts.store import SupabaseAlertStore
+from ..alerts.store import AlertStore, SupabaseAlertStore
 from ..config import read_optional_env_value
 from ..ingestion.collector import SOURCE_CODES
-from ..ingestion.service import run_incremental_sync
+from ..ingestion.service import SOURCE_ORDER, run_incremental_sync
 from ..embedding.orchestration import dispatch_embeddings, process_pending_embeddings
 
 
 router = APIRouter(prefix="/api/cron", include_in_schema=False)
-# 설계 6.1·6.2 — 함수 300초 제한 안에서 기록·응답에 40초를 남긴다.
+# 설계 6.2 — 함수 300초 제한 안에서 기록·응답에 40초를 남긴다. 매칭은 앞의 120초 안에서 하고
+# 남은 시간을 발송에 쓴다. 다 못 본 예약은 커서가 오래된 순으로 다음 날 먼저 본다.
+ALERT_MATCH_DEADLINE_SECONDS = 120.0
 ALERT_DEADLINE_SECONDS = 260.0
 
 
@@ -38,28 +40,9 @@ def _authorized(request: Request) -> JSONResponse | None:
     return None
 
 
-def _run_alert_matching(source: str, result: dict[str, Any], *, deadline: float) -> None:
-    """설계 6.1 — 알림 매칭. 실패해도 수집 응답과 ingestion_runs는 그대로다."""
-    judge = matching.SIMILARITY_JUDGE
-    source_result = result.get("source") if isinstance(result.get("source"), dict) else {}
-    try:
-        inserted = int(source_result.get("inserted") or 0)
-    except (TypeError, ValueError):
-        inserted = 0
-    # 판정이 없거나, 저장까지 못 했거나, 새 물품이 없으면 DB를 부르지 않는다.
-    if judge is None or result.get("status") not in ("succeeded", "partial") or inserted <= 0:
-        return
-    try:
-        store = SupabaseAlertStore.from_environment()
-        run_match_pass(store, judge, item_source_code=SOURCE_CODES[source], deadline=deadline)
-    except Exception as error:
-        print(f"[alerts] {source} 매칭 단계 실패: {type(error).__name__}", file=sys.stderr)
-
-
 def _run_source(
     request: Request, source: Literal["partner", "police"], *, cleanup_expired: bool = True,
 ) -> JSONResponse:
-    started = time.monotonic()
     authorization_error = _authorized(request)
     if authorization_error is not None:
         return authorization_error
@@ -68,7 +51,6 @@ def _run_source(
     # delivery leaves a pending job for the 11:00/23:00 KST recovery crons (PRD 4.5).
     if result.get("status") != "already_running":
         dispatch_embeddings()
-    _run_alert_matching(source, result, deadline=started + ALERT_DEADLINE_SECONDS)
     return JSONResponse(
         status_code=200 if result.get("status") == "succeeded" else 500,
         content=result,
@@ -122,9 +104,28 @@ def embedding_recovery(request: Request) -> JSONResponse:
                         content=result, headers={"Cache-Control": "no-store"})
 
 
+def _run_alert_matching(store: AlertStore, *, deadline: float) -> dict[str, Any]:
+    """설계 6.1 — 출처마다 새 물품을 활성 예약과 비교한다(2026-11-15: 수집 크론 끝에서 발송 크론 앞으로).
+
+    수집 크론과 떨어져 있어 알림 단계가 수집·보존기간 정리의 시간 예산을 쓰지 않는다(출처 독립).
+    한 출처가 실패해도 다른 출처의 매칭과 발송은 계속한다.
+    """
+    results: dict[str, Any] = {}
+    for source in SOURCE_ORDER:
+        code = SOURCE_CODES[source]
+        try:
+            results[code] = run_match_pass(
+                store, matching.SIMILARITY_JUDGE, item_source_code=code, deadline=deadline
+            )
+        except Exception as error:  # 실행 기록조차 남기지 못한 경우 — 비밀값이 섞이지 않게 형식만 남긴다
+            print(f"[alerts] {code} 매칭 단계 실패: {type(error).__name__}", file=sys.stderr)
+            results[code] = {"status": "failed", "error_message": type(error).__name__}
+    return results
+
+
 @router.get("/alert-send")
 def alert_send(request: Request) -> JSONResponse:
-    """설계 6.2 — 만료 안내 → 발송(450통 한도) → 정리. KST 11시대에 한 번 돈다."""
+    """설계 6.2 — 매칭 → 종료 안내 → 발송(450통 한도) → 정리. KST 11시대에 한 번 돈다."""
     started = time.monotonic()
     authorization_error = _authorized(request)
     if authorization_error is not None:
@@ -141,14 +142,18 @@ def alert_send(request: Request) -> JSONResponse:
     except ValueError as error:
         # AGENTS.md 4장 — 설정이 없으면 503(입력 오류 400과 구분한다).
         return JSONResponse(status_code=503, content={"error": str(error)}, headers=no_store)
+    matched = _run_alert_matching(store, deadline=started + ALERT_MATCH_DEADLINE_SECONDS)
     result = run_send_pass(
         store,
         create_email_sender(settings.mail),
         settings,
         deadline=started + ALERT_DEADLINE_SECONDS,
     )
+    failed = result.get("status") == "failed" or any(
+        outcome.get("status") == "failed" for outcome in matched.values()
+    )
     return JSONResponse(
-        status_code=500 if result.get("status") == "failed" else 200,
-        content=result,
+        status_code=500 if failed else 200,
+        content={**result, "matching": matched},
         headers=no_store,
     )
