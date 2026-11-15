@@ -1,5 +1,13 @@
 # 실측 기록
 
+## ③ 스케줄러(분실물 알림) DB 마이그레이션 운영 적용 — 2026-11-15 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `20261115090000_create_alert_scheduler.sql`(커밋 `fa401bc` 기준)을 2026-11-15 21:40 KST에 적용했다. 운영 이력에는 로컬 파일이 없는 버전 6개와 로컬에만 있는 `20261111042228` 1개가 있어 `supabase db push`를 쓰지 않았다. 대신 `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행하고, 같은 트랜잭션에서 `supabase_migrations.schema_migrations`에 `20261115090000 create_alert_scheduler`를 기록했다. 어긋난 이력 7개는 이번에 손대지 않았다.
+- 적용 전 상태: 알림 테이블·함수 0개, `found_items_source_first_seen_idx` 없음, 실행 중 쿼리 0건, `found_items` 약 295,271건(362MB)이었다. 다음 크론(KST 23:00 오후 임베딩)과 겹치지 않는 시각에 적용했다.
+- 적용 전 리허설: 같은 SQL을 운영 DB에서 실행하고, 이어서 예약 생성 → 확인 → 출처별 매칭 대기열·후보 조회 → 메일 claim·payload·finish → 종료 안내 큐 → 취소 → 정리 함수를 차례로 호출했다. 끝에서 `raise exception`으로 전체를 되돌렸다. 오류는 없었고, 함수 호출 구간은 688ms, 전체 요청(새 인덱스 생성 포함)은 7.7초였다. 서울역 1.5km "지갑" 예약에서 두 출처 모두 실제 후보 물품이 나왔다. 리허설 뒤 알림 테이블·인덱스가 남지 않았음을 확인했다. 시험 이메일은 `example.invalid` 주소였고 실제 발송은 없었다.
+- 적용 후 확인: 테이블 6개(`alert_reservations`·`alert_match_cursors`·`alert_messages`·`alert_notified_items`·`alert_runs`·`alert_request_log`)는 모두 RLS가 켜져 있다. 함수 12개는 service_role만 실행할 수 있고 anon/authenticated는 실행할 수 없다. 테이블도 anon/authenticated가 읽을 수 없다. 인덱스 `found_items (item_source_code, first_seen_at)`가 생겼고, 알림 데이터는 0건이며, 운영 이력도 기록됐다.
+- 기존 테이블에는 인덱스 1개만 더했고 데이터는 바꾸지 않았다. 이 객체들을 쓰는 코드(`/api/alerts`, `/api/cron/alert-send`)는 PR #49를 병합해야 배포되므로, 적용 시점에 운영 동작은 바뀌지 않는다. 남은 순서는 Vercel Production 환경 변수 → 프런트 연결 → 병합·배포 → 실제 흐름 확인이다. 이 SQL에는 자동 원복이 없다. 되돌리려면 새 마이그레이션으로 알림 테이블·함수와 인덱스를 지워야 한다.
+
 ## 하루 두 번 수집 DB 마이그레이션 운영 적용 — 2026-11-14 KST
 
 - 사용자 요청으로 운영 Supabase `retriever`에 `distinguish_twice_daily_embedding_barrier`를 MCP migration으로 적용했다. 운영 이력 버전은 `20261113184917`이며, 재적용을 막기 위해 기존 SQL 파일의 버전을 운영 이력과 맞췄다. SQL 내용은 앞서 격리 DB에서 검증한 것과 동일하다.
