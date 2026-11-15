@@ -322,6 +322,35 @@
 
 ---
 
+### 단일 기관 RPC 운영 적용 확인 — 2026-11-14 15:32 KST
+
+- 운영 Supabase SQL Editor에서 `20261114063000_single_map_locations_rpc.sql` 적용과 마이그레이션 이력 등록을 한 트랜잭션으로 완료했다. 기존 RPC가 존재하며 새 RPC의 실행 권한은 `service_role`에 있고 `anon`·`authenticated`에는 없음을 확인했다.
+- 같은 Mac에서 운영 Supabase Data API의 새 RPC를 서버 자격으로 1회 호출했다. HTTP 200으로 기관 5,124곳과 기관별 습득물 수 합계 295,067건을 반환했다. PR #47 병합과 Vercel 배포 전 검증이며, CDN과 브라우저 표시 시간은 배포 후 측정한다.
+
+---
+
+### 단일 기관 RPC 배포 후 운영 CDN `MISS`·`HIT` — 2026-11-14 15:38 KST
+
+- PR #47 병합 커밋 `ae66d9a`의 Vercel Production 배포 성공 기록(GitHub deployment `7783858238`)과 해당 커밋의 `map_locations_with_item_counts_json` 호출 코드를 확인했다. 공개 운영 URL의 모든 표본에서 HTTP 200, 서울 `icn1::icn1`, `counts_available: true`, 기관 5,124곳, 물품 수 합계 295,067건, 압축 본문 349,288바이트를 확인했다.
+- 배포 전과 같은 Mac·네트워크·헤드리스 Chrome에서 같은 스크립트를 실행했다. 기본 서울 지도, 1280×720 새 컨텍스트로 순차 방문했다. 고유 `timing_sample` 키로 `MISS` 3회(`age: 0`), 일반 URL에서 첫 `MISS` 1회 및 뒤이은 `HIT` 3회(`age: 1–3초`)를 관측했다.
+
+| 표본 | API 요청 → 첫 바이트 | API 요청 → 수신 완료 | 페이지 시작 → API 수신 완료 | 페이지 시작 → 지도 타일 완료 | 페이지 시작 → 첫 기관 클러스터 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `MISS` 1 | 1,173ms | 1,225ms | 1,878ms | 837ms | 2,219ms |
+| `MISS` 2 | 658ms | 707ms | 1,304ms | 824ms | 1,638ms |
+| `MISS` 3 | 1,036ms | 1,104ms | 1,381ms | 521ms | 1,740ms |
+| `MISS` 중앙값 | 1,036ms | 1,104ms | 1,381ms | 824ms | 1,740ms |
+| 일반 URL `MISS` | 525ms | 572ms | 748ms | 373ms | 1,101ms |
+| `HIT` 1 | 34ms | 70ms | 310ms | 745ms | 738ms |
+| `HIT` 2 | 26ms | 54ms | 321ms | 735ms | 731ms |
+| `HIT` 3 | 18ms | 58ms | 330ms | 764ms | 760ms |
+| `HIT` 중앙값 | 26ms | 58ms | 321ms | 745ms | 738ms |
+
+- 고유 키 `MISS`에서 API 수신 시간 중앙값은 7,809ms → 1,104ms(85.9% 감소), 첫 클러스터는 8,356ms → 1,740ms(79.2% 감소)였다. `HIT`의 API 수신 시간 중앙값은 배포 전후 58ms였다. 지도와 첫 클러스터가 모두 준비된 시각의 중앙값은 `MISS` 8,356ms → 1,740ms, `HIT` 697ms → 745ms였다. 캐시 상태별 3회 측정으로, 운영 p95 및 DB·Vercel 내부 구간별 시간은 산정하지 않았다.
+- 원자료와 계측 스크립트는 `~/Documents/retriever-work-docs/institution-rpc-production-after-20261114/`에 보관한다.
+
+---
+
 ## 1. `/api/found-items` 응답 속도
 
 목표는 PRD 3.3·5의 조회 p95 1.5초다. 담당과 다음 작업은 `docs/team-roles.md` ①·⑥을 본다.
