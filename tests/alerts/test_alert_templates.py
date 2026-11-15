@@ -71,6 +71,18 @@ class TemplateTests(unittest.TestCase):
         self.assertIn(OWNERSHIP_NOTICE, email.text)
         self.assertIn("서울역 유실물센터 02-000-0000", email.text)
 
+    def test_item_registration_date_is_written_in_korean(self) -> None:
+        reservation = reservation_row()
+        dated = {**item(1), "registered_on": "2026-11-15"}
+        undated = {**item(2), "registered_on": None}
+
+        email = match_email("user@example.com", reservation, links_for(reservation), [dated, undated])
+
+        self.assertIn("에어팟 1 (무선이어폰, 흰색) · 11월 15일 등록 · 보관:", email.text)
+        self.assertNotIn("2026-11-15", email.text)
+        self.assertNotIn("None", email.text)
+        self.assertIn("2. 에어팟 2 (무선이어폰, 흰색) · 보관:", email.text)
+
     def test_match_mail_shows_at_most_five_items(self) -> None:
         reservation = reservation_row()
         links = links_for(reservation)

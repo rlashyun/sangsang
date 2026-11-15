@@ -52,13 +52,27 @@ def _condition_lines(reservation: dict[str, Any]) -> str:
     )
 
 
+def _registered_label(value: Any) -> str | None:
+    """등록일 "2026-11-15"를 "11월 15일 등록"으로 쓴다. 형식이 다르면 원래 값을 그대로 쓴다."""
+    if not value:
+        return None
+    try:
+        registered = date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return f"{value} 등록"
+    return f"{registered.month}월 {registered.day}일 등록"
+
+
 def _item_line(item: dict[str, Any]) -> str:
     details = ", ".join(value for value in (item.get("raw_category_name"), item.get("color_name")) if value)
     location = " ".join(
         value for value in (item.get("storage_location_name"), item.get("storage_location_phone")) if value
     )
     name = item.get("item_name") or "이름 없는 물품"
-    parts = [name + (f" ({details})" if details else ""), f"{item.get('registered_on')} 등록"]
+    parts = [name + (f" ({details})" if details else "")]
+    registered = _registered_label(item.get("registered_on"))
+    if registered:
+        parts.append(registered)
     if location:
         parts.append(f"보관: {location}")
     return " · ".join(parts)
