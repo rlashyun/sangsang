@@ -45,7 +45,7 @@ class AlertStore(Protocol):
         expires_at: datetime,
     ) -> dict[str, Any]: ...
 
-    def delete_reservation(self, reservation_id: int) -> None: ...
+    def discard_reservation(self, reservation_id: int, ip_hash: str | None) -> None: ...
 
     def get_reservation(self, reservation_id: int) -> dict[str, Any] | None: ...
 
@@ -139,13 +139,9 @@ class SupabaseAlertStore(SupabaseRestClient):
             )
         )
 
-    def delete_reservation(self, reservation_id: int) -> None:
-        self._request(
-            "DELETE",
-            "alert_reservations",
-            query={"id": f"eq.{int(reservation_id)}"},
-            prefer="return=minimal",
-        )
+    def discard_reservation(self, reservation_id: int, ip_hash: str | None) -> None:
+        # 리뷰 2026-11-15 — 실패한 예약은 IP 하루 5건 기록도 함께 지운다(같은 DB 함수 안에서).
+        self._rpc("discard_alert_reservation", {"p_reservation_id": int(reservation_id), "p_ip_hash": ip_hash})
 
     def get_reservation(self, reservation_id: int) -> dict[str, Any] | None:
         rows = self._request(

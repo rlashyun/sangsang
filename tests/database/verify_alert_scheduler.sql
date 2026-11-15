@@ -19,6 +19,8 @@ declare
     v_item_outside bigint;
     v_multi bigint;
     v_claimed integer;
+    v_late bigint;
+    v_discard bigint;
 begin
     select code into v_location_source from public.location_sources order by code limit 1;
     select id into v_category from public.item_categories order by id limit 1;
@@ -49,10 +51,11 @@ begin
         raise exception '확인 실패';
     end if;
 
-    -- 같은 트랜잭션 안에서는 now()가 같아서 커서를 1분 앞당겨 "예약 이후 물품"을 만든다.
+    -- 같은 트랜잭션 안에서는 now()가 같아서 예약 시각과 커서를 1분 앞당겨 "예약 이후 물품"을 만든다.
     update public.alert_match_cursors
     set checked_until = now() - interval '1 minute'
     where reservation_id = v_reservation;
+    update public.alert_reservations set created_at = now() - interval '1 minute' where id = v_reservation;
 
     insert into public.found_items (
         item_source_code, atc_id, found_sequence, storage_location_id, location_match_status,
@@ -104,6 +107,26 @@ begin
         raise exception '커서가 움직이지 않았습니다';
     end if;
 
+    -- 리뷰 2026-11-15 — 수집 때 unmatched였다가 나중에 기관이 연결된 물품도 후보가 된다.
+    -- 트리거가 검색 투영을 새로 넣고 visible_since가 그 시각이 된다(트랜잭션 안이라 직접 앞당긴다).
+    update public.alert_match_cursors set checked_until = now() - interval '30 seconds'
+    where reservation_id = v_reservation;
+    select id into v_late from public.found_items where atc_id = 'verify-3';
+    update public.found_items set storage_location_id = v_inside, location_match_status = 'matched' where id = v_late;
+    if not exists (select 1 from public.found_item_search_documents where item_id = v_late) then
+        raise exception '나중에 연결된 물품의 검색 투영이 생기지 않았습니다';
+    end if;
+    v_payload := public.alert_candidate_items(v_reservation, 'partner_api');
+    if jsonb_array_length(v_payload -> 'items') <> 1 or (v_payload -> 'items' -> 0 ->> 'id')::bigint <> v_late then
+        raise exception '나중에 연결된 물품이 후보가 되지 않았습니다: %', v_payload;
+    end if;
+    -- 짝 — 예약 전에 처음 들어온 물품은 나중에 연결돼도 후보가 아니다(first_seen_at은 트리거가 고정하므로
+    -- 예약 시각을 물품보다 뒤로 옮겨 같은 상황을 만든다).
+    update public.alert_reservations set created_at = now() + interval '1 second' where id = v_reservation;
+    if jsonb_array_length(public.alert_candidate_items(v_reservation, 'partner_api') -> 'items') <> 0 then
+        raise exception '예약 전 물품이 후보가 됐습니다';
+    end if;
+
     -- 한도 1이면 한 통만 집고(확인 메일이 먼저), 보낸 뒤에는 24시간 동안 더 집지 않는다.
     select count(*) into v_claimed from public.claim_alert_messages(10, 1);
     if v_claimed <> 1 then
@@ -137,10 +160,11 @@ begin
     v_multi := (v_created ->> 'reservation_id')::bigint;
     perform public.confirm_alert_reservation(v_multi);
     update public.alert_match_cursors set checked_until = now() - interval '1 minute' where reservation_id = v_multi;
+    update public.alert_reservations set created_at = now() - interval '1 minute' where id = v_multi;
     v_payload := public.alert_candidate_items(v_multi, 'partner_api');
     if (select array_agg((entry ->> 'id')::bigint order by (entry ->> 'id')::bigint)
         from jsonb_array_elements(v_payload -> 'items') as entry)
-       is distinct from array[least(v_item_inside, v_item_outside), greatest(v_item_inside, v_item_outside)] then
+       is distinct from (select array_agg(id order by id) from unnest(array[v_item_inside, v_item_outside, v_late]) as id) then
         raise exception '여러 장소의 반경을 합치지 못했습니다: %', v_payload;
     end if;
     perform public.record_alert_match(
@@ -238,6 +262,23 @@ begin
     );
     if v_created ->> 'status' <> 'ip_limit' then
         raise exception '같은 IP 6번째 예약이 막히지 않았습니다: %', v_created;
+    end if;
+
+    -- 리뷰 2026-11-15 — 확인 메일을 못 보내 지운 예약은 IP 기록도 지워 5건 제한을 깎지 않는다.
+    v_created := public.create_alert_reservation(
+        'discard@example.com', '에어팟', '[{"place_name": "서울역", "latitude": 37.5547, "longitude": 126.9707}]'::jsonb, 1000,
+        'discard-ip', 'verify-nonce-discard', now() + interval '7 days'
+    );
+    v_discard := (v_created ->> 'reservation_id')::bigint;
+    perform public.discard_alert_reservation(v_discard, 'discard-ip');
+    if exists (select 1 from public.alert_reservations where id = v_discard)
+       or exists (select 1 from public.alert_request_log where ip_hash = 'discard-ip') then
+        raise exception '지운 예약이나 IP 기록이 남았습니다';
+    end if;
+    -- 짝 — 확인된 예약은 이 함수로 지워지지 않는다.
+    perform public.discard_alert_reservation(v_expiring, null);
+    if not exists (select 1 from public.alert_reservations where id = v_expiring) then
+        raise exception '끝난 예약이 지워졌습니다';
     end if;
 
     raise notice '알림 스케줄러 DB 검증 통과';

@@ -258,6 +258,32 @@ class SendPassTests(unittest.TestCase):
         self.assertEqual((result["status"], result["messages_sent"]), ("partial", 0))
         self.assertEqual(self.match_statuses(), ["pending"])
 
+    def test_db_error_while_reading_a_mail_puts_the_claimed_mails_back(self) -> None:
+        # 리뷰 2026-11-15 — 발송 중 DB가 잠깐 끊겨도 집어 온 메일이 sending에 묶여 하루 늦게 가지 않는다.
+        self.reservation_with_alert("a@example.com")
+        self.reservation_with_alert("b@example.com")
+        self.store.payload_failures_left = 1
+
+        result = self.run_pass()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(self.sender.sent, [])
+        self.assertEqual(self.match_statuses(), ["pending", "pending"])
+        # 같은 날 다시 돌리면(DB가 돌아온 뒤) 둘 다 나간다.
+        self.assertEqual(self.run_pass()["messages_sent"], 2)
+
+    def test_db_error_after_a_send_puts_only_the_unsent_mails_back(self) -> None:
+        self.reservation_with_alert("a@example.com")
+        self.reservation_with_alert("b@example.com")
+        self.store.finish_failures_left = 1  # 첫 메일을 보낸 뒤 "보냄" 기록이 실패한다
+
+        result = self.run_pass()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(self.sender.sent), 1)
+        # 보낸 메일은 다시 보내지 않게 sending에 둔다(10분 뒤 되살리기는 감수, 설계 6.3). 안 보낸 메일만 되돌린다.
+        self.assertEqual(self.match_statuses(), ["pending", "sending"])
+
     def test_smtp_connection_failure_stops_the_pass_after_one_try(self) -> None:
         # 연결 시도마다 최대 20초를 기다리므로, 메일마다 다시 연결하면 300초 제한을 넘길 수 있다.
         self.reservation_with_alert("a@example.com")

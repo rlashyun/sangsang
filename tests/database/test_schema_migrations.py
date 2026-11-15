@@ -328,5 +328,40 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("order by extensions.st_distance(", migration)
 
 
+    def _alert_review_migration(self) -> str:
+        return " ".join(
+            (MIGRATIONS / "20261115220000_alert_review_fixes.sql").read_text(encoding="utf-8").lower().split()
+        )
+
+    def test_alert_review_functions_are_service_role_only(self) -> None:
+        migration = self._alert_review_migration()
+        signatures = ("alert_candidate_items(bigint, text)", "discard_alert_reservation(bigint, text)")
+        for signature in signatures:
+            self.assertIn(
+                f"revoke all on function public.{signature} from public, anon, authenticated", migration
+            )
+            self.assertIn(f"grant execute on function public.{signature} to service_role", migration)
+        self.assertEqual(migration.count("security invoker"), len(signatures))
+        self.assertEqual(migration.count("set search_path = ''"), len(signatures))
+
+    def test_alert_cursor_follows_when_an_item_became_visible(self) -> None:
+        # 리뷰 2026-11-15 — 나중에 기관이 연결된 물품도 알린다. 예약 이후 새 물품만이라는 규칙은 따로 지킨다.
+        migration = self._alert_review_migration()
+        self.assertIn(
+            "alter table public.found_item_search_documents add column visible_since timestamptz not null default now()",
+            migration,
+        )
+        self.assertIn("on document.visible_since > reservation.checked_until", migration)
+        self.assertIn("and item.first_seen_at > reservation.created_at", migration)
+        self.assertIn("(select max(candidates.visible_since) from candidates)", migration)
+        # 절대 규칙 5 — 투영(matched 물품에만 있음)과 반경 범위를 그대로 거친다.
+        self.assertIn("join scope on scope.id = document.storage_location_id", migration)
+
+    def test_discarding_a_failed_reservation_frees_its_ip_slot_only(self) -> None:
+        migration = self._alert_review_migration()
+        self.assertIn("and status = 'pending' returning created_at into v_created_at", migration)
+        self.assertIn("request.created_at = v_created_at limit 1", migration)
+
+
 if __name__ == "__main__":
     unittest.main()

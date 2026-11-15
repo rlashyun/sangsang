@@ -16,7 +16,8 @@ BGE-M3 재정렬은 판정에 쓰지 않는다. 운영 검색에서도 재정렬
    색·브랜드·특징 단어가 있으면 그 말이 맞는 물품만 남긴다. 검색 화면에서는 이 단어들이 순서만 바꾼다.
    - 같은 분류(색끼리 등) 안에서는 하나만 맞으면 되고, 분류끼리는 모두 맞아야 한다.
    - 색을 하나도 알 수 없는 물품은 색 조건을 통과시킨다(색을 안 적어 진짜 물건을 놓치지 않게).
-   - 사전에 없는 단어, 카드 상품, 있음/없음 특징은 조건으로 쓰지 않는다(물품 글에 거의 안 적혀 놓친다).
+   - 특징은 물품 글에 실제로 적히는 이어폰 방향(왼쪽·오른쪽)과 맥세이프만 조건으로 쓴다. 가죽·캐릭터·
+     남성용 같은 특징, 사전에 없는 단어, 카드 상품은 조건으로 쓰지 않는다(거의 안 적혀 진짜 물건을 놓친다).
 """
 
 from __future__ import annotations
@@ -44,8 +45,18 @@ def _has_candidate_term(search_text: str, terms: set[str]) -> bool:
 # 동의어 사전에서 조건으로 쓰는 분류. 카드 상품은 "티머니 카드"/"교통카드 티머니"처럼 표기에 따라
 # 다른 개념이 되어 진짜 카드를 놓치므로 뺀다.
 CONDITION_DOMAINS = ("color", "brand", "attribute")
-# 모델 이름만 적힌 물품도 그 브랜드로 본다(갤럭시 버즈에는 "삼성"이 적혀 있지 않다).
-IMPLIED_BRANDS = {"삼성": ("갤럭시", "버즈")}
+# 특징(attribute)은 물품 글에 실제로 적히는 것만 조건으로 쓴다. 가죽·캐릭터·남성용·줄무늬 등은
+# 물품 글에 거의 적히지 않아 "검정 가죽 지갑" 예약이 가죽이라고 안 적힌 검정 지갑을 놓쳤다(리뷰 2026-11-15).
+CONDITION_ATTRIBUTES = frozenset({"왼쪽", "오른쪽", "왼쪽유닛", "오른쪽유닛", "맥세이프"})
+# 같은 것으로 보는 다른 대표어. 모델 이름만 적힌 물품도 그 브랜드다(갤럭시 버즈에는 "삼성"이 없다).
+# "왼쪽"과 "왼쪽유닛"은 사전에서 다른 개념이지만 같은 물건을 가리킨다.
+ALSO_MATCHES = {
+    "삼성": ("갤럭시", "버즈"),
+    "왼쪽": ("왼쪽유닛",),
+    "왼쪽유닛": ("왼쪽",),
+    "오른쪽": ("오른쪽유닛",),
+    "오른쪽유닛": ("오른쪽",),
+}
 _GROUPS = {group["canonical"]: group for group in synonyms._CONCEPTS}
 _COLOR_GROUPS = [group for group in synonyms._CONCEPTS if group["domain"] == "color"]
 
@@ -53,8 +64,7 @@ _COLOR_GROUPS = [group for group in synonyms._CONCEPTS if group["domain"] == "co
 def _is_condition(group: dict[str, Any]) -> bool:
     if group["domain"] not in CONDITION_DOMAINS:
         return False
-    # 케이스없음·유닛있음 같은 상태 표현은 물품 글에 거의 적히지 않는다.
-    return not group["canonical"].endswith(("없음", "있음"))
+    return group["domain"] != "attribute" or group["canonical"] in CONDITION_ATTRIBUTES
 
 
 def condition_groups(query: str) -> dict[str, list[str]]:
@@ -77,7 +87,8 @@ def _item_words(search_text: str) -> set[str]:
 def _mentions(words: set[str], canonical: str) -> bool:
     group = _GROUPS[canonical]
     forms = {canonical, *group["terms"], *(term.replace(" ", "") for term in group["terms"])}
-    forms |= set(IMPLIED_BRANDS.get(canonical, ()))
+    for related in ALSO_MATCHES.get(canonical, ()):
+        forms |= {related, *_GROUPS[related]["terms"]} if related in _GROUPS else {related}
     return any(form.casefold() in words for form in forms)
 
 

@@ -212,6 +212,23 @@ class CreateReservationTests(AlertServiceTestCase):
         self.create()  # 바로 다시 시도할 수 있다
         self.assertEqual(len(self.sender.sent), 1)
 
+    def test_failed_reservations_do_not_use_up_the_ip_limit(self) -> None:
+        # 리뷰 2026-11-15 — 메일 서버가 잠깐 막혀 다섯 번 실패해도 같은 IP가 24시간 막히지 않는다.
+        for _ in range(5):
+            self.sender.failures["user@example.com"] = [TemporarySendError("SMTP 421")]
+            with self.assertRaisesRegex(RuntimeError, "확인 메일을 보내지 못했습니다"):
+                self.create()
+        self.assertEqual(self.store.request_log, [])
+        self.create()  # 여섯 번째는 성공한다
+        self.assertEqual(len(self.store.request_log), 1)
+
+    def test_successful_reservations_still_count_toward_the_ip_limit(self) -> None:
+        # 위와 짝 — 성공한 예약은 취소해도 IP 기록이 남아 하루 5건 제한이 그대로다.
+        for index in range(5):
+            self.create(email=f"user{index}@example.com")
+        with self.assertRaises(AlertLimitError):
+            self.create(email="user5@example.com")
+
     def test_daily_send_limit_blocks_new_reservations(self) -> None:
         self.store.add_sent_messages(450, sent_at=self.store.now - timedelta(hours=1))
 

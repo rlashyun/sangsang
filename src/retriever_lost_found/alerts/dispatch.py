@@ -70,6 +70,34 @@ def _release(store: AlertStore, messages: list[dict[str, Any]], counts: dict[str
         counts["messages_deferred"] += 1
 
 
+def _release_quietly(store: AlertStore, messages: list[dict[str, Any]], counts: dict[str, int]) -> None:
+    """DB 오류로 멈출 때 집어 온 메일을 pending으로 되돌린다. 되돌리기도 실패하면 10분 뒤 되살리기에 맡긴다.
+
+    리뷰 2026-11-15 — 되돌리지 않으면 sending에 묶여 다음 claim(다음 날 11시)까지 하루 늦게 나간다.
+    """
+    for message in messages:
+        try:
+            store.finish_message(int(message["id"]), "pending")
+        except Exception:
+            continue
+        counts["messages_deferred"] += 1
+
+
+def _finish_or_release_rest(
+    store: AlertStore,
+    batch: list[dict[str, Any]],
+    index: int,
+    counts: dict[str, int],
+    status: str,
+    error: str | None = None,
+) -> None:
+    try:
+        store.finish_message(int(batch[index]["id"]), status, error)
+    except Exception:
+        _release_quietly(store, batch[index + 1:], counts)
+        raise
+
+
 def _send_pending(
     store: AlertStore,
     sender: EmailSender,
@@ -95,10 +123,14 @@ def _send_pending(
                 if clock() >= deadline:
                     _release(store, batch[index:], counts)
                     return "partial"
-                email = compose_message(store, settings, message, now())
-                if email is None:
-                    store.delete_message(message_id)
-                    continue
+                try:
+                    email = compose_message(store, settings, message, now())
+                    if email is None:
+                        store.delete_message(message_id)
+                        continue
+                except Exception:
+                    _release_quietly(store, batch[index:], counts)
+                    raise
                 email = with_idempotency_key(email, message_id)
                 if session is None:
                     try:
@@ -117,7 +149,7 @@ def _send_pending(
                     _release(store, batch[index:], counts)
                     return "partial"
                 except PermanentSendError as error:
-                    store.finish_message(message_id, "failed", str(error))
+                    _finish_or_release_rest(store, batch, index, counts, "failed", str(error))
                     counts["messages_failed"] += 1
                 except TemporarySendError as error:
                     retry_later.append((message, str(error)))
@@ -125,7 +157,8 @@ def _send_pending(
                         session.close()
                         session = None
                 else:
-                    store.finish_message(message_id, "sent")
+                    # 보낸 메일의 기록이 실패하면 그 메일은 sending에 둔다(다시 보내지 않게, 설계 6.3).
+                    _finish_or_release_rest(store, batch, index, counts, "sent")
                     counts["messages_sent"] += 1
     finally:
         if session is not None:

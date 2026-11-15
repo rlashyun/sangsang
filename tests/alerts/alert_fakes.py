@@ -144,6 +144,8 @@ class FakeAlertStore:
         self.runs: dict[int, dict[str, Any]] = {}
         self.request_log: list[tuple[str, datetime]] = []  # alert_request_log (ip_hash, created_at)
         self.fail_finish_message = False  # True면 finish_message가 DB 오류를 흉내 낸다
+        self.payload_failures_left = 0  # 남은 횟수만큼 message_payload가 일시 DB 오류를 흉내 낸다
+        self.finish_failures_left = 0  # 남은 횟수만큼 finish_message가 일시 DB 오류를 흉내 낸다
 
     # ---- 테스트 준비용 ----
     def advance(self, **delta: float) -> None:
@@ -165,7 +167,14 @@ class FakeAlertStore:
             "item_name": item_name, "raw_category_name": raw_category_name, "color_name": color_name,
             "description": description, "normalized_search_text": item_name,
             "registered_on": registered_on, "first_seen_at": first_seen_at or self.now,
+            # found_item_search_documents.visible_since — 기관이 연결돼 검색 투영이 생긴 시각(없으면 미연결)
+            "visible_since": self.now if storage_location_id is not None else None,
         }
+
+    def connect_location(self, item_id, storage_location_id):
+        """나중에 기관이 연결된 물품 — sync_search_document 트리거가 검색 투영을 새로 만든다."""
+        item = self.found_items[item_id]
+        item.update(storage_location_id=storage_location_id, visible_since=self.now)
 
     def add_active_reservation(
         self, *, email="user@example.com", query="에어팟", latitude=37.5547, longitude=126.9707,
@@ -269,7 +278,13 @@ class FakeAlertStore:
         message_id = self._insert_message(reservation_id, "confirm")
         return {"status": "created", "reservation_id": reservation_id, "message_id": message_id, "expires_at": _iso(expires_at)}
 
-    def delete_reservation(self, reservation_id):
+    def discard_reservation(self, reservation_id, ip_hash):
+        # SQL discard_alert_reservation — 예약과, 같은 트랜잭션에서 남긴 IP 기록 한 줄을 지운다.
+        reservation = self.reservations.get(reservation_id)
+        if reservation is not None and ip_hash is not None:
+            entry = (ip_hash, reservation["created_at"])
+            if entry in self.request_log:
+                self.request_log.remove(entry)
         self.reservations.pop(reservation_id, None)
         for key in [key for key in self.cursors if key[0] == reservation_id]:
             del self.cursors[key]
@@ -366,18 +381,21 @@ class FakeAlertStore:
                                         item["description"]) if value
                 ).lower(),
                 "item_name": item["item_name"], "raw_category_name": item["raw_category_name"],
-                "first_seen_at": item["first_seen_at"],
+                "visible_since": item["visible_since"],
             }
             for item in self.found_items.values()
             if item["storage_location_id"] in scope
+            and item["visible_since"] is not None
             and item["item_source_code"] == item_source_code
-            and item["first_seen_at"] > cursor
+            # 20261115220000 — 커서는 검색에 보이기 시작한 시각, 예약 이후 새 물품인지는 처음 본 시각으로 본다
+            and item["visible_since"] > cursor
+            and item["first_seen_at"] > reservation["created_at"]
             and (reservation_id, item["id"]) not in self.notified
         ]
-        items.sort(key=lambda item: (item["first_seen_at"], item["id"]))
-        checked_until = max((item["first_seen_at"] for item in items), default=cursor)
+        items.sort(key=lambda item: (item["visible_since"], item["id"]))
+        checked_until = max((item["visible_since"] for item in items), default=cursor)
         for item in items:
-            item["first_seen_at"] = _iso(item["first_seen_at"])
+            item["visible_since"] = _iso(item["visible_since"])
         return {"checked_until": _iso(checked_until), "items": items}
 
     def record_match(self, reservation_id, item_source_code, checked_until, items):
@@ -447,6 +465,9 @@ class FakeAlertStore:
         return claimed
 
     def message_payload(self, message_id):
+        if self.payload_failures_left > 0:
+            self.payload_failures_left -= 1
+            raise RuntimeError("Supabase 알림 API 연결 실패: timed out")
         message = self.messages.get(message_id)
         if message is None:
             return None
@@ -484,6 +505,9 @@ class FakeAlertStore:
 
     def finish_message(self, message_id, status, error=None):
         if self.fail_finish_message:
+            raise RuntimeError("Supabase 알림 API 연결 실패: timed out")
+        if self.finish_failures_left > 0:
+            self.finish_failures_left -= 1
             raise RuntimeError("Supabase 알림 API 연결 실패: timed out")
         message = self.messages.get(message_id)
         if message is None or message["status"] != "sending":

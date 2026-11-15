@@ -168,6 +168,16 @@ class ConditionWordTests(unittest.TestCase):
 
     def test_side_of_an_earphone_must_match(self) -> None:
         self.assertEqual(judged("에어팟 왼쪽", EARPHONES), {32})
+        # "왼쪽 유닛"으로 적힌 물품도 왼쪽이다.
+        unit = [{"id": 34, "item_name": "에어팟 왼쪽유닛", "raw_category_name": "무선이어폰", "color_name": "", "description": ""}]
+        self.assertEqual(judged("에어팟 왼쪽", EARPHONES + unit), {32, 34})
+
+    def test_rarely_written_features_are_not_conditions(self) -> None:
+        # 가죽·캐릭터·남성용 같은 특징은 물품 글에 거의 안 적혀 조건으로 쓰면 진짜 물건을 놓친다.
+        self.assertEqual(judged("검정 가죽 지갑", WALLETS), judged("검정 지갑", WALLETS))
+        self.assertIn(21, judged("검정 가죽 지갑", WALLETS))
+        self.assertNotIn(22, judged("검정 가죽 지갑", WALLETS))
+        self.assertEqual(judged("남성용 지갑", WALLETS), judged("지갑", WALLETS))
 
     def test_samsung_is_implied_by_galaxy_models(self) -> None:
         # 갤럭시 버즈에는 "삼성"이 적혀 있지 않아도 삼성 제품이다. 에어팟은 아니다.

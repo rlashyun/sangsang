@@ -80,6 +80,30 @@ class MatchPassTests(unittest.TestCase):
 
         self.assertEqual(self.queued_item_ids(), [11])
 
+    def test_item_connected_to_a_storage_later_is_still_alerted(self) -> None:
+        # 리뷰 2026-11-15 — 수집 때 기관 연결에 실패했다가 나중에 연결된 물품은 검색 화면에 보이기 시작하므로
+        # 알림에도 나와야 한다(AGENTS.md 1장 "DB에 있는데 안 보이는" 실패 유형).
+        self.store.add_found_item(10, storage_location_id=None)
+        self.store.add_found_item(11, storage_location_id=1)
+        self.run_pass()  # 커서가 11번을 지나간다
+        self.assertEqual(self.queued_item_ids(), [11])
+
+        self.store.advance(days=1)
+        self.store.connect_location(10, 1)
+        self.run_pass()
+
+        self.assertEqual(self.queued_item_ids(), [10, 11])
+
+    def test_item_seen_before_the_reservation_is_not_alerted_even_if_connected_later(self) -> None:
+        # 위와 짝 — 예약 이후 새 물품만 알린다(설계 4.2). 예약 전에 들어온 물품은 나중에 연결돼도 빠진다.
+        self.store.add_found_item(10, storage_location_id=None, first_seen_at=NOW - timedelta(minutes=5))
+        self.store.advance(days=1)
+        self.store.connect_location(10, 1)
+
+        self.run_pass()
+
+        self.assertEqual(self.queued_item_ids(), [])
+
     def test_an_item_is_queued_only_once(self) -> None:
         self.store.add_found_item(10, storage_location_id=1)
 

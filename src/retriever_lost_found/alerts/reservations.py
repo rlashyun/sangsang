@@ -136,12 +136,13 @@ class AlertService:
             raise ValueError("개인정보 수집·이용에 동의해야 알림을 예약할 수 있습니다.")
 
         now = self.clock()
+        client_ip_hash = ip_hash(self.settings.secret, client_ip)
         created = self.store.create_reservation(
             email=email,
             query=query,
             places=places,
             radius_m=radius_m,
-            ip_hash=ip_hash(self.settings.secret, client_ip),
+            ip_hash=client_ip_hash,
             link_nonce=new_link_nonce(),
             expires_at=expires_at_for(now),
         )
@@ -160,7 +161,7 @@ class AlertService:
             if not self.store.claim_messages(
                 limit=1, daily_cap=self.settings.daily_send_limit, message_id=message_id
             ):
-                self._discard(reservation_id)
+                self._discard(reservation_id, client_ip_hash)
                 raise AlertLimitError("오늘 보낼 수 있는 메일을 모두 보냈습니다. 내일 다시 시도해 주세요.")
             reservation = self.store.get_reservation(reservation_id)
             if reservation is None:
@@ -175,7 +176,7 @@ class AlertService:
         except AlertLimitError:
             raise
         except Exception:
-            self._discard(reservation_id)
+            self._discard(reservation_id, client_ip_hash)
             raise RuntimeError("알림 예약을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
         try:
             session = self.sender.open()
@@ -186,14 +187,17 @@ class AlertService:
         except Exception:
             # 설계 5.4 — 발송에 실패하면 예약을 남기지 않아 사용자가 바로 다시 시도할 수 있다.
             # SendError가 아닌 예외도 같다. 남겨 두면 "보냄"으로 기록된 채 메일은 안 나가고 한도만 줄어든다.
-            self._discard(reservation_id)
+            self._discard(reservation_id, client_ip_hash)
             raise RuntimeError("확인 메일을 보내지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
         return {"status": "pending", "message": PENDING_MESSAGE}
 
-    def _discard(self, reservation_id: int) -> None:
-        """실패한 예약을 지운다. 지우기마저 실패하면 미확인 예약으로 남았다가 24시간 뒤 정리된다."""
+    def _discard(self, reservation_id: int, client_ip_hash: str | None) -> None:
+        """실패한 예약을 지운다. 지우기마저 실패하면 미확인 예약으로 남았다가 24시간 뒤 정리된다.
+
+        IP 기록도 함께 지워 실패한 시도가 IP 하루 5건 제한을 깎지 않게 한다(리뷰 2026-11-15).
+        """
         try:
-            self.store.delete_reservation(reservation_id)
+            self.store.discard_reservation(reservation_id, client_ip_hash)
         except Exception:
             pass
 

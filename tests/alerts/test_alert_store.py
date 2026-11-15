@@ -97,6 +97,16 @@ class SupabaseAlertStoreTests(unittest.TestCase):
         self.assertEqual(result["items_queued"], 2)
 
     @patch(URLOPEN)
+    def test_discard_calls_the_server_only_rpc_with_the_ip_hash(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse(None)
+
+        self.store.discard_reservation(7, "hash-of-ip")
+
+        request = urlopen.call_args.args[0]
+        self.assertTrue(request.full_url.endswith("/rest/v1/rpc/discard_alert_reservation"))
+        self.assertEqual(json.loads(request.data.decode("utf-8")), {"p_reservation_id": 7, "p_ip_hash": "hash-of-ip"})
+
+    @patch(URLOPEN)
     def test_empty_response_body_is_not_an_error(self, urlopen) -> None:
         urlopen.return_value = FakeResponse(None)
 
