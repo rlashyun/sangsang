@@ -1,5 +1,21 @@
 # 실측 기록
 
+## ③ 스케줄러 여러 장소(최대 3곳) 마이그레이션 운영 적용 — 2026-11-15 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `20261115130000_alert_reservation_places.sql`(커밋 `4fe3861`)을 2026-11-15 22:08 KST에 적용했다. 앞 절과 같은 방식이다. `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행하고, `supabase_migrations.schema_migrations`에 `20261115130000 alert_reservation_places`를 기록했다. 전체 요청은 3.4초 걸렸다.
+- 적용 전 상태: 알림 예약 0건, 메일 0건, 실행 중 쿼리 0건이었다. 운영 이력의 2026-11-15 버전은 `20261115090000` 하나였다.
+- 적용 전 검증 1 — 로컬: 격리 로컬 Supabase(포트 553xx, DB만 띄움)에 마이그레이션 46개를 처음부터 모두 적용했다. 이어서 `tests/database/verify_alert_scheduler.sql`을 1회 실행해 통과했다. 이 검증 SQL에는 여러 장소 확인 항목을 새로 넣었다: 두 장소 반경의 합집합, 물품마다 가장 가까운 장소, 4곳 거부, 취소 뒤 장소 행 유지.
+- 적용 전 검증 2 — 로컬 REST: 같은 로컬 DB에 REST를 붙여 `AlertService`를 실제로 돌렸다. 두 장소 예약을 만들고, 장소를 화면 순서대로 읽고, 요약을 받고, 삭제했다. 삭제할 때 장소 행도 함께 지워졌다. 확인 메일은 콘솔로만 출력했다.
+- 적용 전 검증 3 — 운영 리허설: 운영 DB에서 같은 SQL과 함수 호출을 실행한 뒤 `raise exception`으로 되돌렸다. 서울역·시청 1km, 커서 3일 전, "지갑" 예약으로 돌렸다. 후보는 partner_api 162건, police_api 39건이었다. 메일 물품에 붙은 가장 가까운 장소는 서울서대문경찰서 → "시청", 서울역(한국철도공사)·서울남대문서울역파출소 → "서울역"이었다. 리허설 뒤 장소 테이블이 없고 옛 칸이 남아 있음을 확인했다.
+- 적용 후 확인:
+  - `alert_reservation_places`는 RLS가 켜져 있다. anon/authenticated는 읽을 수 없고, service_role은 읽고 쓸 수 있다.
+  - 예약 테이블의 `place_name`·`latitude`·`longitude` 칸은 지워졌다.
+  - `create_alert_reservation`은 새 형식 `(text, text, jsonb, integer, text, text, timestamptz, integer, integer)` 하나만 남았다.
+  - 알림 함수 12개는 service_role만 실행할 수 있다.
+  - 운영 이력에 두 버전이 모두 기록됐다.
+  - 로컬 PC에서 운영 REST로 `get_reservation`(없는 id)과 장소 embed 조회를 1회씩 읽기만 했다. 관계 오류는 없었다.
+- 이 객체들을 쓰는 코드는 PR #49를 병합해야 배포된다. 알림 데이터가 0건이어서 옮긴 행도 없다. 되돌리려면 새 마이그레이션이 필요하다. 장소 테이블을 지우고, 예약 테이블에 장소 칸 3개와 옛 함수를 다시 만들어야 한다.
+
 ## ③ 스케줄러(분실물 알림) DB 마이그레이션 운영 적용 — 2026-11-15 KST
 
 - 사용자 요청으로 운영 Supabase `retriever`에 `20261115090000_create_alert_scheduler.sql`(커밋 `fa401bc` 기준)을 2026-11-15 21:40 KST에 적용했다. 운영 이력에는 로컬 파일이 없는 버전 6개와 로컬에만 있는 `20261111042228` 1개가 있어 `supabase db push`를 쓰지 않았다. 대신 `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행하고, 같은 트랜잭션에서 `supabase_migrations.schema_migrations`에 `20261115090000 create_alert_scheduler`를 기록했다. 어긋난 이력 7개는 이번에 손대지 않았다.
