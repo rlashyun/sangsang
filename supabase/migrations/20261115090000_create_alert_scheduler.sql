@@ -382,6 +382,8 @@ $$;
 
 -- 설계 4.6 — 후보 물품: 반경 안 활성 기관 · 이 출처 · 커서 이후 처음 들어옴 · 아직 안 알림.
 -- 공간이 1차 필터다(PRD 4.1). 기관 목록은 저장하지 않고 매번 다시 계산한다.
+-- 판정(alerts/judge.py)이 운영 검색과 같은 글을 보도록 검색 투영(found_item_search_documents)의
+-- search_text를 keyword_found_item_candidates와 같은 필드와 함께 돌려준다. 투영은 matched 물품에만 있다.
 create or replace function public.alert_candidate_items(
     p_reservation_id bigint,
     p_item_source_code text
@@ -417,14 +419,14 @@ as $$
          )
     ),
     candidates as (
-        select item.id, item.item_name, item.raw_category_name, item.color_name,
-               item.description, item.normalized_search_text, item.registered_on,
-               item.first_seen_at
+        select item.id, item.storage_location_id, document.search_text,
+               item.item_name, item.raw_category_name, item.first_seen_at
         from reservation
         join public.found_items as item
           on item.item_source_code = p_item_source_code
          and item.first_seen_at > reservation.checked_until
         join scope on scope.id = item.storage_location_id
+        join public.found_item_search_documents as document on document.item_id = item.id
         where not exists (
             select 1
             from public.alert_notified_items as notified

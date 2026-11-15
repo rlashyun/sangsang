@@ -340,8 +340,18 @@ class FakeAlertStore:
                 reservation["latitude"], reservation["longitude"], location["latitude"], location["longitude"]
             ) <= reservation["radius_m"]
         }
+        # SQL과 같은 모양 — 검색 투영의 search_text(lower(concat_ws(' ', 물품명, 원분류, 색상, 설명))).
         items = [
-            dict(item) for item in self.found_items.values()
+            {
+                "id": item["id"], "storage_location_id": item["storage_location_id"],
+                "search_text": " ".join(
+                    value for value in (item["item_name"], item["raw_category_name"], item["color_name"],
+                                        item["description"]) if value
+                ).lower(),
+                "item_name": item["item_name"], "raw_category_name": item["raw_category_name"],
+                "first_seen_at": item["first_seen_at"],
+            }
+            for item in self.found_items.values()
             if item["storage_location_id"] in scope
             and item["item_source_code"] == item_source_code
             and item["first_seen_at"] > cursor

@@ -66,11 +66,22 @@ begin
         ('partner_api', 'verify-2', '1', v_outside, 'matched', v_category, '무선이어폰', '에어팟', current_date),
         ('partner_api', 'verify-3', '1', null, 'unmatched', v_category, '무선이어폰', '에어팟', current_date);
 
-    -- 반경 안 + 매칭된 물품 1건만 후보가 된다.
+    -- 반경 안 + 매칭된 물품 1건만 후보가 된다. 판정이 운영 검색과 같은 글을 보도록 검색 투영의
+    -- search_text가 함께 온다(found_items_sync_search 트리거가 채운다).
     v_payload := public.alert_candidate_items(v_reservation, 'partner_api');
     if jsonb_array_length(v_payload -> 'items') <> 1
-       or (v_payload -> 'items' -> 0 ->> 'id')::bigint <> v_item_inside then
+       or (v_payload -> 'items' -> 0 ->> 'id')::bigint <> v_item_inside
+       or strpos(v_payload -> 'items' -> 0 ->> 'search_text', '에어팟') = 0 then
         raise exception '반경·매칭 조건이 틀렸습니다: %', v_payload;
+    end if;
+
+    -- PRD 4.3-E — 등록일(D)에는 비교하지 않고, 다음날(D+1)부터 비교한다.
+    if exists (select 1 from public.alert_match_queue('partner_api') as queued where queued.id = v_reservation) then
+        raise exception '등록일에 비교 대상이 됐습니다';
+    end if;
+    update public.alert_reservations set created_at = now() - interval '1 day' where id = v_reservation;
+    if not exists (select 1 from public.alert_match_queue('partner_api') as queued where queued.id = v_reservation) then
+        raise exception '다음날에도 비교 대상이 아닙니다';
     end if;
 
     v_payload := public.record_alert_match(
@@ -112,18 +123,32 @@ begin
         raise exception '메일 내용 조회 실패: %', v_payload;
     end if;
 
-    -- 만료 안내는 만료일마다 한 번, 만료되면 이메일이 지워진다.
+    -- PRD 4.3-E — 종료 안내는 마지막 날 실행(만료 24시간 안)에서만, 만료일마다 한 번.
+    -- 그날 기다리는 알림 메일은 종료 안내로 바뀌어 한 통이 되고, 그 뒤에는 비교하지 않는다.
     v_created := public.create_alert_reservation(
         'expiring@example.com', '지갑', '서울역', 37.5547, 126.9707, 1000,
-        null, 'verify-nonce-2', now() + interval '24 hours'
+        null, 'verify-nonce-2', now() + interval '37 hours'
     );
     v_expiring := (v_created ->> 'reservation_id')::bigint;
     perform public.confirm_alert_reservation(v_expiring);
+    if public.enqueue_alert_expiry_notices() <> 0 then
+        raise exception '마지막 날 전에 종료 안내가 들어갔습니다';
+    end if;
+    update public.alert_reservations set expires_at = now() + interval '13 hours' where id = v_expiring;
+    insert into public.alert_messages (reservation_id, kind) values (v_expiring, 'match');
     if public.enqueue_alert_expiry_notices() <> 1 then
-        raise exception '만료 안내가 들어가지 않았습니다';
+        raise exception '종료 안내가 들어가지 않았습니다';
+    end if;
+    if exists (select 1 from public.alert_messages where reservation_id = v_expiring and kind = 'match')
+       or (select count(*) from public.alert_messages where reservation_id = v_expiring and kind = 'expiry_notice') <> 1 then
+        raise exception '그날 알림 메일이 종료 안내 한 통으로 합쳐지지 않았습니다';
     end if;
     if public.enqueue_alert_expiry_notices() <> 0 then
         raise exception '같은 만료일 안내가 두 번 들어갔습니다';
+    end if;
+    update public.alert_reservations set created_at = now() - interval '7 days' where id = v_expiring;
+    if exists (select 1 from public.alert_match_queue('partner_api') as queued where queued.id = v_expiring) then
+        raise exception '종료 안내 뒤에도 비교 대상입니다';
     end if;
     update public.alert_reservations set expires_at = now() - interval '1 minute' where id = v_expiring;
     v_payload := public.close_ended_alert_reservations();

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .errors import safe_error
+from .judge import search_judge
 from .store import AlertStore
 
 
@@ -15,8 +16,8 @@ class SimilarityJudge(Protocol):
     ) -> list[tuple[dict[str, Any], float]]: ...
 
 
-# 설계 3.2 — ⑥(검색 방식 확정) 결론으로 채운다(Task 11). None이면 매칭 단계를 돌리지 않는다.
-SIMILARITY_JUDGE: SimilarityJudge | None = None
+# 설계 3.2 — 1번 검색(동의어·BM25)의 키워드 단계로 판정한다(2026-11-15, alerts/judge.py).
+SIMILARITY_JUDGE: SimilarityJudge = search_judge
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ def run_match_pass(
     deadline: float,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """설계 6.1 — 수집 크론 끝에서 이 출처의 새 물품만 활성 예약과 비교한다."""
+    """설계 6.1 — 발송 크론 앞단에서 이 출처의 새 물품만 활성 예약과 비교한다(2026-11-15 이동)."""
     run_id = store.start_run("match", item_source_code)
     counts = {"reservations_checked": 0, "reservations_matched": 0, "items_queued": 0}
     status = "succeeded"
