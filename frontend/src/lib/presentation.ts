@@ -35,6 +35,12 @@ export function categoryIcon(rawCategory?: string) {
   } as Record<string, string>)[parent] || "📦";
 }
 
+export function foundItemImageUrl(value?: string | null) {
+  // PRD 3.2-2 — 목록과 상세 모두 원천의 기본 그림을 실제 사진으로 취급하지 않는다.
+  const url = value?.trim();
+  return url && !url.split(/[?#]/)[0].endsWith("/img02_no_img.gif") ? url : null;
+}
+
 export function sourceLabel(source?: string) {
   return source === "police_api" ? "경찰청" : "연계기관";
 }

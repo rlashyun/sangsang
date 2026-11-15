@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from retriever_lost_found.ingestion.store import SupabaseIngestionStore, SupabaseRequestError
@@ -10,6 +11,18 @@ from retriever_lost_found.ingestion.store import SupabaseIngestionStore, Supabas
 class ScopedIngestionStoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.store = SupabaseIngestionStore("https://example.supabase.co", "test-secret")
+
+    def test_run_uses_today_as_business_date_when_collecting_through_today(self) -> None:
+        with patch.object(self.store, "_request", side_effect=[None, [{"id": 7}]]) as request:
+            run_id = self.store.create_run(
+                "partner_api", date(2026, 11, 13), date(2026, 11, 14),
+                trigger="vercel_cron_incremental", cleanup_expired=False,
+            )
+        self.assertEqual(run_id, 7)
+        metadata = request.call_args.kwargs["payload"]["metadata"]
+        self.assertEqual(metadata["business_date"], "2026-11-14")
+        self.assertEqual(metadata["window_end"], "2026-11-14")
+        self.assertFalse(metadata["cleanup_enabled"])
 
     def test_existing_identities_uses_source_and_exact_sequence(self) -> None:
         with patch.object(self.store, "_request", return_value=[

@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import urllib.parse
 import urllib.request
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,7 +20,7 @@ from retriever_lost_found.integrations.supabase import (
     SupabaseMapLocationClient,
     apply_item_counts,
 )
-from retriever_lost_found.search.fuzzy import fuzzy_item_score, rank_found_items
+from retriever_lost_found.search.hybrid import keyword_scores
 from retriever_lost_found.web.app import (
     content_security_policy as _content_security_policy,
     create_app,
@@ -50,6 +51,10 @@ class FakeResponse:
 
 
 class FakeFoundItemClient:
+    def fetch_rerank_items(self, location_ids, item_ids, **kwargs):
+        return [{"item_id": row["id"], "detail": row, "vector": None}
+                for row in self.fetch_items(location_ids) if row["id"] in item_ids]
+
     def __init__(self, *, page_has_more: bool = False) -> None:
         self.page_has_more = page_has_more
         self.fetch_items_calls: list[list[int]] = []
@@ -180,6 +185,19 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["Content-Security-Policy"], _content_security_policy())
 
+    def test_http_response_upgrades_insecure_cdn_requests_without_opening_other_hosts(self) -> None:
+        # PRD 5 — 외부 HTTP 요청을 HTTPS로 올리고 스크립트 출처 허용 범위를 넓히지 않는다.
+        client = TestClient(create_app(KakaoLocalClient("test-rest-key"), "test-js-key"))
+        response = client.get("/")
+        directives = _csp_directives(response.headers["Content-Security-Policy"])
+
+        self.assertIn("upgrade-insecure-requests", directives)
+        for name in ("script-src", "style-src", "img-src", "connect-src"):
+            self.assertNotIn("http://*.kakaocdn.net", directives[name], name)
+            self.assertIn("https://*.kakaocdn.net", directives[name], name)
+        for value in ("*", "http:", "https:", "'unsafe-inline'", "'unsafe-eval'"):
+            self.assertNotIn(value, directives["script-src"])
+
     # PRD 3.2-2 — 습득물 사진(image_url)은 전부 minwon24.police.go.kr에서 온다 (운영 DB 2026-09-27 확인)
     def test_csp_allows_police_item_photos_as_images(self) -> None:
         directives = _csp_directives(_content_security_policy())
@@ -205,20 +223,23 @@ class KakaoLocalClientTests(unittest.TestCase):
 
     @patch("urllib.request.urlopen")
     def test_supabase_map_locations_use_server_side_rpc(self, urlopen) -> None:
-        urlopen.return_value = FakeResponse([
-            {
-                "id": 101,
-                "location_source_code": "partner_csv",
-                "source_key": "partner:test",
-                "name": "테스트 보관소",
-                "address": "서울시 테스트로 1",
-                "phone": "02-000-0000",
-                "display_group": "partner",
-                "longitude": 127.1,
-                "latitude": 37.5,
-                "item_count": 7,
-            }
-        ])
+        first = {
+            "id": 101,
+            "location_source_code": "partner_csv",
+            "source_key": "partner:test",
+            "name": "테스트 보관소",
+            "address": "서울시 테스트로 1",
+            "phone": "02-000-0000",
+            "display_group": "partner",
+            "longitude": 127.1,
+            "latitude": 37.5,
+            "item_count": 7,
+        }
+        rows = [
+            {**first, "id": 101 + index, "source_key": f"partner:{index}"}
+            for index in range(1_001)
+        ]
+        urlopen.return_value = FakeResponse(rows)
         client = SupabaseMapLocationClient(
             "https://example.supabase.co",
             "server-secret",
@@ -226,17 +247,19 @@ class KakaoLocalClientTests(unittest.TestCase):
 
         locations = client.fetch_locations()
 
+        self.assertEqual(len(locations), 1_001)
+        self.assertEqual(locations[-1]["storage_location_id"], 1101)
         self.assertEqual(locations[0]["storage_location_id"], 101)
         self.assertEqual(locations[0]["item_count"], 7)
         self.assertEqual(locations[0]["source"], "partner")
         self.assertEqual(locations[0]["longitude"], 127.1)
         request = urlopen.call_args.args[0]
         self.assertEqual(request.method, "POST")
-        self.assertIn(
-            "/rest/v1/rpc/map_locations_with_item_counts?",
+        self.assertEqual(
+            "https://example.supabase.co/rest/v1/rpc/map_locations_with_item_counts_json",
             request.full_url,
         )
-        self.assertIn("offset=0", request.full_url)
+        self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(request.headers["Authorization"], "Bearer server-secret")
 
     @patch("urllib.request.urlopen")
@@ -265,7 +288,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertNotIn("map_locations_with_item_counts", request.full_url)
 
     @patch("urllib.request.urlopen")
-    def test_supabase_map_locations_are_paginated_without_process_cache(self, urlopen) -> None:
+    def test_supabase_map_locations_without_counts_are_paginated_without_process_cache(self, urlopen) -> None:
         def row(identifier: int, display_group: str = "partner") -> dict:
             return {
                 "id": identifier,
@@ -291,8 +314,8 @@ class KakaoLocalClientTests(unittest.TestCase):
             page_size=2,
         )
 
-        first = client.fetch_locations()
-        second = client.fetch_locations()
+        first = client.fetch_locations(with_counts=False)
+        second = client.fetch_locations(with_counts=False)
 
         self.assertEqual(len(first), 3)
         self.assertEqual(len(second), 1)
@@ -391,7 +414,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.fetch_item_page(list(range(1, 302)), limit=50)
 
-    def test_fuzzy_search_matches_korean_typo_and_rejects_unrelated_item(self) -> None:
+    def test_keyword_search_matches_query_correction_and_rejects_unrelated_item(self) -> None:
         phone = {
             "id": 1,
             "item_name": "애플 아이폰 15 프로",
@@ -409,12 +432,12 @@ class KakaoLocalClientTests(unittest.TestCase):
             "registered_on": "2026-08-25",
         }
 
-        ranked = rank_found_items([wallet, phone], "아이퐁")
+        scores = keyword_scores([wallet, phone], "아이퐁")
 
-        self.assertEqual([item["id"] for item in ranked], [1])
-        self.assertGreater(fuzzy_item_score("아이퐁", phone), 0.5)
+        self.assertEqual(set(scores), {1})
+        self.assertGreater(scores[1], 0)
 
-    def test_fuzzy_search_combines_color_and_item_tokens(self) -> None:
+    def test_keyword_search_combines_color_and_item_tokens(self) -> None:
         item = {
             "id": 1,
             "item_name": "남성용 지갑",
@@ -424,10 +447,10 @@ class KakaoLocalClientTests(unittest.TestCase):
             "registered_on": "2026-08-25",
         }
 
-        ranked = rank_found_items([item], "검정 지갑")
+        scores = keyword_scores([item], "검정 지갑")
 
-        self.assertEqual(len(ranked), 1)
-        self.assertGreaterEqual(ranked[0]["match_score"], 0.8)
+        self.assertEqual(set(scores), {1})
+        self.assertGreater(scores[1], 0)
 
     def test_found_item_http_endpoint_returns_ranked_items(self) -> None:
         app = create_app(
@@ -577,7 +600,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(found_item_client.fetch_items_calls, [[77]])
+        self.assertEqual(found_item_client.fetch_items_calls, [[77], [77]])
         self.assertEqual(found_item_client.page_calls, [])
         self.assertIsNone(response.json()["next_cursor"])
 
@@ -597,7 +620,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.json()["error"],
-            "검색어 결과는 페이지로 나눠 받지 않습니다.",
+            "검색 결과 페이지 위치가 올바르지 않습니다.",
         )
 
     def test_institution_endpoint_uses_database_locations_and_vercel_cdn_cache(self) -> None:
@@ -623,12 +646,44 @@ class KakaoLocalClientTests(unittest.TestCase):
             "public, s-maxage=300, stale-while-revalidate=600",
         )
 
-    def test_institution_endpoint_keeps_map_when_item_counts_fail(self) -> None:
-        # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
+    def test_institution_endpoint_can_load_locations_without_count_query(self) -> None:
         app = create_app(
             KakaoLocalClient("kakao-secret"),
             "javascript-key",
             map_location_client=FakeMapLocationClient(counts_error=True),
+        )
+
+        response = TestClient(app).get("/api/institutions?with_counts=false")
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["institutions"][0]["storage_location_id"], 77)
+        self.assertFalse(payload["counts_available"])
+        self.assertIsNone(payload["count_error"])
+
+    @patch("urllib.request.urlopen")
+    def test_institution_endpoint_keeps_map_when_item_counts_fail(self, urlopen) -> None:
+        # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
+        urlopen.side_effect = [
+            urllib.error.HTTPError(
+                "https://example.supabase.co/rest/v1/rpc/map_locations_with_item_counts_json",
+                500, "statement timeout", {}, BytesIO(b"statement timeout"),
+            ),
+            FakeResponse([{
+                "id": 77,
+                "location_source_code": "partner_csv",
+                "source_key": "partner:test",
+                "display_group": "partner",
+                "longitude": 127.1,
+                "latitude": 37.5,
+            }]),
+        ]
+        app = create_app(
+            KakaoLocalClient("kakao-secret"),
+            "javascript-key",
+            map_location_client=SupabaseMapLocationClient(
+                "https://example.supabase.co", "server-secret",
+            ),
         )
 
         response = TestClient(app).get("/api/institutions")
@@ -638,6 +693,8 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertEqual(len(payload["institutions"]), 1)
         self.assertEqual(payload["institutions"][0]["storage_location_id"], 77)
         self.assertFalse(payload["counts_available"])
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertIn("/rpc/map_locations?", urlopen.call_args.args[0].full_url)
         self.assertIn("statement timeout", payload["count_error"])
         self.assertEqual(
             response.headers["vercel-cdn-cache-control"],

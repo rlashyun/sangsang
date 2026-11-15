@@ -17,6 +17,7 @@ from ..alerts.sender import create_email_sender
 from ..alerts.settings import load_alert_settings
 from ..alerts.store import SupabaseAlertStore
 from ..config import read_env_value, read_optional_env_value
+from ..integrations.embeddings import BgeM3Client
 from ..integrations.kakao import KakaoLocalClient, kakao_sdk_url
 from ..integrations.supabase import (
     SupabaseFoundItemClient,
@@ -24,7 +25,7 @@ from ..integrations.supabase import (
     apply_item_counts,
     validate_location_ids,
 )
-from ..search.fuzzy import rank_found_items
+from ..search.hybrid import search_with_deadline, SearchDeadlineExceeded
 from .alerts import create_alert_router
 
 
@@ -40,6 +41,7 @@ def create_app(
     institutions: list[dict[str, Any]] | None = None,
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
+    embedding_client: BgeM3Client | None = None,
     alert_service: AlertService | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
@@ -109,15 +111,17 @@ def create_app(
         return client.geocode_address(address)
 
     @app.get("/api/institutions")
-    def institution_list() -> JSONResponse:
+    def institution_list(with_counts: bool = True) -> JSONResponse:
         count_error = None
         if map_location_client is None:
             locations = map_locations
             counts_available = False
         else:
             try:
-                database_locations = map_location_client.fetch_locations()
+                database_locations = map_location_client.fetch_locations(with_counts=with_counts)
             except RuntimeError as error:
+                if not with_counts:
+                    raise
                 # PRD 6 — 개수 집계가 실패해도 기관 마커는 보여야 한다.
                 database_locations = map_location_client.fetch_locations(with_counts=False)
                 count_error = str(error)
@@ -139,7 +143,7 @@ def create_app(
                 locations = apply_item_counts(map_locations, counts, location_ids)
             else:
                 locations = database_locations
-            counts_available = count_error is None
+            counts_available = with_counts and count_error is None
         # 개수 없는 응답은 짧게만 캐시해 집계가 회복되면 곧 다시 반영되게 한다.
         cdn_cache = (
             "public, s-maxage=300, stale-while-revalidate=600"
@@ -191,18 +195,29 @@ def create_app(
                     ),
                 }
             )
+        offset = 0
         if cursor.strip():
-            raise ValueError("검색어 결과는 페이지로 나눠 받지 않습니다.")
-        # PRD 4.5 — 퍼지 점수는 후보 전체를 봐야 매길 수 있어 검색어가 있으면 전체를 읽는다.
-        candidates = found_item_client.fetch_items(validated_ids)
-        matched_items = rank_found_items(candidates, search_query)
+            if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
+                raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
+            offset = int(cursor.strip().split(":")[1])
+        # PRD 4.1 · 4.5 — 키워드와 의미 검색을 같은 기관 범위에서 병렬 실행한다.
+        try:
+            matched_items, candidate_count, semantic_status = search_with_deadline(
+                found_item_client, search_query, validated_ids, embedding_client, offset=offset,
+            )
+        except SearchDeadlineExceeded as error:
+            return JSONResponse(status_code=504, content={"error": str(error)})
+        match_count = len(matched_items)
+        page_items = matched_items[offset:offset+FOUND_ITEM_PAGE_LIMIT]
         return JSONResponse(
             content={
-                "items": matched_items,
-                "candidate_count": len(candidates),
-                "match_count": len(matched_items),
+                "items": page_items,
+                "candidate_count": candidate_count,
+                "semantic_status": semantic_status,
+                "match_count": match_count,
+                "total_count": match_count,
                 "query": search_query,
-                "next_cursor": None,
+                "next_cursor": f"search:{offset+FOUND_ITEM_PAGE_LIMIT}" if offset+FOUND_ITEM_PAGE_LIMIT<match_count else None,
             }
         )
 
@@ -232,6 +247,7 @@ def create_runtime_app() -> FastAPI:
 
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
+    embedding_key = read_optional_env_value("OPENROUTER_API_KEY")
     try:
         alert_settings = load_alert_settings()
     except ValueError as error:
@@ -250,6 +266,7 @@ def create_runtime_app() -> FastAPI:
         javascript_key,
         map_location_client=map_location_client,
         found_item_client=found_item_client,
+        embedding_client=BgeM3Client(embedding_key) if embedding_key else None,
         alert_service=alert_service,
     )
     app.state.location_source = "supabase"
@@ -294,6 +311,8 @@ def content_security_policy() -> str:
     return "; ".join(
         [
             "default-src 'self'",
+            # PRD 5 — 로컬 HTTP에서 SDK가 만드는 외부 HTTP 요청도 HTTPS로 올려 기존 CDN 허용 범위를 유지한다.
+            "upgrade-insecure-requests",
             # PRD 5 — 카카오맵의 새 CDN 하위 호스트도 허용한다 (공식 CSP 공지 2026-07-07).
             "script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
             "style-src 'self' 'unsafe-inline' https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",

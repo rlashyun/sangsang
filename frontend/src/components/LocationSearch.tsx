@@ -2,7 +2,10 @@ import { useState, type FormEvent } from "react";
 
 import type { Place } from "../types";
 
+export const PLACE_PAGE_SIZE = 5;
+
 interface LocationSearchProps {
+  addingWaypoint: boolean;
   results: Place[];
   selectedPlace: Place | null;
   status: string;
@@ -10,9 +13,13 @@ interface LocationSearchProps {
   isSearching: boolean;
   onSearch: (query: string) => void;
   onSelect: (place: Place) => void;
+  onConfirm: () => void;
+  page: number;
+  onPageChange: (page: number) => void;
 }
 
 export function LocationSearch({
+  addingWaypoint,
   results,
   selectedPlace,
   status,
@@ -20,9 +27,15 @@ export function LocationSearch({
   isSearching,
   onSearch,
   onSelect,
+  onConfirm,
+  page,
+  onPageChange,
 }: LocationSearchProps) {
   const [query, setQuery] = useState("");
   const showCenteredStatus = results.length === 0 && !isSearching && !statusIsError;
+  const pageCount = Math.ceil(results.length / PLACE_PAGE_SIZE);
+  const start = page * PLACE_PAGE_SIZE;
+  const visibleResults = results.slice(start, start + PLACE_PAGE_SIZE);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -34,8 +47,8 @@ export function LocationSearch({
     <>
       <header className="landing-header">
         <p className="eyebrow">RETRIEVER MAP</p>
-        <h1 id="page-title">어디서 잃어버렸어요?</h1>
-        <p className="lede">기억나는 장소를 입력하면 근처 습득물을 보여줘요.</p>
+        <h1 id="page-title">{addingWaypoint ? "추가할 장소를 찾아주세요" : "어디서 잃어버렸어요?"}</h1>
+        <p className="lede">{addingWaypoint ? "장소를 추가하면 각 장소 주변의 습득물을 함께 찾아요." : "기억나는 장소를 입력하면 근처 습득물을 보여줘요."}</p>
       </header>
 
       <div className="location-search-view">
@@ -49,6 +62,7 @@ export function LocationSearch({
                 type="search"
                 maxLength={200}
                 autoComplete="off"
+                autoFocus={addingWaypoint}
                 placeholder="장소명 또는 주소를 입력하세요"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -71,34 +85,50 @@ export function LocationSearch({
         </form>
 
         <div
-          className={`status${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
+          className={`status${isSearching ? " search-loading" : ""}${statusIsError ? " error" : ""}${showCenteredStatus ? " empty" : ""}`}
           role="status"
           aria-live="polite"
         >
           {status}
         </div>
         <ol className="results location-results" aria-label="위치 검색 결과">
-          {results.map((place, index) => {
+          {visibleResults.map((place, index) => {
             const isActive = selectedPlace === place;
-            const meta = [place.phone, place.category].filter(Boolean).join(" · ");
             return (
-              <li className="result-item" key={`${place.latitude}:${place.longitude}:${index}`}>
+              <li className={`result-item location-result-card${isActive ? " previewing" : ""}`} key={`${place.latitude}:${place.longitude}:${index}`}>
                 <button
                   type="button"
-                  className={`result-button${isActive ? " active" : ""}`}
+                  className="result-button"
                   onClick={() => onSelect(place)}
+                  disabled={isSearching}
+                  aria-pressed={isActive}
                 >
                   <span className="result-copy">
-                    <span className="result-title">{index + 1}. {place.name}</span>
+                    <span className="result-title">{start + index + 1}. {place.name}</span>
                     <span className="result-address">{place.address}</span>
-                    {meta && <span className="result-meta">{meta}</span>}
                   </span>
-                  <span className="select-place-label">이 위치 선택</span>
                 </button>
+                {isActive && <div className="place-card-action">
+                  <button
+                    type="button"
+                    onClick={onConfirm}
+                    disabled={isSearching}
+                  >{addingWaypoint ? "이 장소 추가하기" : "이 장소 선택하기"}</button>
+                </div>}
               </li>
             );
           })}
         </ol>
+        {pageCount > 0 && (
+          <nav className="place-pagination" aria-label="장소 검색 결과 페이지">
+            <button type="button" aria-label="이전 장소 페이지" disabled={isSearching || page === 0} onClick={() => onPageChange(page - 1)}>‹</button>
+            {Array.from({ length: pageCount }, (_, index) => (
+              <button key={index} type="button" aria-label={`장소 ${index + 1}페이지`} aria-current={index === page ? "page" : undefined}
+                disabled={isSearching} onClick={() => onPageChange(index)}>{index + 1}</button>
+            ))}
+            <button type="button" aria-label="다음 장소 페이지" disabled={isSearching || page === pageCount - 1} onClick={() => onPageChange(page + 1)}>›</button>
+          </nav>
+        )}
       </div>
     </>
   );

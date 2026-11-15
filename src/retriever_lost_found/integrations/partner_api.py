@@ -11,6 +11,8 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from pathlib import Path
 
+from .deadline import request_timeout
+
 
 BASE_URL = (
     "https://apis.data.go.kr/1320000/LosPtfundInfoInqireService/"
@@ -68,6 +70,7 @@ class PoliceApiClient:
 
     def __init__(self, service_key: str) -> None:
         self.service_key = service_key
+        self.request_deadline: float | None = None
 
     def fetch_page(
         self,
@@ -89,8 +92,9 @@ class PoliceApiClient:
                 "User-Agent": "RetrieverLostFound/0.1",
             },
         )
+        timeout = request_timeout(self.request_deadline, 20)
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return parse_xml(response.read())
         except urllib.error.HTTPError as error:
             response_body = error.read().decode("utf-8", errors="replace").strip()

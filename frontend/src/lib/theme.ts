@@ -4,6 +4,7 @@ export interface MapColorTokens {
   clusterShadow: string;
   textOnSolid: string;
   pinPartner: string;
+  pinPlace: string;
   pinPolice: string;
   pinBadge: string;
   pinShadow: string;
@@ -14,6 +15,11 @@ export interface MapColorTokens {
 }
 
 export const PREVIEW_THEMES = [
+  {
+    value: "retriever-blue",
+    shortLabel: "Blue",
+    description: "흰색 표면과 부드러운 파란색",
+  },
   {
     value: "warm-ivory",
     shortLabel: "Warm",
@@ -38,7 +44,7 @@ const PREVIEW_THEME_STORAGE_KEY = "retriever-preview-theme";
 export function readPreviewTheme(): PreviewTheme {
   const storedTheme = window.localStorage.getItem(PREVIEW_THEME_STORAGE_KEY);
   const match = PREVIEW_THEMES.find((theme) => theme.value === storedTheme);
-  return match?.value || "retriever-modern";
+  return match?.value || "retriever-blue";
 }
 
 export function applyPreviewTheme(theme: PreviewTheme) {
@@ -65,6 +71,7 @@ export function readMapColorTokens(): MapColorTokens {
     clusterShadow: cssColor("--color-map-cluster-shadow"),
     textOnSolid: cssColor("--color-text-on-solid"),
     pinPartner: cssColor("--color-source-partner"),
+    pinPlace: cssColor("--color-map-pin-place"),
     pinPolice: cssColor("--color-source-police"),
     pinBadge: cssColor("--color-map-pin-badge"),
     pinShadow: cssColor("--color-text-primary"),
