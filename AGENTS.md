@@ -267,7 +267,7 @@ supabase/migrations/         재현 가능한 DB 스키마
 tests/                       기능 영역별 테스트
 ```
 
-**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/alerts`·`/api/alerts/{summary,confirm,extend,cancel}`(무캐시, ③ 스케줄러) · `/api/cron/{partner,police}-sync` · `/api/cron/alert-send`(Bearer 인증)
+**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/alerts`·`/api/alerts/{summary,confirm,extend,cancel}`(무캐시, ③ 스케줄러) · `/alerts/{confirm,extend,cancel}`(메일 링크 화면) · `/api/cron/{partner,police}-sync` · `/api/cron/alert-send`(Bearer 인증)
 
 ---
 
@@ -429,6 +429,7 @@ PRD 7.1의 마일스톤은 **날짜가 고정되어 있지 않다("유동적으�
 | 2026-11-05 | **정량 결과는 모두 `docs/measurements.md`에 기록하기로 함**(6장 문서 보관 규칙의 예외, 세션 완료 조건 ⑤, 8장 문서 지도). 9.3에 PR #28 배포 후 실측과 검색어 경로 작업 보류를 반영 |
 | 2026-11-06 | 8장 엔드포인트에 알림 예약 API(`/api/alerts*`)와 발송 크론(`/api/cron/alert-send`) 추가 |
 | 2026-11-09 | **6장 스프린트 역할을 2026-11-09 ~ 11-15 담당·마감으로 교체**(`docs/team-roles.md`). 9.3 담당 열의 ①~⑦이 지난 스프린트 번호임을 적음 |
+| 2026-11-15 | 8장 엔드포인트에 메일 링크 화면 경로(`/alerts/{confirm,extend,cancel}`) 추가. 알림 매칭은 수집 크론이 아니라 `/api/cron/alert-send` 앞단에서 돈다 |
 
 2026-11-08 UI 문서 갱신: 반경·유사도·디자인·알림 일정의 승인된 변경을 PRD와 맞추고, 사진·상세 main 반영과 새 UI 미구현을 구분했다. 과거 변경 이력과 성능 측정은 유지한다.
 

@@ -235,13 +235,17 @@ uv run python scripts/search_storage_location_kakao.py 5052
 
 ## 분실물 알림 메일(스케줄러)
 
-검색 조건과 이메일로 알림을 예약하면, 1주일 동안 매일 새로 들어온 습득물 중 유사한 물품을
-메일로 알립니다(PRD 2.1-4, 4.2 P1). 설계와 구현 계획은 `docs/alert-scheduler/`에 있습니다.
+검색 조건과 이메일로 알림을 예약하면, 등록 다음날부터 7일 동안 새로 들어온 습득물 중 유사한 물품을
+메일로 알리고 마지막 날에는 종료·연장을 안내합니다(PRD 2.1-4, 4.2 P1, 4.3-E).
+설계는 `docs/alert-scheduler/`(최신 결정은 설계 문서 15장), 화면 연결은 같은 폴더의 `frontend-handoff.md`에 있습니다.
 
-- 매칭: 수집 크론(`partner-sync`·`police-sync`)이 끝날 때 그 출처의 새 물품만 비교합니다.
-  유사 판정은 ⑥ 검색 방식 결론 뒤에 연결합니다.
-- 발송: `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 돕니다.
-  최근 24시간 동안 하루 발송 상한(Resend 기본 100통, Gmail SMTP 기본 450통)까지 보냅니다.
+- `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 한 번 돕니다.
+  출처별 매칭(120초 안) → 마지막 날 종료 안내 → 발송 → 정리 순서입니다. 수집 크론은 알림을 건드리지 않습니다.
+- 유사 판정은 운영 검색의 키워드 단계(동의어·BM25)와 같습니다. 같은 검색어로 같은 반경을 검색했을 때
+  결과에 나오는 새 물품을 알립니다(`alerts/judge.py`).
+- 최근 24시간 동안 하루 발송 상한(Resend 기본 100통, Gmail SMTP 기본 450통)까지 보냅니다.
+- 메일 속 링크는 `/alerts/confirm`·`/alerts/extend`·`/alerts/cancel` 화면을 엽니다.
+- 운영 DB에는 `supabase db push`로 `20261115090000_create_alert_scheduler.sql`을 적용합니다.
 - 메일 설정이 하나라도 없으면 알림 예약 API(`/api/alerts*`)는 503을 돌려줍니다.
   Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
 
