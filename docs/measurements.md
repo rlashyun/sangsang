@@ -1,5 +1,27 @@
 # 실측 기록
 
+## ③ 스케줄러 리뷰 반영 마이그레이션 운영 적용 — 2026-11-15 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `20261115220000_alert_review_fixes.sql`(커밋 `97bea13`)을 2026-11-15 23:12 KST에 적용했다. 앞 절들과 같은 방식이다. `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행했고(`lock_timeout` 5초), 같은 트랜잭션에서 `supabase_migrations.schema_migrations`에 `20261115220000 alert_review_fixes`를 기록했다. 전체 요청은 4.5초 걸렸다.
+- 바뀐 것은 세 가지다. 검색 투영 `found_item_search_documents`에 `visible_since` 열과 인덱스를 더했고, `alert_candidate_items`를 바꿨고, `discard_alert_reservation`을 새로 만들었다. 설계 17장 참조.
+- 적용 전 상태(23:11 KST): 실행 중 쿼리 0건, 수집·임베딩 running 0건이었다. 23:00 오후 임베딩 크론은 이미 끝나 있었다. 알림 예약 0건, IP 기록 0건, 검색 투영 295,256행(308MB)이었다.
+- 적용 전 검증 1 — 로컬: 격리 로컬 Supabase(포트 553xx, DB만 띄움)에 마이그레이션 47개를 처음부터 모두 적용했다. 이어서 다음 순서로 확인했고 모두 통과했다.
+  1. `tests/database/verify_alert_scheduler.sql` 실행. 새로 넣은 확인 항목: 나중에 기관이 연결된 물품, 예약 전 물품 제외, 실패 예약의 IP 기록 삭제, 확인된 예약은 지우지 않음
+  2. 저장소 밖 되돌리기 SQL 실행
+  3. 마이그레이션 다시 적용
+  4. 검증 스크립트 다시 실행
+- 적용 전 검증 2 — 운영 리허설: 운영 DB에서 같은 SQL과 함수 호출을 실행한 뒤 `raise exception`으로 되돌렸다. 서울역·시청 1km "지갑" 예약에 예약 시각과 커서를 3일 전으로 두고 돌렸다.
+  - 후보: partner_api 162건, police_api 39건(앞 절 리허설과 같다). 두 출처 후보 조회는 함께 214ms였다.
+  - 실패 예약 정리: IP 기록 1건이 0건이 되고 예약도 지워졌다.
+  - 기존 투영 295,256행은 모두 적용 시각을 `visible_since`로 가졌다.
+  - 리허설 뒤 열과 이력이 남지 않았음을 확인했다. 시험 이메일은 `example.invalid` 주소였고 실제 발송은 없었다.
+- 적용 후 확인:
+  - `visible_since`는 `timestamptz not null default now()`이고 NULL 행은 0건이다. 인덱스가 생겼다.
+  - 두 함수는 service_role만 실행할 수 있다(anon/authenticated 불가). `discard_alert_reservation`은 SECURITY INVOKER이고 search_path가 비어 있다.
+  - `alert_candidate_items`가 `visible_since`를 쓴다. 운영 이력에 11-15 버전 3개가 모두 있다.
+- 검색 영향 확인(읽기만, 1회): 운영 키워드 후보 RPC `keyword_found_item_candidates`를 서울역 1km(기관 19곳) "지갑"으로 호출했다. 결과 2,583건, 176ms였고 응답에 새 열이 없었다.
+- 이 객체들을 쓰는 코드는 PR #49를 병합해야 배포된다. 알림 데이터가 0건이라 운영 동작은 지금 바뀌지 않는다. 되돌리기 SQL은 저장소 밖 `sangsang-work-docs/email-scheduler/rollback-20261115220000_alert_review_fixes.sql`에 있고 로컬에서 확인했다. 운영에서 되돌리려면 이 SQL을 실행한 뒤 이력 행도 지워야 한다.
+
 ## ③ 스케줄러 여러 장소(최대 3곳) 마이그레이션 운영 적용 — 2026-11-15 KST
 
 - 사용자 요청으로 운영 Supabase `retriever`에 `20261115130000_alert_reservation_places.sql`(커밋 `4fe3861`)을 2026-11-15 22:08 KST에 적용했다. 앞 절과 같은 방식이다. `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행하고, `supabase_migrations.schema_migrations`에 `20261115130000 alert_reservation_places`를 기록했다. 전체 요청은 3.4초 걸렸다.
