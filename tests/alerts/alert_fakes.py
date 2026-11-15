@@ -30,7 +30,7 @@ def reservation_row(**overrides: Any) -> dict[str, Any]:
         "id": 7,
         "email": "user@example.com",
         "query": "에어팟",
-        "place_name": "서울역",
+        "places": [{"name": "서울역"}],
         "radius_m": 1500,
         "status": "active",
         "link_nonce": "nonce-7",
@@ -92,7 +92,7 @@ from retriever_lost_found.alerts.links import (  # noqa: E402
 SOURCES = ("partner_api", "police_api")
 EARTH_RADIUS_METERS = 6371008.7714  # PostGIS 구면 계산 반지름
 PUBLIC_RESERVATION_FIELDS = (
-    "id", "email", "query", "place_name", "radius_m", "status",
+    "id", "email", "query", "radius_m", "status",
     "link_nonce", "created_at", "expires_at", "extension_count",
 )
 KIND_ORDER = {"confirm": 0, "match": 1, "expiry_notice": 2}
@@ -128,7 +128,7 @@ class FakeMonotonic:
 
 
 class FakeAlertStore:
-    """마이그레이션 20261115090000의 DB 함수와 같은 규칙을 메모리에서 흉내 낸다."""
+    """마이그레이션 20261115090000·20261115130000의 DB 함수와 같은 규칙을 메모리에서 흉내 낸다."""
 
     secret_key = "fake-supabase-secret"
 
@@ -169,12 +169,17 @@ class FakeAlertStore:
 
     def add_active_reservation(
         self, *, email="user@example.com", query="에어팟", latitude=37.5547, longitude=126.9707,
-        radius_m=1000, expires_at=None, extension_count=0, link_nonce="nonce-1",
+        radius_m=1000, expires_at=None, extension_count=0, link_nonce="nonce-1", places=None,
     ) -> int:
+        """places는 [(이름, 위도, 경도)] — 없으면 서울역 한 곳(latitude·longitude)."""
         reservation_id = next(self._ids)
         self.reservations[reservation_id] = {
-            "id": reservation_id, "email": email, "query": query, "place_name": "서울역",
-            "latitude": latitude, "longitude": longitude, "radius_m": radius_m, "status": "active",
+            "id": reservation_id, "email": email, "query": query,
+            "places": [
+                {"name": name, "latitude": lat, "longitude": lng}
+                for name, lat, lng in (places or [("서울역", latitude, longitude)])
+            ],
+            "radius_m": radius_m, "status": "active",
             "link_nonce": link_nonce, "created_at": self.now,
             "confirmed_at": self.now, "expires_at": expires_at or expires_at_for(self.now),
             "extension_count": extension_count, "ended_at": None,
@@ -210,7 +215,10 @@ class FakeAlertStore:
         return message_id
 
     def _public_reservation(self, reservation):
-        return {field: _iso(reservation[field]) for field in PUBLIC_RESERVATION_FIELDS}
+        # SQL·REST와 같은 모양 — 장소는 화면 순서대로 이름만 돌려준다(설계 16장).
+        public = {field: _iso(reservation[field]) for field in PUBLIC_RESERVATION_FIELDS}
+        public["places"] = [{"name": place["name"]} for place in reservation["places"]]
+        return public
 
     def _public_message(self, message):
         return {key: _iso(value) for key, value in message.items()}
@@ -231,7 +239,9 @@ class FakeAlertStore:
             self.delete_message(message_id)
 
     # ---- AlertStore ----
-    def create_reservation(self, *, email, query, place_name, latitude, longitude, radius_m, ip_hash, link_nonce, expires_at):
+    def create_reservation(self, *, email, query, places, radius_m, ip_hash, link_nonce, expires_at):
+        if not 1 <= len(places) <= 3:  # SQL — 잘못된 호출은 예외
+            raise RuntimeError("alert places must be 1 to 3")
         open_count = sum(
             1 for reservation in self.reservations.values()
             if reservation["email"] == email and reservation["status"] in ("pending", "active")
@@ -243,8 +253,12 @@ class FakeAlertStore:
             return {"status": "ip_limit"}
         reservation_id = next(self._ids)
         self.reservations[reservation_id] = {
-            "id": reservation_id, "email": email, "query": query.strip(), "place_name": place_name.strip(),
-            "latitude": latitude, "longitude": longitude, "radius_m": radius_m, "status": "pending",
+            "id": reservation_id, "email": email, "query": query.strip(),
+            "places": [
+                {"name": place.name.strip(), "latitude": place.latitude, "longitude": place.longitude}
+                for place in places
+            ],
+            "radius_m": radius_m, "status": "pending",
             "link_nonce": link_nonce, "created_at": self.now, "confirmed_at": None,
             "expires_at": expires_at, "extension_count": 0, "ended_at": None,
         }
@@ -334,11 +348,14 @@ class FakeAlertStore:
             or reservation["expires_at"] <= self.now
         ):
             return {"checked_until": None, "items": []}
+        # 설계 16장 — 장소들 각각의 반경 안 기관의 합집합
         scope = {
             location_id for location_id, location in self.locations.items()
-            if location["is_active"] and haversine_meters(
-                reservation["latitude"], reservation["longitude"], location["latitude"], location["longitude"]
-            ) <= reservation["radius_m"]
+            if location["is_active"] and any(
+                haversine_meters(place["latitude"], place["longitude"], location["latitude"], location["longitude"])
+                <= reservation["radius_m"]
+                for place in reservation["places"]
+            )
         }
         # SQL과 같은 모양 — 검색 투영의 search_text(lower(concat_ws(' ', 물품명, 원분류, 색상, 설명))).
         items = [
@@ -440,11 +457,20 @@ class FakeAlertStore:
                 continue
             item = self.found_items[item_id]
             location = self.locations.get(item["storage_location_id"], {})
+            near = None
+            if location:
+                # SQL과 같다 — 보관기관에서 가장 가까운 장소, 같으면 화면 순서가 앞선 곳
+                near = min(
+                    reservation["places"],
+                    key=lambda place: haversine_meters(
+                        place["latitude"], place["longitude"], location["latitude"], location["longitude"]
+                    ),
+                )["name"]
             items.append({
                 "id": item_id, "item_name": item["item_name"], "raw_category_name": item["raw_category_name"],
                 "color_name": item["color_name"], "registered_on": item["registered_on"],
                 "storage_location_name": location.get("name"), "storage_location_phone": location.get("phone"),
-                "score": note["score"],
+                "near_place_name": near, "score": note["score"],
             })
         # SQL과 같은 순서: 점수 높은 순(NULL 마지막) → 최근 등록 순 → id 큰 순
         items.sort(key=lambda item: item["id"], reverse=True)

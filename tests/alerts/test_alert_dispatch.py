@@ -12,6 +12,7 @@ from retriever_lost_found.alerts.sender import (
     PermanentSendError,
     TemporarySendError,
 )
+from retriever_lost_found.alerts.store import AlertPlace
 from retriever_lost_found.alerts.templates import CONFIRM_SUBJECT, EXPIRY_SUBJECT, FINAL_NOTICE, MATCH_SUBJECT
 
 
@@ -43,7 +44,7 @@ class SendPassTests(unittest.TestCase):
 
     def new_pending_reservation(self, email: str) -> dict:
         return self.store.create_reservation(
-            email=email, query="에어팟", place_name="서울역", latitude=37.5547, longitude=126.9707,
+            email=email, query="에어팟", places=[AlertPlace("서울역", 37.5547, 126.9707)],
             radius_m=1000, ip_hash=None, link_nonce="nonce-new", expires_at=self.store.now + timedelta(days=7),
         )
 
@@ -55,6 +56,24 @@ class SendPassTests(unittest.TestCase):
         self.assertEqual((result["status"], result["messages_sent"]), ("succeeded", 1))
         self.assertEqual([email.subject for email in self.sender.sent], [MATCH_SUBJECT])
         self.assertEqual(self.match_statuses(), ["sent"])
+
+    def test_alert_mail_names_the_nearest_of_several_places(self) -> None:
+        # 설계 16장 — 장소가 여러 곳이면 물품마다 보관기관에서 가장 가까운 장소를 붙인다.
+        self.store.add_location(2, 37.5658 + 0.0045, 126.9772, name="시청 유실물센터")
+        reservation_id = self.store.add_active_reservation(
+            email="a@example.com", radius_m=1000,
+            places=[("서울역", 37.5547, 126.9707), ("시청", 37.5658, 126.9772)],
+        )
+        self.store.add_found_item(900, storage_location_id=2)
+        self.store.add_found_item(901, storage_location_id=1)
+        self.store.queue_match(reservation_id, [900, 901])
+
+        self.run_pass()
+
+        (email,) = self.sender.sent
+        self.assertIn("장소: 서울역 · 시청 반경 1km", email.text)
+        self.assertIn("시청 근처 · 11월 6일 등록 · 보관: 시청 유실물센터", email.text)
+        self.assertIn("서울역 근처 · 11월 6일 등록 · 보관: 서울역 유실물센터", email.text)
 
     def test_every_mail_carries_an_idempotency_key_for_its_queue_row(self) -> None:
         _, message_id = self.reservation_with_alert("a@example.com")

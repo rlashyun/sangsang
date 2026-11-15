@@ -23,10 +23,8 @@ from retriever_lost_found.web.app import create_app  # noqa: E402
 PAYLOAD = {
     "email": "user@example.com",
     "query": "에어팟",
-    "latitude": 37.5547,
-    "longitude": 126.9707,
+    "places": [{"name": "서울역", "latitude": 37.5547, "longitude": 126.9707}],
     "radius_m": 1500,
-    "place_name": "서울역",
     "consent": True,
 }
 

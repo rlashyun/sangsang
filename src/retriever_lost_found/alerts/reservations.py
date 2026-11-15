@@ -20,12 +20,13 @@ from .links import (
 )
 from .sender import EmailSender, with_idempotency_key
 from .settings import AlertSettings
-from .store import AlertStore
+from .store import AlertPlace, AlertStore
 from .templates import alert_period, confirmation_email, format_day
 
 ALLOWED_RADII_METERS = (1000, 1500, 2000)  # PRD 4.3-E — 알림 화면의 1·1.5·2km(2026-11-09 결정)
 MAX_QUERY_LENGTH = 30  # PRD 3.3 · D3 — 습득물 검색어 상한
 MAX_PLACE_NAME_LENGTH = 100
+MAX_PLACES = 3  # 설계 16장 — 검색 화면과 같이 장소는 최대 3곳(App.tsx MAX_WAYPOINT_PLACES)
 MAX_EMAIL_LENGTH = 254
 # 설계 14장 — 서비스 대상인 대한민국(독도 포함) 밖 좌표로는 예약하지 않는다.
 LATITUDE_RANGE = (33.0, 38.7)
@@ -87,6 +88,30 @@ def _coordinate(value: Any, name: str, bounds: tuple[float, float]) -> float:
     return number
 
 
+def _places(value: Any) -> list[AlertPlace]:
+    """설계 16장 — 화면 Place 목록 [{name, latitude, longitude}] 1~3곳. 좌표가 같은 장소는 하나로 합친다."""
+    if value is None:
+        raise ValueError("알림을 받을 장소를 1곳 이상 골라 주세요.")
+    if not isinstance(value, list):
+        raise ValueError("장소 목록 형식이 올바르지 않습니다.")
+    places: list[AlertPlace] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("장소 형식이 올바르지 않습니다.")
+        place = AlertPlace(
+            name=_place_name(entry.get("name")),
+            latitude=_coordinate(entry.get("latitude"), "위도", LATITUDE_RANGE),
+            longitude=_coordinate(entry.get("longitude"), "경도", LONGITUDE_RANGE),
+        )
+        if all((known.latitude, known.longitude) != (place.latitude, place.longitude) for known in places):
+            places.append(place)
+    if not places:
+        raise ValueError("알림을 받을 장소를 1곳 이상 골라 주세요.")
+    if len(places) > MAX_PLACES:
+        raise ValueError("알림을 받을 장소는 3곳까지 고를 수 있습니다.")
+    return places
+
+
 def _radius(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value not in ALLOWED_RADII_METERS:
         raise ValueError("반경은 1km, 1.5km, 2km 중 하나여야 합니다.")
@@ -105,9 +130,7 @@ class AlertService:
     def create(self, payload: dict[str, Any], client_ip: str) -> dict[str, str]:
         email = normalize_email(payload.get("email"))
         query = _query(payload.get("query"))
-        place_name = _place_name(payload.get("place_name"))
-        latitude = _coordinate(payload.get("latitude"), "위도", LATITUDE_RANGE)
-        longitude = _coordinate(payload.get("longitude"), "경도", LONGITUDE_RANGE)
+        places = _places(payload.get("places"))
         radius_m = _radius(payload.get("radius_m"))
         if payload.get("consent") is not True:
             raise ValueError("개인정보 수집·이용에 동의해야 알림을 예약할 수 있습니다.")
@@ -116,9 +139,7 @@ class AlertService:
         created = self.store.create_reservation(
             email=email,
             query=query,
-            place_name=place_name,
-            latitude=latitude,
-            longitude=longitude,
+            places=places,
             radius_m=radius_m,
             ip_hash=ip_hash(self.settings.secret, client_ip),
             link_nonce=new_link_nonce(),
@@ -189,7 +210,7 @@ class AlertService:
         reservation = self._reservation(token)
         return {
             "status": reservation["status"],
-            "place_name": reservation["place_name"],
+            "places": [{"name": place["name"]} for place in reservation["places"]],
             "radius_m": int(reservation["radius_m"]),
             "query": reservation["query"],
             "expires_at": parse_timestamp(reservation["expires_at"]).astimezone(KOREA_TIMEZONE).isoformat(),

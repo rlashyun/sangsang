@@ -16,6 +16,8 @@ declare
     v_message bigint;
     v_payload jsonb;
     v_item_inside bigint;
+    v_item_outside bigint;
+    v_multi bigint;
     v_claimed integer;
 begin
     select code into v_location_source from public.location_sources order by code limit 1;
@@ -36,7 +38,7 @@ begin
     returning id into v_outside;
 
     v_created := public.create_alert_reservation(
-        'verify@example.com', '에어팟', '서울역', 37.5547, 126.9707, 1000,
+        'verify@example.com', '에어팟', '[{"place_name": "서울역", "latitude": 37.5547, "longitude": 126.9707}]'::jsonb, 1000,
         'verify-ip', 'verify-nonce', now() + interval '7 days'
     );
     if v_created ->> 'status' <> 'created' then
@@ -119,14 +121,68 @@ begin
     where reservation_id = v_reservation and kind = 'match';
     v_payload := public.alert_message_payload(v_message);
     if jsonb_array_length(v_payload -> 'items') <> 1
-       or v_payload -> 'reservation' ->> 'email' <> 'verify@example.com' then
+       or v_payload -> 'reservation' ->> 'email' <> 'verify@example.com'
+       or v_payload -> 'reservation' -> 'places' <> '[{"name": "서울역"}]'::jsonb then
         raise exception '메일 내용 조회 실패: %', v_payload;
+    end if;
+
+    -- 설계 16장 — 여러 장소: 장소들 각각의 반경 안 기관을 합치고, 물품마다 가장 가까운 장소를 붙인다.
+    select id into v_item_outside from public.found_items where atc_id = 'verify-2';
+    v_created := public.create_alert_reservation(
+        'multi@example.com', '에어팟',
+        '[{"place_name": "서울역", "latitude": 37.5547, "longitude": 126.9707},
+          {"place_name": "검증 북쪽", "latitude": 37.5727, "longitude": 126.9707}]'::jsonb,
+        1000, null, 'verify-nonce-multi', now() + interval '7 days'
+    );
+    v_multi := (v_created ->> 'reservation_id')::bigint;
+    perform public.confirm_alert_reservation(v_multi);
+    update public.alert_match_cursors set checked_until = now() - interval '1 minute' where reservation_id = v_multi;
+    v_payload := public.alert_candidate_items(v_multi, 'partner_api');
+    if (select array_agg((entry ->> 'id')::bigint order by (entry ->> 'id')::bigint)
+        from jsonb_array_elements(v_payload -> 'items') as entry)
+       is distinct from array[least(v_item_inside, v_item_outside), greatest(v_item_inside, v_item_outside)] then
+        raise exception '여러 장소의 반경을 합치지 못했습니다: %', v_payload;
+    end if;
+    perform public.record_alert_match(
+        v_multi, 'partner_api', now(),
+        jsonb_build_array(
+            jsonb_build_object('found_item_id', v_item_inside, 'score', 1.0),
+            jsonb_build_object('found_item_id', v_item_outside, 'score', 0.5)
+        )
+    );
+    select id into v_message
+    from public.alert_messages
+    where reservation_id = v_multi and kind = 'match';
+    v_payload := public.alert_message_payload(v_message);
+    if v_payload -> 'reservation' -> 'places' <> '[{"name": "서울역"}, {"name": "검증 북쪽"}]'::jsonb
+       or v_payload -> 'items' -> 0 ->> 'near_place_name' <> '서울역'
+       or v_payload -> 'items' -> 1 ->> 'near_place_name' <> '검증 북쪽' then
+        raise exception '여러 장소 메일 내용이 틀렸습니다: %', v_payload;
+    end if;
+    begin
+        perform public.create_alert_reservation(
+            'four@example.com', '에어팟',
+            '[{"place_name": "가", "latitude": 37.55, "longitude": 126.97},
+              {"place_name": "나", "latitude": 37.56, "longitude": 126.97},
+              {"place_name": "다", "latitude": 37.57, "longitude": 126.97},
+              {"place_name": "라", "latitude": 37.58, "longitude": 126.97}]'::jsonb,
+            1000, null, 'verify-nonce-four', now() + interval '7 days'
+        );
+        raise exception '장소 4곳이 저장됐습니다';
+    exception when raise_exception then
+        if sqlerrm = '장소 4곳이 저장됐습니다' then
+            raise;
+        end if;
+    end;
+    perform public.cancel_alert_reservation(v_multi);
+    if (select count(*) from public.alert_reservation_places where reservation_id = v_multi) <> 2 then
+        raise exception '취소한 예약의 장소(통계용)가 지워졌습니다';
     end if;
 
     -- PRD 4.3-E — 종료 안내는 마지막 날 실행(만료 24시간 안)에서만, 만료일마다 한 번.
     -- 그날 기다리는 알림 메일은 종료 안내로 바뀌어 한 통이 되고, 그 뒤에는 비교하지 않는다.
     v_created := public.create_alert_reservation(
-        'expiring@example.com', '지갑', '서울역', 37.5547, 126.9707, 1000,
+        'expiring@example.com', '지갑', '[{"place_name": "서울역", "latitude": 37.5547, "longitude": 126.9707}]'::jsonb, 1000,
         null, 'verify-nonce-2', now() + interval '37 hours'
     );
     v_expiring := (v_created ->> 'reservation_id')::bigint;
@@ -172,12 +228,12 @@ begin
     end if;
     for v_claimed in 1..4 loop
         perform public.create_alert_reservation(
-            'verify' || v_claimed || '@example.com', '에어팟', '서울역', 37.5547, 126.9707, 1000,
+            'verify' || v_claimed || '@example.com', '에어팟', '[{"place_name": "서울역", "latitude": 37.5547, "longitude": 126.9707}]'::jsonb, 1000,
             'verify-ip', 'verify-nonce-ip-' || v_claimed, now() + interval '7 days'
         );
     end loop;
     v_created := public.create_alert_reservation(
-        'verify6@example.com', '에어팟', '서울역', 37.5547, 126.9707, 1000,
+        'verify6@example.com', '에어팟', '[{"place_name": "서울역", "latitude": 37.5547, "longitude": 126.9707}]'::jsonb, 1000,
         'verify-ip', 'verify-nonce-ip-6', now() + interval '7 days'
     );
     if v_created ->> 'status' <> 'ip_limit' then

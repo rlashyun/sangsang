@@ -138,7 +138,7 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("2. 에어팟 2", email.text)
 
     def test_user_input_is_escaped_in_html_and_kept_out_of_the_subject(self) -> None:
-        reservation = reservation_row(query="<script>alert(1)</script>", place_name="서울역 <b>")
+        reservation = reservation_row(query="<script>alert(1)</script>", places=[{"name": "서울역 <b>"}])
 
         email = match_email("user@example.com", reservation, links_for(reservation), [item(1)])
 
@@ -146,6 +146,44 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", email.html)
         self.assertNotIn("<b>", email.html)
         self.assertNotIn("script", email.subject)
+
+
+class MultiPlaceTemplateTests(unittest.TestCase):
+    """설계 16장 — 장소 여러 곳(최대 3곳) 알림의 메일 표시."""
+
+    def test_condition_line_lists_every_place_with_one_radius(self) -> None:
+        reservation = reservation_row(places=[{"name": "서울역"}, {"name": "시청"}, {"name": "을지로입구"}])
+
+        email = confirmation_email("user@example.com", reservation, links_for(reservation))
+
+        self.assertIn("장소: 서울역 · 시청 · 을지로입구 반경 1.5km 안 모든 보관기관", email.text)
+
+    def test_each_item_names_its_nearest_place_when_there_are_several(self) -> None:
+        reservation = reservation_row(places=[{"name": "서울역"}, {"name": "시청"}])
+        near_city_hall = dict(item(1), near_place_name="시청")
+
+        email = match_email("user@example.com", reservation, links_for(reservation), [near_city_hall])
+
+        self.assertIn("1. 에어팟 1 (무선이어폰, 흰색) · 시청 근처 · 11월 6일 등록 · 보관: 서울역 유실물센터", email.text)
+
+    def test_one_place_does_not_repeat_the_place_on_every_item(self) -> None:
+        reservation = reservation_row()
+
+        email = match_email(
+            "user@example.com", reservation, links_for(reservation), [dict(item(1), near_place_name="서울역")]
+        )
+
+        self.assertNotIn("근처", email.text)
+
+    def test_still_five_items_in_total_however_many_places(self) -> None:
+        reservation = reservation_row(places=[{"name": "서울역"}, {"name": "시청"}, {"name": "을지로입구"}])
+        items = [dict(item(index), near_place_name="서울역") for index in range(1, 8)]
+
+        email = match_email("user@example.com", reservation, links_for(reservation), items)
+
+        self.assertIn("5. 에어팟 5", email.text)
+        self.assertNotIn("6. 에어팟 6", email.text)
+        self.assertIn("그 밖에 2개", email.text)
 
 
 if __name__ == "__main__":

@@ -11,14 +11,17 @@ from retriever_lost_found.alerts.reservations import AlertService
 from retriever_lost_found.alerts.sender import TemporarySendError
 
 
+SEOUL_STATION = {"name": "서울역", "latitude": 37.5547, "longitude": 126.9707}
+CITY_HALL = {"name": "시청", "latitude": 37.5658, "longitude": 126.9772}
+EULJIRO = {"name": "을지로입구", "latitude": 37.5660, "longitude": 126.9826}
+
+
 def request_payload(**overrides):
     payload = {
         "email": "User@Example.com",
         "query": "에어팟",
-        "latitude": 37.5547,
-        "longitude": 126.9707,
+        "places": [SEOUL_STATION],
         "radius_m": 1500,
-        "place_name": "서울역",
         "consent": True,
     }
     payload.update(overrides)
@@ -85,7 +88,54 @@ class CreateReservationTests(AlertServiceTestCase):
         self.create()
 
         with self.assertRaisesRegex(ValueError, "대한민국"):
-            self.create(latitude=40.7, longitude=-74.0)
+            self.create(places=[SEOUL_STATION, {"name": "뉴욕", "latitude": 40.7, "longitude": -74.0}])
+        self.assertEqual(len(self.store.reservations), 1)
+
+    def test_up_to_three_places_are_saved_in_screen_order(self) -> None:
+        # 설계 16장 — 검색 화면처럼 장소를 최대 3곳까지 고르고 반경 하나를 함께 쓴다.
+        self.create(places=[SEOUL_STATION, CITY_HALL, EULJIRO])
+
+        places = self.only_reservation()["places"]
+        self.assertEqual([place["name"] for place in places], ["서울역", "시청", "을지로입구"])
+        self.assertEqual((places[1]["latitude"], places[1]["longitude"]), (37.5658, 126.9772))
+
+    def test_zero_or_more_than_three_places_are_refused(self) -> None:
+        fourth = {"name": "명동", "latitude": 37.5609, "longitude": 126.9862}
+        for places, message in (([], "1곳 이상"), ([SEOUL_STATION, CITY_HALL, EULJIRO, fourth], "3곳까지")):
+            with self.subTest(count=len(places)), self.assertRaisesRegex(ValueError, message):
+                self.create(places=places)
+        self.assertEqual(len(self.store.reservations), 0)
+        self.assertEqual(self.sender.sent, [])
+
+    def test_the_same_coordinates_count_once(self) -> None:
+        # 설계 16장 — 좌표가 같은 장소는 하나로 합친다(처음 나온 이름을 쓴다).
+        self.create(places=[SEOUL_STATION, dict(SEOUL_STATION, name="서울역 2번 출구"), CITY_HALL])
+
+        self.assertEqual([place["name"] for place in self.only_reservation()["places"]], ["서울역", "시청"])
+
+    def test_each_place_needs_a_name_and_numeric_coordinates(self) -> None:
+        broken = (
+            "서울역",
+            {"latitude": 37.5547, "longitude": 126.9707},
+            dict(SEOUL_STATION, name="   "),
+            dict(SEOUL_STATION, name="가" * 101),
+            dict(SEOUL_STATION, latitude="37.5547"),
+            dict(SEOUL_STATION, longitude=None),
+        )
+        for place in broken:
+            with self.subTest(place=place), self.assertRaises(ValueError):
+                self.create(places=[place])
+        for places in (None, "서울역", {"0": SEOUL_STATION}):
+            with self.subTest(places=places), self.assertRaisesRegex(ValueError, "장소"):
+                self.create(places=places)
+
+    def test_single_place_fields_are_not_accepted_any_more(self) -> None:
+        # 설계 16장 — API는 places 하나만 받는다. 옛 place_name·latitude·longitude만 보내면 장소가 없는 요청이다.
+        payload = request_payload(place_name="서울역", latitude=37.5547, longitude=126.9707)
+        del payload["places"]
+
+        with self.assertRaisesRegex(ValueError, "1곳 이상"):
+            self.service.create(payload, "203.0.113.7")
 
     def test_email_is_validated(self) -> None:
         for email in ("no-at-sign", "two@@example.com", "a b@example.com", "user@localhost", "<x>@example.com", 7):
@@ -244,6 +294,8 @@ class LinkActionTests(AlertServiceTestCase):
         summary = self.service.summary(self.token)
 
         self.assertEqual(summary["status"], "pending")
+        self.assertEqual(summary["places"], [{"name": "서울역"}])
+        self.assertNotIn("place_name", summary)
         self.assertEqual(summary["radius_m"], 1500)
         self.assertEqual(summary["extensions_left"], 3)
         self.assertEqual(summary["expires_at"], "2026-11-14T00:00:00+09:00")

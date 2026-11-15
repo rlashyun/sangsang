@@ -42,10 +42,15 @@ def radius_label(radius_m: int) -> str:
     return f"{int(radius_m) / 1000:g}km"
 
 
+def _place_names(reservation: dict[str, Any]) -> str:
+    """설계 16장 — 장소를 화면 순서대로 "서울역 · 시청"처럼 적는다. 반경은 하나를 함께 쓴다."""
+    return " · ".join(place["name"] for place in reservation["places"])
+
+
 def _condition_lines(reservation: dict[str, Any]) -> str:
     return "\n".join(
         [
-            f"장소: {reservation['place_name']} 반경 {radius_label(reservation['radius_m'])} 안 모든 보관기관",
+            f"장소: {_place_names(reservation)} 반경 {radius_label(reservation['radius_m'])} 안 모든 보관기관",
             f"검색어: {reservation['query']}",
             f"알림 기간: {alert_period(reservation)}",
         ]
@@ -63,13 +68,16 @@ def _registered_label(value: Any) -> str | None:
     return f"{registered.month}월 {registered.day}일 등록"
 
 
-def _item_line(item: dict[str, Any]) -> str:
+def _item_line(item: dict[str, Any], *, show_place: bool) -> str:
     details = ", ".join(value for value in (item.get("raw_category_name"), item.get("color_name")) if value)
     location = " ".join(
         value for value in (item.get("storage_location_name"), item.get("storage_location_phone")) if value
     )
     name = item.get("item_name") or "이름 없는 물품"
     parts = [name + (f" ({details})" if details else "")]
+    # 설계 16장 — 장소가 여러 곳이면 보관기관에서 가장 가까운 장소를 붙인다(1곳이면 조건 줄과 같은 말이다).
+    if show_place and item.get("near_place_name"):
+        parts.append(f"{item['near_place_name']} 근처")
     registered = _registered_label(item.get("registered_on"))
     if registered:
         parts.append(registered)
@@ -102,9 +110,10 @@ def confirmation_email(to: str, reservation: dict[str, Any], links: MailLinks) -
     return _render(to, CONFIRM_SUBJECT, paragraphs, [(label, url) for label, url in actions if url])
 
 
-def _item_lines(items: Sequence[dict[str, Any]]) -> str:
+def _item_lines(reservation: dict[str, Any], items: Sequence[dict[str, Any]]) -> str:
     shown = items[:MAX_ITEMS_PER_MAIL]
-    lines = [f"{index}. {_item_line(item)}" for index, item in enumerate(shown, start=1)]
+    show_place = len(reservation["places"]) > 1
+    lines = [f"{index}. {_item_line(item, show_place=show_place)}" for index, item in enumerate(shown, start=1)]
     hidden = len(items) - len(shown)
     if hidden > 0:
         lines.append(f"그 밖에 {hidden}개가 더 있습니다. 리트리버에서 같은 조건으로 검색해 확인해 주세요.")
@@ -117,7 +126,7 @@ def match_email(
     links: MailLinks,
     items: list[dict[str, Any]],
 ) -> OutgoingEmail:
-    paragraphs = [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _condition_lines(reservation), _item_lines(items)]
+    paragraphs = [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _condition_lines(reservation), _item_lines(reservation, items)]
     actions = [("리트리버에서 보기", links.home)]
     if links.extend:
         actions.append((f"알림 1주 연장 (남은 연장 {_extensions_left(reservation)}회)", links.extend))
@@ -147,7 +156,7 @@ def expiry_notice_email(
         )
     paragraphs = [closing]
     if items:
-        paragraphs += [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _item_lines(items)]
+        paragraphs += [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _item_lines(reservation, items)]
     paragraphs.append(_condition_lines(reservation))
     actions: list[tuple[str, str]] = []
     if links.extend:

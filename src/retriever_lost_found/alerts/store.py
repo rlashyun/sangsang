@@ -4,12 +4,31 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from ..config import read_env_value, read_optional_env_value
 
-RESERVATION_FIELDS = "id,email,query,place_name,radius_m,status,link_nonce,created_at,expires_at,extension_count"
+# 설계 16장 — 장소는 alert_reservation_places에서 화면 순서(position)대로 함께 읽는다.
+RESERVATION_FIELDS = (
+    "id,email,query,radius_m,status,link_nonce,created_at,expires_at,extension_count,"
+    "places:alert_reservation_places(name:place_name,position)"
+)
+
+
+@dataclass(frozen=True)
+class AlertPlace:
+    """알림 기준 장소 한 곳(설계 16장). 화면 Place의 name·latitude·longitude다."""
+
+    name: str
+    latitude: float
+    longitude: float
+
+
+def _ordered_place_names(places: Any) -> list[dict[str, str]]:
+    rows = sorted(places or [], key=lambda place: place.get("position") or 0)
+    return [{"name": str(place["name"])} for place in rows]
 
 
 class AlertStore(Protocol):
@@ -22,9 +41,7 @@ class AlertStore(Protocol):
         *,
         email: str,
         query: str,
-        place_name: str,
-        latitude: float,
-        longitude: float,
+        places: list[AlertPlace],
         radius_m: int,
         ip_hash: str | None,
         link_nonce: str,
@@ -140,9 +157,7 @@ class SupabaseAlertStore:
         *,
         email: str,
         query: str,
-        place_name: str,
-        latitude: float,
-        longitude: float,
+        places: list[AlertPlace],
         radius_m: int,
         ip_hash: str | None,
         link_nonce: str,
@@ -154,9 +169,10 @@ class SupabaseAlertStore:
                 {
                     "p_email": email,
                     "p_query": query,
-                    "p_place_name": place_name,
-                    "p_latitude": latitude,
-                    "p_longitude": longitude,
+                    "p_places": [
+                        {"place_name": place.name, "latitude": place.latitude, "longitude": place.longitude}
+                        for place in places
+                    ],
                     "p_radius_m": radius_m,
                     "p_ip_hash": ip_hash,
                     "p_link_nonce": link_nonce,
@@ -181,7 +197,9 @@ class SupabaseAlertStore:
         )
         if not isinstance(rows, list):
             raise RuntimeError("Supabase 알림 API 응답 형식이 올바르지 않습니다.")
-        return rows[0] if rows else None
+        if not rows:
+            return None
+        return {**rows[0], "places": _ordered_place_names(rows[0].get("places"))}
 
     def confirm_reservation(self, reservation_id: int) -> str:
         return str(self._rpc("confirm_alert_reservation", {"p_reservation_id": int(reservation_id)}))

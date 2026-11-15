@@ -43,6 +43,26 @@ class MatchPassTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded")
         self.assertEqual(self.queued_item_ids(), [10])
 
+    def test_several_places_cover_every_radius_and_count_an_item_once(self) -> None:
+        # 설계 16장 — 장소들 각각의 반경 안 기관의 합집합. 두 반경에 걸친 기관의 물품도 한 번만 알린다.
+        store = FakeAlertStore(NOW)
+        store.add_location(1, 37.5547 + 0.0089, 126.9707)  # 서울역 1km 안
+        store.add_location(2, 37.5658 + 0.0045, 126.9772)  # 시청 북쪽 약 500m — 서울역 1km 밖
+        store.add_location(3, 37.5603, 126.9740)  # 두 장소 사이 — 둘 다 1km 안
+        store.add_location(4, 37.5547 - 0.0180, 126.9707)  # 서울역 남쪽 약 2km — 둘 다 밖
+        reservation_id = store.add_active_reservation(
+            radius_m=1000,
+            places=[("서울역", 37.5547, 126.9707), ("시청", 37.5658, 126.9772)],
+        )
+        store.advance(hours=18)
+        for item_id, location_id in ((10, 1), (11, 2), (12, 3), (13, 4)):
+            store.add_found_item(item_id, storage_location_id=location_id)
+
+        run_match_pass(store, keyword_judge, item_source_code="partner_api", deadline=100.0, clock=FakeMonotonic())
+
+        self.assertEqual(sorted(item_id for (_, item_id) in store.notified), [10, 11, 12])
+        self.assertEqual(len([m for m in store.messages.values() if m["reservation_id"] == reservation_id]), 1)
+
     def test_only_items_first_seen_after_the_reservation_count(self) -> None:
         self.store.add_found_item(10, storage_location_id=1, first_seen_at=NOW - timedelta(minutes=5))
         self.store.add_found_item(11, storage_location_id=1)
