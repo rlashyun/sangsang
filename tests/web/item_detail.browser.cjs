@@ -11,7 +11,13 @@ async (page) => {
   let itemRequests = 0;
   let lastItemQuery = null;
   let placeRequests = 0;
+  const alertRequests = [];
+  let releaseAlertResponse;
+  let markAlertPending;
+  const alertPending = new Promise(resolve => { markAlertPending = resolve; });
   const photoRequests = new Set();
+  let releaseFirstPhoto;
+  const firstPhotoHeld = new Promise(resolve => { releaseFirstPhoto = resolve; });
   let releaseResponse;
   let onSlowRequest;
   let releaseInstitutionCounts;
@@ -76,6 +82,7 @@ async (page) => {
       if (url.pathname === "/broken.png") return route.abort();
       check(url.pathname === "/photo.svg", "기본 그림은 요청하지 않아야 한다");
       photoRequests.add(url.searchParams.get("item"));
+      if (url.searchParams.get("item") === "1") await firstPhotoHeld;
       const portrait = url.searchParams.get("item") === "1";
       const width = portrait ? 160 : 1800;
       const height = portrait ? 1200 : 240;
@@ -87,6 +94,16 @@ async (page) => {
       contentType: "application/javascript",
       body: "",
     });
+    if (url.pathname === "/api/alerts") {
+      check(route.request().method() === "POST", "알림 신청은 POST로 전송해야 한다");
+      alertRequests.push(route.request().postDataJSON());
+      if (alertRequests.length === 1) return route.fulfill({ status: 502, json: { error: "확인 메일 발송에 실패했습니다." } });
+      await new Promise(resolve => {
+        releaseAlertResponse = resolve;
+        markAlertPending();
+      });
+      return route.fulfill({ status: 202, json: { status: "pending" } });
+    }
     if (url.pathname === "/api/institutions") {
       const withCounts = url.searchParams.get("with_counts") !== "false";
       if (withCounts && !releaseInstitutionCounts) await new Promise(resolve => {
@@ -240,7 +257,14 @@ async (page) => {
   await alertDialog.waitFor({ state: "detached" });
   const firstThumbnail = itemRows.first().getByRole("img", { name: "검정 지갑 1 사진" });
   await firstThumbnail.waitFor();
+  const firstPhotoSlot = itemRows.first().locator(".item-thumbnail-visual");
+  check(await firstPhotoSlot.getAttribute("aria-busy") === "true" &&
+    await firstPhotoSlot.locator("span[aria-hidden]").count() === 0, "사진이 로딩 중일 때는 물품 아이콘 대신 로딩 아이콘을 표시해야 한다");
+  check(await itemRows.nth(1).locator('.item-thumbnail-visual[aria-busy="true"]').count() === 0,
+    "등록된 사진이 없으면 로딩 아이콘을 표시하지 않아야 한다");
+  releaseFirstPhoto();
   await page.waitForFunction(() => document.querySelector(".item-thumbnail img")?.naturalWidth > 0);
+  await itemRows.first().locator(".item-thumbnail-visual[aria-busy=false] img.is-loaded").waitFor();
   check(await firstThumbnail.getAttribute("loading") === "lazy", "목록 사진은 지연 로딩해야 한다");
   check(!photoRequests.has("50"), "화면에서 멀리 떨어진 사진을 미리 받으면 안 된다");
   check(await itemRows.nth(1).locator("img").count() === 0, "목록의 기본 그림도 사진으로 표시하면 안 된다");
@@ -329,22 +353,36 @@ async (page) => {
   check(await emailInput.evaluate(el => !el.validity.valid), "잘못된 이메일은 제출을 막아야 한다");
   await emailInput.fill("preview@example.com");
   const requiredConsent = alertDialog.getByRole("checkbox", { name: /필수.*개인정보/ });
-  const optionalConsent = alertDialog.getByRole("checkbox", { name: /선택.*검색 품질/ });
-  check(!await requiredConsent.isChecked() && !await optionalConsent.isChecked(), "동의는 기본 해제 상태여야 한다");
+  check(!await requiredConsent.isChecked() && await alertDialog.getByRole("checkbox").count() === 1,
+    "기본 해제된 필수 동의만 표시해야 한다");
   await alertDialog.getByRole("button", { name: "이 조건으로 알림 받기" }).click();
-  check(await requiredConsent.evaluate(input => input.validity.valueMissing), "필수 동의 없이는 알림 신청을 막아야 한다");
+  check(await requiredConsent.evaluate(input => input.validity.valueMissing) && alertRequests.length === 0,
+    "필수 동의 없이는 알림 신청을 막아야 한다");
   const consentView = alertDialog.getByRole("button", { name: "알림 개인정보 수집·이용 전문 보기" });
   const consentPopup = page.getByRole("dialog", { name: "알림을 위한 개인정보 수집·이용", exact: true });
   const alertHeight = await alertDialog.evaluate(dialog => dialog.scrollHeight);
   await consentView.click();
-  await consentPopup.getByText("이메일 주소, 알림에 포함한 장소 정보(좌표 포함), 탐색 반경, 물품 검색어", { exact: true }).waitFor();
+  await consentPopup.getByText(/이메일과 연결되지 않은 상태로 남겨 서비스 이용 통계/).waitFor();
   check(await page.locator(".new-item-alert").evaluate(dialog => dialog.scrollHeight) === alertHeight, "전문 팝업은 신청 창의 높이를 바꾸면 안 된다");
   await page.keyboard.press("Escape");
   await consentPopup.waitFor({ state: "hidden" });
   check(await alertDialog.isVisible(), "전문 팝업을 닫아도 알림 신청 창을 유지해야 한다");
   await requiredConsent.check();
   await alertDialog.getByRole("button", { name: "이 조건으로 알림 받기" }).click();
-  await alertDialog.getByRole("status").getByText(/저장되지 않았고/).waitFor();
+  await alertDialog.getByRole("alert").getByText("확인 메일 발송에 실패했습니다.").waitFor();
+  const [reservation] = alertRequests;
+  check(reservation.email === "preview@example.com" && reservation.query === "검정 지갑" &&
+    reservation.radius_m === 2000 && reservation.consent === true && JSON.stringify(reservation.places) ===
+    JSON.stringify([{ name: "서울역", latitude: 37.55, longitude: 126.97 }]),
+  "알림 API에 현재 장소와 좌표, 반경, 제출 검색어, 필수 동의를 전달해야 한다");
+  await alertDialog.getByRole("button", { name: "이 조건으로 알림 받기" }).click();
+  const pendingSubmit = alertDialog.getByRole("button", { name: "확인 메일 보내는 중…" });
+  await pendingSubmit.waitFor();
+  check(await pendingSubmit.isDisabled(), "알림 요청을 기다리는 동안 중복 제출을 막아야 한다");
+  await alertPending;
+  releaseAlertResponse();
+  await alertDialog.getByRole("heading", { name: "확인 메일을 보냈어요" }).waitFor();
+  await alertDialog.getByText(/스팸함이나 광고함/).waitFor();
   await page.screenshot({ path: "/private/tmp/retriever-alert-desktop.png" });
   await page.setViewportSize({ width: 390, height: 844 });
   check(await alertDialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1), "작은 화면에서도 알림 창이 가로로 넘치면 안 된다");
@@ -354,7 +392,7 @@ async (page) => {
   check(await alertTrigger.evaluate(el => document.activeElement === el), "알림을 닫으면 진입 버튼으로 포커스를 복원해야 한다");
   check(await search.inputValue() === "입력 중인 다른 물건", "알림을 닫아도 입력 중이던 검색어를 보존해야 한다");
   check(await page.locator('.item-pagination button[aria-current="page"]').innerText() === pageBeforeAlert, "알림 종료 시 기존 물품 페이지를 보존해야 한다");
-  check(itemRequests === requestsBeforeAlert, "알림 열기와 미리보기 제출은 물품 재검색을 일으키지 않아야 한다");
+  check(itemRequests === requestsBeforeAlert, "알림 열기와 제출은 물품 재검색을 일으키지 않아야 한다");
   check(await page.locator(".selection-radius strong").innerText() === "1.5km", "알림 반경 변경은 검색 화면의 반경을 바꾸면 안 된다");
   await page.setViewportSize({ width: 1440, height: 1000 });
   await alertTrigger.click();
@@ -613,6 +651,47 @@ async (page) => {
   await page.getByRole("button", { name: "추가 장소 제거", exact: true }).click();
   await page.getByRole("heading", { name: "서울역 주변 습득물" }).waitFor();
   check(await search.inputValue() === "검정 지갑", "장소 제거 후에도 마지막 검색어를 유지해야 한다");
+  const guideLink = page.locator('.app-guide-link[aria-haspopup="dialog"]');
+  const requestsBeforeGuide = itemRequests;
+  await guideLink.click();
+  const guide = page.getByRole("dialog", { name: "리트리버 이용안내", exact: true });
+  await guide.waitFor();
+  check(await guideLink.getAttribute("aria-expanded") === "true" && await page.locator(".app-shell").isVisible(),
+    "검색 화면을 배경에 두고 이용안내 창을 열어야 한다");
+  await page.keyboard.press("Escape");
+  await guide.waitFor({ state: "hidden" });
+  await guideLink.evaluate(link => {
+    if (document.activeElement !== link) throw new Error("이용안내를 닫으면 메뉴로 초점을 돌려야 한다");
+  });
+  await guideLink.click();
+  await guide.waitFor();
+  check(await page.locator(".usage-guide-categories li").count() === 6, "MVP 물품군 6개를 안내해야 한다");
+  const survey = page.getByRole("link", { name: "설문조사 참여하기" });
+  const feedback = page.locator(".app-header-actions a[target='_blank']");
+  const searchFromGuide = page.getByRole("link", { name: "물건 찾으러 가기" });
+  check(await searchFromGuide.evaluate(link => {
+    const searchCard = link.closest(".usage-guide-action");
+    return searchCard?.parentElement?.previousElementSibling?.classList.contains("usage-guide-categories") &&
+      searchCard.nextElementSibling?.getAttribute("aria-labelledby") === "usage-survey-title";
+  }),
+  "검색 버튼은 지원 물품 안내와 설문 참여 사이에 표시해야 한다");
+  check(await page.locator(".usage-guide-note").evaluateAll(notes => {
+    const [findNote, alertNote] = notes.map(note => note.getBoundingClientRect());
+    return findNote.top === alertNote.top && findNote.height === alertNote.height;
+  }), "데스크톱에서는 두 안내 박스의 위치와 높이를 맞춰야 한다");
+  check(await survey.getAttribute("href") === await feedback.getAttribute("href") &&
+    await survey.getAttribute("target") === "_blank", "설문 버튼은 기존 의견 보내기 설문을 새 탭으로 열어야 한다");
+  await page.setViewportSize({ width: 320, height: 680 });
+  await survey.scrollIntoViewIfNeeded();
+  check(await survey.isVisible() && await page.locator(".usage-guide-content").evaluate(guide =>
+    guide.scrollWidth === guide.clientWidth), "좁은 화면에서 가로 넘침 없이 설문에 접근할 수 있어야 한다");
+  await searchFromGuide.click();
+  await page.getByRole("heading", { name: "서울역 주변 습득물" }).waitFor();
+  check(await search.inputValue() === "검정 지갑" && itemRequests === requestsBeforeGuide,
+    "이용안내에서 돌아와도 검색어와 결과를 유지해야 한다");
+  await page.goBack();
+  await page.getByRole("heading", { name: "리트리버 이용안내", exact: true }).waitFor();
+  await page.setViewportSize({ width: 1440, height: 760 });
   await page.goto("http://127.0.0.1:5178/");
   // PRD 4.5 — 기관이 발견된 단계에서 멈추고, 최대 반경까지 비어 있으면 물품 API를 호출하지 않는다.
   async function confirmPlaceWithInstitutionsFrom(minimumId) {
