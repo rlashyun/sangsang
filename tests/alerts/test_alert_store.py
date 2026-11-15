@@ -25,7 +25,7 @@ class FakeResponse:
         return self.body
 
 
-URLOPEN = "retriever_lost_found.alerts.store.urllib.request.urlopen"
+URLOPEN = "retriever_lost_found.integrations.supabase_rest.urllib.request.urlopen"
 
 
 class SupabaseAlertStoreTests(unittest.TestCase):

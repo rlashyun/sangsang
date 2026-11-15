@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from ..config import read_env_value, read_optional_env_value
+from ..integrations.supabase_rest import SupabaseRestClient
 
 # 설계 16장 — 장소는 alert_reservation_places에서 화면 순서(position)대로 함께 읽는다.
 RESERVATION_FIELDS = (
@@ -89,8 +86,10 @@ class AlertStore(Protocol):
     def finish_run(self, run_id: int, values: dict[str, Any]) -> None: ...
 
 
-class SupabaseAlertStore:
-    """서버 전용 secret key로 알림 테이블·DB 함수를 부른다(절대 규칙 4·6)."""
+class SupabaseAlertStore(SupabaseRestClient):
+    """서버 전용 secret key로 알림 테이블·DB 함수를 부른다(절대 규칙 4·6). 요청 코드는 수집 저장소와 같이 쓴다."""
+
+    error_label = "Supabase 알림 API"
 
     def __init__(self, url: str, secret_key: str, *, timeout: float = 20.0) -> None:
         self.url = url.rstrip("/")
@@ -107,47 +106,6 @@ class SupabaseAlertStore:
         if not secret_key:
             raise ValueError("SUPABASE_SECRET_KEY 또는 SUPABASE_SERVICE_ROLE_KEY가 설정되지 않았습니다.")
         return cls(read_env_value("SUPABASE_URL"), secret_key)
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        query: dict[str, str] | None = None,
-        payload: Any = None,
-        prefer: str | None = None,
-    ) -> Any:
-        url = f"{self.url}/rest/v1/{path}"
-        if query:
-            url += "?" + urllib.parse.urlencode(query)
-        body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "apikey": self.secret_key,
-            "Authorization": f"Bearer {self.secret_key}",
-            "Accept": "application/json",
-            "User-Agent": "RetrieverLostFound/0.1",
-        }
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        if prefer:
-            headers["Prefer"] = prefer
-        request = urllib.request.Request(url, data=body, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")[:240]
-            detail = detail.replace(self.secret_key, "[REDACTED]")
-            raise RuntimeError(f"Supabase 알림 API HTTP {error.code}: {detail}") from None
-        except (urllib.error.URLError, TimeoutError) as error:
-            reason = getattr(error, "reason", error)
-            raise RuntimeError(f"Supabase 알림 API 연결 실패: {reason}") from None
-        if not raw:
-            return None
-        try:
-            return json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
-            raise RuntimeError("Supabase 알림 API 응답이 올바른 JSON이 아닙니다.") from None
 
     def _rpc(self, name: str, args: dict[str, Any]) -> Any:
         return self._request("POST", f"rpc/{name}", payload=args)

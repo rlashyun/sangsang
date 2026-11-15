@@ -5,12 +5,12 @@ import hmac
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
+from ..ingestion.collector import KOREA_TIMEZONE
 from .settings import AlertSettings
 
-KOREA_TIMEZONE = timezone(timedelta(hours=9))
 # PRD 4.3-E — 등록일을 D일로 할 때 D+1부터 D+7까지 한국시간 달력상 7일 알린다.
 RESERVATION_DAYS = 7
 EXTENSION_DAYS = 7  # 설계 2장 — 연장 한 번에 +7일
