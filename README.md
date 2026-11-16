@@ -138,7 +138,7 @@ Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이�
 프런트를 빌드한 뒤 `uv run kakao-map --agent-search`로 실행하면 첫 화면의 검색 패널과 `/api/search-chat`이 대화형 검색에 연결된다.
 OpenRouter의 GPT-6 Luna로 대화를 처리하고 카카오 장소 조회 및 설정한 Supabase의 기관·물품 검색을 호출한다.
 로컬 검증에는 테스트 Supabase를 사용한다. Vite 개발 중에는 `/?search=chat`으로 열면 백엔드의 대화형 검색 API를 사용한다.
-사용 흐름과 API 예시는 [대화형 검색 에이전트](docs/agent-search.md)를 참고한다. Vercel 진입점은 기존 검색 화면을 제공한다.
+사용 흐름과 API 예시는 [대화형 검색 에이전트](docs/agent-search.md)를 참고한다. Vercel 진입점은 기본으로 대화형 검색을 켠다. Vercel 환경 변수 `AGENT_SEARCH=0`을 넣으면 기존 검색 화면으로 돌아간다.
 
 ### 검색 초안: 키워드 후보 + 의미 재정렬
 
