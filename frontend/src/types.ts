@@ -76,3 +76,52 @@ export interface SelectionSummary {
   description: string;
   institution?: boolean;
 }
+
+export interface AgentPlace {
+  candidate_id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface AgentItem extends FoundItem {
+  item_id: number;
+  institution_id: number;
+}
+
+export interface AgentMatches {
+  items: AgentItem[];
+  total_count: number;
+  next_cursor: string | null;
+}
+
+export interface AgentResponse {
+  session_id: string;
+  run_id: string;
+  revision: number;
+  status: string;
+  message: string;
+  conditions: {
+    place: AgentPlace | null;
+    item_query: string | null;
+    radius_m: number | null;
+    institution_ids: number[];
+  };
+  place_candidates: AgentPlace[];
+  search_attempts: { query: string }[];
+  recommended_item_ids: number[];
+  matches: AgentMatches | null;
+  error: { message: string } | null;
+}
+
+export type AgentTurn =
+  | { type: "message"; text: string }
+  | { type: "select_place"; candidate_id: string }
+  | { type: "change_radius"; radius_m: number };
+
+export type AgentEvent =
+  | { type: "run.started"; session_id: string; run_id: string }
+  | { type: "scope.updated"; radius_m: number; previous_radius_m?: number; institution_ids: number[] }
+  | { type: "tool.started"; tool: string; attempt?: number }
+  | { type: "run.finished"; response: AgentResponse };

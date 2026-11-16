@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
@@ -36,6 +36,7 @@ def create_app(
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
     embedding_client: BgeM3Client | None = None,
+    agent_router: APIRouter | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
     sdk_url = kakao_sdk_url(javascript_key)
@@ -55,6 +56,8 @@ def create_app(
         openapi_url=None,
     )
     app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
+    if agent_router is not None:
+        app.include_router(agent_router)
 
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
@@ -84,6 +87,8 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
         html = (static_dir / "index.html").read_text(encoding="utf-8")
+        if agent_router is not None:
+            html = html.replace('<div id="root">', '<div id="root" data-agent-search="enabled">', 1)
         return HTMLResponse(html.replace("__KAKAO_SDK_URL__", sdk_url))
 
     def make_asset_response(asset_name: str, asset_media_type: str):
@@ -188,31 +193,11 @@ def create_app(
                     ),
                 }
             )
-        offset = 0
-        if cursor.strip():
-            if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
-                raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
-            offset = int(cursor.strip().split(":")[1])
-        # PRD 4.1 · 4.5 — 키워드와 의미 검색을 같은 기관 범위에서 병렬 실행한다.
         try:
-            matched_items, candidate_count, semantic_status = search_with_deadline(
-                found_item_client, search_query, validated_ids, embedding_client, offset=offset,
-            )
+            page = ranked_item_page(found_item_client, search_query, validated_ids, embedding_client, cursor)
         except SearchDeadlineExceeded as error:
             return JSONResponse(status_code=504, content={"error": str(error)})
-        match_count = len(matched_items)
-        page_items = matched_items[offset:offset+FOUND_ITEM_PAGE_LIMIT]
-        return JSONResponse(
-            content={
-                "items": page_items,
-                "candidate_count": candidate_count,
-                "semantic_status": semantic_status,
-                "match_count": match_count,
-                "total_count": match_count,
-                "query": search_query,
-                "next_cursor": f"search:{offset+FOUND_ITEM_PAGE_LIMIT}" if offset+FOUND_ITEM_PAGE_LIMIT<match_count else None,
-            }
-        )
+        return JSONResponse(content=page)
 
     @app.get("/api/places")
     def places(query: str = "", x: str = "", y: str = "") -> dict[str, Any]:
@@ -223,7 +208,36 @@ def create_app(
     return app
 
 
-def create_runtime_app() -> FastAPI:
+def ranked_item_page(
+    found_item_client: SupabaseFoundItemClient,
+    query: str,
+    location_ids: list[int],
+    embedding_client: BgeM3Client | None,
+    cursor: str = "",
+) -> dict[str, Any]:
+    offset = 0
+    if cursor.strip():
+        if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
+            raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
+        offset = int(cursor.strip().split(":")[1])
+    # PRD 4.1 · 4.5 — Both entry points use the same scoped search and paging.
+    matched_items, candidate_count, semantic_status = search_with_deadline(
+        found_item_client, query, location_ids, embedding_client, offset=offset,
+    )
+    match_count = len(matched_items)
+    next_offset = offset + FOUND_ITEM_PAGE_LIMIT
+    return {
+        "items": matched_items[offset:next_offset],
+        "candidate_count": candidate_count,
+        "semantic_status": semantic_status,
+        "match_count": match_count,
+        "total_count": match_count,
+        "query": query,
+        "next_cursor": f"search:{next_offset}" if next_offset < match_count else None,
+    }
+
+
+def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     """필수 환경 변수와 Supabase DB를 사용해 실제 실행 앱을 구성합니다."""
     rest_api_key = read_env_value("KAKAO_REST_API_KEY")
     javascript_key = read_env_value("KAKAO_JAVASCRIPT_KEY")
@@ -239,12 +253,31 @@ def create_runtime_app() -> FastAPI:
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
     embedding_key = read_optional_env_value("OPENROUTER_API_KEY")
+    embedding_client = BgeM3Client(embedding_key) if embedding_key else None
+    kakao_client = KakaoLocalClient(rest_api_key)
+    agent_router = None
+    if agent_search:
+        from .agent_adapters import adapt_institutions, adapt_places, adapt_search_page
+        from .agent_api import create_agent_router
+
+        def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None):
+            ids = validate_location_ids(",".join(map(str, location_ids)))
+            page = ranked_item_page(found_item_client, query, ids, embedding_client, cursor or "")
+            return adapt_search_page(page)
+
+        agent_router = create_agent_router(
+            openrouter_api_key=embedding_key,
+            find_places=lambda query: adapt_places(kakao_client, query),
+            get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),
+            search_items=search_items,
+        )
     app = create_app(
-        KakaoLocalClient(rest_api_key),
+        kakao_client,
         javascript_key,
         map_location_client=map_location_client,
         found_item_client=found_item_client,
-        embedding_client=BgeM3Client(embedding_key) if embedding_key else None,
+        embedding_client=embedding_client,
+        agent_router=agent_router,
     )
     app.state.location_source = "supabase"
     app.state.item_counts_available = True
@@ -306,9 +339,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="카카오맵 검색 및 좌표 변환 데모")
     parser.add_argument("--host", default="127.0.0.1", help="서버 주소")
     parser.add_argument("--port", type=int, default=8000, help="서버 포트")
+    parser.add_argument("--agent-search", action="store_true", help="로컬 대화형 검색 API 활성화")
     args = parser.parse_args()
 
-    app = create_runtime_app()
+    app = create_runtime_app(agent_search=args.agent_search)
     print(f"카카오맵 데모: http://{args.host}:{args.port}")
     print("기관 좌표 및 물품 수: Supabase 연결됨 (응답 CDN 5분 캐시)")
     print("종료하려면 Ctrl+C를 누르세요.")
