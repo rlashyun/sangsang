@@ -3,14 +3,17 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
 import { nextSearchRadiusMeters, previousSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
+import { feedbackFormUrl } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
 import { applyPreviewTheme } from "../lib/theme";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
+import { FeedbackIcon } from "./FeedbackIcon";
 import { FoundItemDetail } from "./FoundItemDetail";
 import { KakaoMap } from "./KakaoMap";
 import { NewItemAlert } from "./NewItemAlert";
+import { UsageGuide } from "./UsageGuide";
 
 const ITEM_PAGE_SIZE = AGENT_ITEM_PAGE_SIZE;
 const PLACE_PAGE_SIZE = 5;
@@ -53,8 +56,9 @@ export function AgentSearchApp() {
   const [institutionError, setInstitutionError] = useState("");
   const [selectedInstitution, setSelectedInstitution] = useState<Institution[]>([]);
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
-  const [resultsSeen, setResultsSeen] = useState(false);
   const [mapInset, setMapInset] = useState(0);
+  const [guideOpen, setGuideOpen] = useState(false);
+  const feedbackUrl = useMemo(() => feedbackFormUrl(), []);
   const controller = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const feed = useRef<HTMLDivElement>(null);
@@ -104,6 +108,11 @@ export function AgentSearchApp() {
     }
   }, [pagePlaces]);
   const showFullScope = useCallback(() => setSelectedInstitution([]), []);
+  // 검색 중에는 새 지점을 받지 않는다(submit도 진행 중이면 무시한다).
+  const onMapPointSelect = useCallback((point: { latitude: number; longitude: number }) => {
+    if (controller.current) return;
+    void submit({ type: "select_point", ...point });
+  }, [submit]);
 
   const onMapInstitutionSelect = useCallback((group: Institution[]) => {
     if (!response?.matches || !conditions?.place) return;
@@ -111,7 +120,6 @@ export function AgentSearchApp() {
     const groupInScope = group.filter(row => row.storage_location_id !== undefined && allowed.has(row.storage_location_id));
     if (groupInScope.length) {
       setSelectedInstitution(groupInScope);
-      setResultsSeen(true);
       setTab("results");
     }
   }, [conditions, response?.matches]);
@@ -155,6 +163,14 @@ export function AgentSearchApp() {
     if (turn.type === "select_place") {
       setConfirmingPlace(candidates?.find(place => place.candidate_id === turn.candidate_id) ?? null);
     }
+    if (turn.type === "select_point") {
+      // 서버 응답 전에도 고른 지점을 바로 보여 준다.
+      setConfirmingPlace({
+        candidate_id: "point", name: "지도에서 고른 위치", address: "",
+        latitude: turn.latitude, longitude: turn.longitude,
+      });
+      if (!retry) setMessages(current => [...current, { author: "user", text: "지도에서 위치를 골랐어요." }]);
+    }
     try {
       const result = await runAgentTurn(turn, response, event => {
         if (event.type === "run.started") setActiveRun(event);
@@ -181,11 +197,7 @@ export function AgentSearchApp() {
         setPlacePage(0);
         setSelectedCandidate(null);
         setSelectedInstitution([]);
-        setResultsSeen(false);
-        if ((result.matches?.total_count ?? 0) > 0) {
-          setResultsSeen(true);
-          setTab("results");
-        }
+        if ((result.matches?.total_count ?? 0) > 0) setTab("results");
       }
       setLastTurn(null);
     } catch (err) {
@@ -262,8 +274,12 @@ export function AgentSearchApp() {
     if (draft.trim()) void submit({ type: "message", text: draft.trim() });
   }
 
-  function openResults() {
-    setResultsSeen(true);
+  function toggleResults() {
+    if (drawerOpen) {
+      setTab("chat");
+      return;
+    }
+    showFullScope();
     setTab("results");
   }
 
@@ -289,10 +305,14 @@ export function AgentSearchApp() {
   return <>
     <header className="app-header">
       <a className="app-wordmark" href={`/${location.search}`} aria-label="RETRIEVER 홈">RETRIEVER</a>
-      <nav className="app-navigation" aria-label="주요 메뉴">
-        <a className={`app-nav-link${alertOpen ? "" : " active"}`} href="#agent-input">물건 찾기</a>
-        <button type="button" className={`app-nav-link${alertOpen ? " active" : ""}`} onClick={openAlerts}>새 물건 알림</button>
-      </nav>
+      <div className="app-header-actions">
+        <button className="app-guide-link" type="button" aria-haspopup="dialog" onClick={() => setGuideOpen(true)}>이용안내</button>
+        {feedbackUrl
+          ? <a className="app-guide-link" href={feedbackUrl} target="_blank" rel="noopener noreferrer">
+            <FeedbackIcon />의견 보내기<span className="sr-only"> (새 창에서 열림)</span>
+          </a>
+          : <button className="app-guide-link" type="button" disabled title="의견 접수 폼 준비 중"><FeedbackIcon />의견 보내기</button>}
+      </div>
     </header>
     <main className={`app-shell agent-shell${tab === "results" && response?.matches ? " agent-shell-drawer" : ""}`}>
       <section className={`agent-panel${tab === "results" && response?.matches ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
@@ -326,9 +346,6 @@ export function AgentSearchApp() {
                 <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
                   onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
             </nav>}
-            {matchCount > 0 && !drawerOpen && <button type="button" className="agent-results-open" onClick={() => { showFullScope(); openResults(); }}>
-              결과 {matchCount.toLocaleString("ko-KR")}건 보기 ›{!resultsSeen && <span className="agent-unread" aria-label="아직 안 본 전체 목록" />}
-            </button>}
             {response?.matches && conditions?.place && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
           </>
         </div>
@@ -353,9 +370,6 @@ export function AgentSearchApp() {
       {tab === "results" && response?.matches && <aside className="agent-drawer" aria-label="전체 검색 결과">
         <div className="agent-drawer-head">
           <strong>결과 {matchCount.toLocaleString("ko-KR")}건</strong>
-          <button type="button" aria-label="결과 닫기" onClick={() => setTab("chat")}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
-          </button>
         </div>
         <div className="agent-drawer-body">
           {groupIds && submittedQuery
@@ -372,13 +386,20 @@ export function AgentSearchApp() {
         </div>
       </aside>}
 
+      {response?.matches && matchCount > 0 && <button type="button" className="agent-handle" aria-expanded={drawerOpen}
+        aria-label={drawerOpen ? "결과 목록 접기" : `결과 ${matchCount.toLocaleString("ko-KR")}건 보기`} onClick={toggleResults}>
+        <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d={drawerOpen ? "M10 3L5 8l5 5" : "M6 3l5 5-5 5"} /></svg>
+        {!drawerOpen && <span className="agent-handle-badge" aria-hidden="true">{matchCount > 999 ? "999+" : matchCount}</span>}
+      </button>}
+
       <KakaoMap themeKey="retriever-blue" institutions={institutions} institutionsLoaded={institutionsLoaded}
         institutionError={institutionError} countsAvailable={false} places={mapPlaces} placeNumbers={placeNumbers}
         selectedPlace={selectedPlace} searchCenters={searchCenters} previewPlace={previewPlace} radiusMeters={mappedRadius}
-        leftInset={mapInset} visibleInstitutions={visibleInstitutions} mapBadge={selectedPlace ? `잃어버린 곳 · ${selectedPlace.name}` : "잃어버린 곳을 먼저 찾아보세요."}
+        leftInset={mapInset} onPointSelect={onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={selectedPlace ? `잃어버린 곳 · ${selectedPlace.name}` : "잃어버린 곳을 먼저 찾아보세요."}
         onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect} onResetRadius={showFullScope} />
     </main>
     {detail && <FoundItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)} onClose={() => void navigate(-1)} />}
+    {guideOpen && <UsageGuide onClose={() => setGuideOpen(false)} />}
     {alertOpen && <NewItemAlert places={searchCenters} query={conditions?.item_query || ""} radiusMeters={mappedRadius} onClose={() => void navigate(-1)} />}
   </>;
 }

@@ -52,6 +52,8 @@ interface KakaoMapProps {
   mapBadge: string;
   /** 지도 왼쪽을 가린 패널의 폭(px). 선택한 지점을 가려지지 않은 영역의 가운데에 둔다. */
   leftInset?: number;
+  /** 지도를 더블클릭해 고른 지점. 없으면 지도 클릭 안내와 더블클릭 선택을 쓰지 않는다. */
+  onPointSelect?: (point: { latitude: number; longitude: number }) => void;
   onPlaceSelect: (place: Place) => void;
   onInstitutionSelect: (institutions: Institution[]) => void;
   onResetRadius: () => void;
@@ -182,6 +184,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   visibleInstitutions,
   mapBadge,
   leftInset = 0,
+  onPointSelect,
   onPlaceSelect,
   onInstitutionSelect,
   onResetRadius,
@@ -202,6 +205,10 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const mapColors = useMemo(() => readMapColorTokens(), [themeKey]);
 
   selectedPlaceRef.current = selectedPlace;
+  const hintCleanupRef = useRef<(() => void) | null>(null);
+  const removeDoubleClickRef = useRef<(() => void) | null>(null);
+  const onPointSelectRef = useRef(onPointSelect);
+  onPointSelectRef.current = onPointSelect;
 
   useImperativeHandle(forwardedRef, () => ({
     getCenter() {
@@ -224,10 +231,54 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       });
       mapRef.current = map;
       infoWindowRef.current = new kakao.maps.InfoWindow({ removable: true, zIndex: 30 });
+
+      // 지도를 한 번 누르면 더블클릭 안내를, 두 번 누르면 그 지점을 장소로 고른다.
+      let hint: any = null;
+      let hintTimer = 0;
+      const clearHint = () => {
+        window.clearTimeout(hintTimer);
+        hint?.setMap(null);
+        hint = null;
+      };
+      hintCleanupRef.current = clearHint;
+      kakao.maps.event.addListener(map, "click", (event: any) => {
+        if (!onPointSelectRef.current) return;
+        clearHint();
+        const content = document.createElement("div");
+        content.className = "map-hint";
+        content.textContent = "더블클릭하면 이 장소로 선택돼요";
+        hint = new kakao.maps.CustomOverlay({
+          position: event.latLng, content, yAnchor: 1.6, zIndex: 40,
+        });
+        hint.setMap(map);
+        hintTimer = window.setTimeout(clearHint, 3500);
+      });
+      kakao.maps.event.addListener(map, "dragstart", clearHint);
+      // 카카오 지도는 더블클릭 확대를 끄는 메서드가 없다. 선택과 겹치지 않도록
+      // 지도가 받기 전에(캡처 단계) 가로채서 좌표만 계산한다. 지도 위 마커·컨트롤은 제외한다.
+      const container = containerRef.current;
+      const onDoubleClick = (event: MouseEvent) => {
+        const handler = onPointSelectRef.current;
+        if (!handler) return;
+        const target = event.target as HTMLElement | null;
+        if (target?.closest("button, a, .map-controls, .map-hint")) return;
+        event.stopPropagation();
+        event.preventDefault();
+        clearHint();
+        const rect = container.getBoundingClientRect();
+        const latLng = map.getProjection().coordsFromContainerPoint(
+          new kakao.maps.Point(event.clientX - rect.left, event.clientY - rect.top),
+        );
+        handler({ latitude: latLng.getLat(), longitude: latLng.getLng() });
+      };
+      container.addEventListener("dblclick", onDoubleClick, true);
+      removeDoubleClickRef.current = () => container.removeEventListener("dblclick", onDoubleClick, true);
       setMapReady(true);
     });
     return () => {
       cancelled = true;
+      hintCleanupRef.current?.();
+      removeDoubleClickRef.current?.();
     };
   }, []);
 

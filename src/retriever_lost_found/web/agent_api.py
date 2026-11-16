@@ -28,13 +28,16 @@ class Payload(BaseModel):
 
 
 class Turn(Payload):
-    type: Literal["message", "select_place", "change_radius", "end"]
+    type: Literal["message", "select_place", "select_point", "change_radius", "end"]
     request_id: str = Field(min_length=1, max_length=80)
     session_id: str | None = Field(default=None, max_length=80)
     revision: int | None = Field(default=None, ge=0)
     text: str | None = Field(default=None, min_length=1, max_length=1000)
     candidate_id: str | None = Field(default=None, min_length=1, max_length=200)
     radius_m: Literal[1000, 1500, 2000] | None = None
+    # 지도 더블클릭으로 고른 지점. 국내 좌표 범위만 받는다.
+    latitude: float | None = Field(default=None, ge=33.0, le=39.0)
+    longitude: float | None = Field(default=None, ge=124.0, le=132.0)
 
 
 class NextPage(Payload):
@@ -114,7 +117,8 @@ def create_agent_router(
         if (turn.type == "message" and not (turn.text or "").strip()
                 or turn.type == "change_radius" and turn.radius_m is None
                 or turn.type == "select_place" and turn.candidate_id is None
-                or turn.session_id is None and (turn.type != "message" or turn.revision is not None)):
+                or turn.type == "select_point" and (turn.latitude is None or turn.longitude is None)
+                or turn.session_id is None and (turn.type not in ("message", "select_point") or turn.revision is not None)):
             return _json({"error": _error("invalid_turn", "대화 요청에 필요한 값이 없습니다.")}, 400)
         with lock:
             session = get_session(turn.session_id)
@@ -202,6 +206,20 @@ def create_agent_router(
                     elif turn.type == "select_place":
                         state, _ = confirm_place(state, turn.candidate_id)
                         result = {"status": "ready_to_search"}
+                    elif turn.type == "select_point":
+                        # 지도에서 직접 고른 지점은 후보 조회 없이 바로 확정 장소가 된다.
+                        point = PlaceCandidate(
+                            f"point:{turn.latitude:.6f},{turn.longitude:.6f}", "지도에서 고른 위치", "",
+                            turn.latitude, turn.longitude,
+                        )
+                        state = replace(state, confirmed=point, candidates=(), place_query=state.place_query or point.name)
+                        manual_radius = radius = None
+                        scope = ()
+                        if state.item_query:
+                            result = {"status": "ready_to_search"}
+                        else:
+                            result = {"status": "awaiting_clarification", "message": "이 위치로 정했어요. 어떤 물품을 잃어버렸나요?"}
+                            state = replace(state, recent=(*state.recent, ("지도에서 위치를 골랐어요.", result["message"]))[-4:])
                     else:
                         manual_radius = turn.radius_m
                         result = {"status": "ready_to_search"}
