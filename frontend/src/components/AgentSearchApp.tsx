@@ -58,6 +58,8 @@ export function AgentSearchApp() {
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
   const [mapInset, setMapInset] = useState(0);
   const [guideOpen, setGuideOpen] = useState(false);
+  // 장소 변경 중: 확정한 장소를 화면에서 비우고 처음처럼 입력·지도 더블클릭으로 고르게 한다.
+  const [placeChanging, setPlaceChanging] = useState(false);
   const feedbackUrl = useMemo(() => feedbackFormUrl(), []);
   const controller = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -79,7 +81,7 @@ export function AgentSearchApp() {
   }, []);
 
   const conditions = response?.conditions;
-  const currentPlace = confirmingPlace ?? conditions?.place;
+  const currentPlace = placeChanging ? null : confirmingPlace ?? conditions?.place ?? null;
   const selectedPlace = useMemo(() => currentPlace ? mapPlace(currentPlace) : null, [currentPlace]);
   const searchCenters = useMemo(() => selectedPlace ? [selectedPlace] : [], [selectedPlace]);
   const candidates = response?.place_candidates;
@@ -115,14 +117,14 @@ export function AgentSearchApp() {
   }, [submit]);
 
   const onMapInstitutionSelect = useCallback((group: Institution[]) => {
-    if (!response?.matches || !conditions?.place) return;
+    if (!response?.matches || !currentPlace || !conditions?.place) return;
     const allowed = new Set(conditions.institution_ids);
     const groupInScope = group.filter(row => row.storage_location_id !== undefined && allowed.has(row.storage_location_id));
     if (groupInScope.length) {
       setSelectedInstitution(groupInScope);
       setTab("results");
     }
-  }, [conditions, response?.matches]);
+  }, [conditions, currentPlace, response?.matches]);
 
   const matchCount = response?.matches?.total_count ?? 0;
   const pageCount = Math.ceil((cursor ? matchCount : items.length) / ITEM_PAGE_SIZE);
@@ -153,6 +155,7 @@ export function AgentSearchApp() {
     const request = new AbortController();
     controller.current = request;
     setLastTurn(turn);
+    setPlaceChanging(false);
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
     setTab("chat");
@@ -269,6 +272,16 @@ export function AgentSearchApp() {
     input.current?.focus();
   }
 
+  function startPlaceChange() {
+    setPlaceChanging(true);
+    setSelectedInstitution([]);
+    setTab("chat");
+    setMessages(current => [...current, {
+      author: "agent", text: "새 장소를 알려주세요. 장소를 입력하거나 지도를 더블클릭해 고를 수 있어요.",
+    }]);
+    input.current?.focus();
+  }
+
   function send(event: FormEvent) {
     event.preventDefault();
     if (draft.trim()) void submit({ type: "message", text: draft.trim() });
@@ -292,7 +305,7 @@ export function AgentSearchApp() {
     void navigate(location.pathname + location.search, { state: { agentAlert: true } });
   }
 
-  const drawerOpen = tab === "results" && Boolean(response?.matches);
+  const drawerOpen = tab === "results" && Boolean(response?.matches) && !placeChanging;
   // 이미 받은 단서는 다시 묻지 않고 빠진 것만 안내한다.
   const hasPlaceClue = Boolean(currentPlace);
   const hasItemClue = Boolean(conditions?.item_query);
@@ -318,11 +331,12 @@ export function AgentSearchApp() {
       <section className={`agent-panel${tab === "results" && response?.matches ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
         {(conditions?.item_query || currentPlace || pagePlaces.length > 0) && <dl className="agent-summary">
           <div><dt>장소</dt><dd>{currentPlace?.name || "선택 대기 중"}</dd>
-            {currentPlace && <button type="button" disabled={busy} onClick={() => fill("장소를 바꿀게요. ")}>다른 곳이에요</button>}</div>
+            {currentPlace && <button type="button" disabled={busy} onClick={startPlaceChange}>장소 변경</button>}
+            {placeChanging && <button type="button" disabled={busy} onClick={() => setPlaceChanging(false)}>취소</button>}</div>
           <div><dt>물건</dt><dd>{conditions?.item_query || "입력 대기 중"}</dd>
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd>
-            {conditions?.place && response?.matches && <span className="agent-radius-actions">
+            {currentPlace && response?.matches && <span className="agent-radius-actions">
               {previousRadius && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: previousRadius })}>{radiusKilometersLabel(previousRadius)}로 줄이기</button>}
               {nextRadius && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>{radiusKilometersLabel(nextRadius)}로 넓히기</button>}
             </span>}</div>
@@ -346,7 +360,7 @@ export function AgentSearchApp() {
                 <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
                   onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
             </nav>}
-            {response?.matches && conditions?.place && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
+            {response?.matches && currentPlace && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
           </>
         </div>
         {(progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
@@ -386,7 +400,7 @@ export function AgentSearchApp() {
         </div>
       </aside>}
 
-      {response?.matches && matchCount > 0 && <button type="button" className="agent-handle" aria-expanded={drawerOpen}
+      {response?.matches && matchCount > 0 && !placeChanging && <button type="button" className="agent-handle" aria-expanded={drawerOpen}
         aria-label={drawerOpen ? "결과 목록 접기" : `결과 ${matchCount.toLocaleString("ko-KR")}건 보기`} onClick={toggleResults}>
         <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d={drawerOpen ? "M10 3L5 8l5 5" : "M6 3l5 5-5 5"} /></svg>
         {!drawerOpen && <span className="agent-handle-badge" aria-hidden="true">{matchCount > 999 ? "999+" : matchCount}</span>}
