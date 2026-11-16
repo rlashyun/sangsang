@@ -1522,14 +1522,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   background: var(--color-bg-surface);
 }
 .usage-guide-card h2 { color: var(--color-brand-heading); }
-.usage-guide-card-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.usage-guide-status {
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: var(--color-bg-disabled);
-  font-size: 12px;
-  font-weight: 700;
-}
 .usage-guide-card ol { display: grid; gap: 4px; margin: 10px 0 12px; padding-left: 22px; }
 .usage-guide-card li::marker { color: var(--color-action-text-strong); font-weight: 700; }
 .usage-guide-card .usage-guide-note {
@@ -1603,9 +1595,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .usage-guide p, .usage-guide li, .usage-guide .usage-guide-intro { font-size: 13px; line-height: 1.4; }
   .usage-guide-steps, .usage-guide-actions { gap: 8px; }
   .usage-guide-card, .usage-guide-action { padding: 8px 10px; border-radius: 12px; }
-  .usage-guide-card-heading { gap: 4px; }
-  .usage-guide-status { padding: 2px 5px; font-size: 10px; }
-  .usage-guide-card ol { gap: 3px; margin: 6px 0 7px; padding-left: 16px; }
+      .usage-guide-card ol { gap: 3px; margin: 6px 0 7px; padding-left: 16px; }
   .usage-guide-card .usage-guide-note { padding: 6px 7px; font-size: 12px; line-height: 1.4; }
   .usage-guide-note p { font-size: inherit; }
   .usage-guide-categories ul { margin-top: 7px; gap: 4px; }

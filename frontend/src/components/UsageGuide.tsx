@@ -1,7 +1,7 @@
 import { useEffect, useRef, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-const categories = ["가방", "의류(모자)", "전자기기(무선이어폰)", "지갑", "휴대폰", "카드"];
+const categories = ["가방", "모자", "무선이어폰", "지갑", "휴대폰", "카드"];
 
 type UsageGuideProps = {
   searchPath: string;
@@ -80,10 +80,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
           )}
 
           <section className="usage-guide-card" aria-labelledby="usage-alert-title">
-            <div className="usage-guide-card-heading">
-              <h2 id="usage-alert-title">새 물건 알림</h2>
-              <span className="usage-guide-status">준비 중</span>
-            </div>
+            <h2 id="usage-alert-title">새 물건 알림</h2>
             <ol>
               <li>{variant === "chat" ? "검색 결과 위의" : "검색 결과에서"} ‘새 물건 알림 받기’를 눌러요.</li>
               <li>검색 조건을 확인하고 이메일을 입력해요.</li>
