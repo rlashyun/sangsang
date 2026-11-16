@@ -402,7 +402,7 @@ export function AgentSearchApp() {
               <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
                 onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
           </nav>}
-          {response?.matches && currentPlace && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
+          {response?.matches && currentPlace && <button type="button" className="agent-alert-link" onClick={openAlerts}>비슷한 물건 알림 받기</button>}
           {daangnSearch && <a className="agent-daangn-link" href={daangnSearch} target="_blank" rel="noopener noreferrer">
             당근에서 찾아보기 <span aria-hidden="true">↗</span>
           </a>}

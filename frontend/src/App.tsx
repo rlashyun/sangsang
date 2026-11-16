@@ -358,7 +358,7 @@ export function App() {
             onClick={event => { if (alertIsOpen) { event.preventDefault(); void navigate(-1); } }}>물건 찾기</Link>
           <button className={`app-nav-link${alertIsOpen ? " active" : ""}`} type="button" aria-current={alertIsOpen ? "page" : undefined}
             disabled={addingWaypoint}
-            aria-haspopup="dialog" onClick={() => { if (!alertIsOpen) void navigate(`${searchPath}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}>새 물건 알림</button>
+            aria-haspopup="dialog" onClick={() => { if (!alertIsOpen) void navigate(`${searchPath}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}>비슷한 물건 알림</button>
         </nav>
         <div className="app-header-actions">
           <Link ref={guideLinkRef} className="app-guide-link" to={`${searchPath}${GUIDE_HASH}`} state={{ openedGuide: true }}

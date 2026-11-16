@@ -344,7 +344,7 @@ export function FoundItemBrowser({
                 {radiusKilometersLabel(nextRadius)}로 넓혀보기
               </button>}
             </div>}
-            {submittedQuery && onAlertRequest && <button type="button" className="item-alert-button" aria-haspopup="dialog" disabled={isLoading || isLoadingMore} onClick={onAlertRequest}>새 물건 알림 받기</button>}
+            {submittedQuery && onAlertRequest && <button type="button" className="item-alert-button" aria-haspopup="dialog" disabled={isLoading || isLoadingMore} onClick={onAlertRequest}>비슷한 물건 알림 받기</button>}
           </div>
         </div>
       )}
