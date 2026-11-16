@@ -22,9 +22,11 @@ def test_conversation_retains_place_and_applies_item_correction():
         decision("search", item="갈색 카드지갑"),
     ])
     first = respond_to_message(Conversation(), "강남역에서 잃어버렸어요", model=model, find_places=find_places)
-    assert first.status == "awaiting_clarification"
-    assert first.message == "어떤 물품인가요?"
-    find_places.assert_not_called()
+    # 장소만 말해도 후보를 바로 조회해 지도에 보여 주고, 물품은 이어서 묻는다.
+    assert first.status == "awaiting_place_selection"
+    assert first.message == "지도에 표시한 장소가 맞나요? 어떤 물품인가요?"
+    assert first.state.candidates == (place,)
+    find_places.assert_called_once_with("강남역")
 
     second = respond_to_message(first.state, "검은 지갑이요", model=model, find_places=find_places)
     assert second.status == "awaiting_place_selection"
@@ -48,6 +50,17 @@ def test_conversation_retains_place_and_applies_item_correction():
     ))
     search.assert_called_once_with((42,), "갈색 카드지갑")
     assert events[-1]["recommended_item_ids"] == [7]
+
+
+def test_place_can_be_confirmed_before_the_item_is_known():
+    place = PlaceCandidate("p1", "부산역", "", 35.11, 129.04)
+    model = Mock(side_effect=[decision("clarify", place="부산역", message="어떤 물품인가요?"), decision("search", item="검은 지갑")])
+    first = respond_to_message(Conversation(), "부산역", model=model, find_places=Mock(return_value=[place]))
+    confirmed, pending = confirm_place(first.state, "p1")
+    assert pending is None and confirmed.confirmed == place
+    # 물품을 말하면 이미 확정한 장소로 바로 검색할 수 있다.
+    turn = respond_to_message(confirmed, "검은 지갑", model=model, find_places=Mock())
+    assert turn.status == "ready_to_search" and turn.pending.query == "검은 지갑"
 
 
 def test_changed_place_requires_confirmation_and_old_candidate_cannot_be_selected():

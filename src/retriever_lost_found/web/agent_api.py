@@ -203,11 +203,18 @@ def create_agent_router(
                             yield line({"type": "tool.completed", "tool": "places"})
                             state = replace(state, candidates=candidates)
                             if candidates:
-                                result = {"status": "awaiting_place_selection", "message": "지도에 표시한 장소가 맞나요?"}
+                                question = "지도에 표시한 장소가 맞나요?"
+                                if state.item_query is None:
+                                    question += " 어떤 물품을 잃어버렸나요?"
+                                result = {"status": "awaiting_place_selection", "message": question}
                             state = replace(state, recent=(*state.recent[:-1], (turn.text, result["message"])))
                     elif turn.type == "select_place":
                         state, _ = confirm_place(state, turn.candidate_id)
-                        result = {"status": "ready_to_search"}
+                        if state.item_query:
+                            result = {"status": "ready_to_search"}
+                        else:
+                            result = {"status": "awaiting_clarification", "message": "이 위치로 정했어요. 어떤 물품을 잃어버렸나요?"}
+                            state = replace(state, recent=(*state.recent, ("장소를 골랐어요.", result["message"]))[-4:])
                     elif turn.type == "select_point":
                         # 지도에서 직접 고른 지점은 후보 조회 없이 바로 확정 장소가 된다.
                         point = PlaceCandidate(

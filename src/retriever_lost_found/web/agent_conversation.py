@@ -149,7 +149,15 @@ def respond_to_message(
         answer = decision.message if decision.action == "clarify" else (
             "어디에서 잃어버렸나요?" if not state.place_query else "어떤 물품을 잃어버렸나요?"
         )
-        turn = ConversationTurn(state, "awaiting_clarification", answer)
+        if state.place_query and not state.item_query and not state.confirmed:
+            # 장소만 말했어도 후보를 바로 조회해 지도에 보여 준다. 물품은 장소를 고른 뒤에 이어서 받는다.
+            candidates = state.candidates or tuple(find_places(state.place_query))
+            state = replace(state, candidates=candidates)
+            turn = ConversationTurn(state, "awaiting_place_selection", f"지도에 표시한 장소가 맞나요? {answer}") if candidates else (
+                ConversationTurn(state, "no_place_candidates", "장소를 찾지 못했어요. 가까운 역이나 주소를 알려주세요.")
+            )
+        else:
+            turn = ConversationTurn(state, "awaiting_clarification", answer)
     elif state.confirmed:
         turn = ConversationTurn(
             state, "ready_to_search", decision.message, PendingSearch((state.confirmed,), state.item_query),
@@ -164,11 +172,13 @@ def respond_to_message(
     return replace(turn, state=replace(state, recent=recent))
 
 
-def confirm_place(state: Conversation, candidate_id: str) -> tuple[Conversation, PendingSearch]:
+def confirm_place(state: Conversation, candidate_id: str) -> tuple[Conversation, PendingSearch | None]:
     place = next((candidate for candidate in state.candidates if candidate.candidate_id == candidate_id), None)
-    if place is None or state.item_query is None:
+    if place is None:
         raise ValueError("현재 장소 후보에서 선택해 주세요.")
-    return replace(state, confirmed=place, candidates=()), PendingSearch((place,), state.item_query)
+    # 물품을 아직 모르면 장소만 확정하고, 검색은 물품을 받은 뒤에 한다.
+    pending = PendingSearch((place,), state.item_query) if state.item_query is not None else None
+    return replace(state, confirmed=place, candidates=()), pending
 
 
 def search_conversation(

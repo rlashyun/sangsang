@@ -169,6 +169,64 @@ function circleBounds(kakao: any, centers: Place[], radiusMeters: number) {
   return bounds;
 }
 
+const FLY_MS = 1500;
+const ZOOM_OUT_MS = 700;
+
+/**
+ * 카메라를 apply()가 만들 최종 위치로 순간이동하지 않고 부드럽게 옮긴다.
+ * 카카오 setBounds는 애니메이션이 없어, 최종 중심·레벨을 먼저 구한 뒤 원래 위치로 되돌린다.
+ * 이동은 "출발·도착이 함께 보이는 높이까지 줌아웃 → 중심 이동 → 도착 높이로 줌인" 순서다.
+ * 가까우면 줌아웃·줌인이 생략되고, 서울에서 부산처럼 멀면 한 번 높이 올라갔다 내려온다.
+ * 선택 즉시 움직이기 시작하며, 새 이동이 시작되면 이전 이동은 멈춘다.
+ */
+function flyCamera(map: any, flight: { current: number }, apply: () => void) {
+  const kakao = window.kakao;
+  const id = ++flight.current;
+  const fromCenter = map.getCenter();
+  const fromLevel = map.getLevel();
+  apply();
+  const toCenter = map.getCenter();
+  const toLevel = map.getLevel();
+
+  const both = new kakao.maps.LatLngBounds();
+  both.extend(fromCenter);
+  both.extend(toCenter);
+  map.setBounds(both, 48, 48, 48, 48);
+  const peakLevel = Math.max(fromLevel, toLevel, map.getLevel());
+  map.setLevel(fromLevel, { animate: false });
+  map.setCenter(fromCenter);
+
+  const fromLat = fromCenter.getLat();
+  const fromLng = fromCenter.getLng();
+  const dLat = toCenter.getLat() - fromLat;
+  const dLng = toCenter.getLng() - fromLng;
+  const finish = () => {
+    if (flight.current !== id) return;
+    map.setCenter(toCenter);
+    if (toLevel < map.getLevel()) map.setLevel(toLevel, { animate: true });
+  };
+  const pan = () => {
+    if (flight.current !== id) return;
+    if (Math.abs(dLat) < 1e-6 && Math.abs(dLng) < 1e-6) return finish();
+    const started = performance.now();
+    const step = (now: number) => {
+      if (flight.current !== id) return;
+      const t = Math.min(1, (now - started) / FLY_MS);
+      const eased = 1 - Math.pow(1 - t, 3);
+      map.setCenter(new kakao.maps.LatLng(fromLat + dLat * eased, fromLng + dLng * eased));
+      if (t < 1) requestAnimationFrame(step);
+      else finish();
+    };
+    requestAnimationFrame(step);
+  };
+  if (peakLevel > fromLevel) {
+    map.setLevel(peakLevel, { animate: true });
+    window.setTimeout(pan, ZOOM_OUT_MS);
+  } else {
+    pan();
+  }
+}
+
 export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function KakaoMap({
   themeKey,
   institutions,
@@ -200,6 +258,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   // PRD 4.4 — 지도 분포는 유지하며 표시 밀도만 비교한다. 전환 시 지도 위치는 유지한다.
   const softenedMarkers = true;
   const preserveViewportRef = useRef(false);
+  const flightRef = useRef(0);
   const appliedInsetRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const mapColors = useMemo(() => readMapColorTokens(), [themeKey]);
@@ -402,7 +461,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     if (places.length) {
       const bounds = new kakao.maps.LatLngBounds();
       places.forEach((place) => bounds.extend(new kakao.maps.LatLng(place.latitude, place.longitude)));
-      mapRef.current.setBounds(bounds, 48, 48, 48, 48 + leftInset);
+      flyCamera(mapRef.current, flightRef, () => mapRef.current.setBounds(bounds, 48, 48, 48, 48 + leftInset));
     }
 
     return () => nextMarkers.forEach(({ marker }) => marker.setMap(null));
@@ -449,7 +508,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       infoWindowRef.current?.close();
     }
     if (!preserveViewportRef.current) {
-      map.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48 + leftInset);
+      flyCamera(map, flightRef, () => map.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48 + leftInset));
     }
     preserveViewportRef.current = false;
   }, [institutions, mapColors, mapReady, radiusMeters, searchCenters, selectedPlace, visibleInstitutions, softenedMarkers]);
@@ -487,11 +546,13 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         : compactMarkerImage(kakao, mapColors, "partner", false, number));
       marker.setZIndex(place === previewPlace ? 6 : 4);
     });
-    map.setLevel(3, { animate: false });
-    const target = new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude);
-    const projection = map.getProjection();
-    const point = projection.containerPointFromCoords(target);
-    map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+    flyCamera(map, flightRef, () => {
+      map.setLevel(3, { animate: false });
+      const target = new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude);
+      const projection = map.getProjection();
+      const point = projection.containerPointFromCoords(target);
+      map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+    });
     const marker = searchMarkersRef.current.find(({ place }) => place === previewPlace)?.marker;
     if (marker) {
       infoWindowRef.current.setContent(
