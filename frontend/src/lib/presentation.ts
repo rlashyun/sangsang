@@ -23,16 +23,19 @@ export function institutionLocationIds(scope: Institution[]) {
     .filter((value) => Number.isInteger(value) && value > 0))];
 }
 
-export function categoryIcon(rawCategory?: string) {
+export type CategoryKind = "bag" | "cap" | "buds" | "wallet" | "phone" | "card" | "box";
+
+// PRD 4.5 — 6개 분류는 상위 분류명이 정확히 일치할 때만 구분하고, 그 밖은 기타(box)로 둔다.
+export function categoryKind(rawCategory?: string): CategoryKind {
   const parent = String(rawCategory || "").split(">")[0].trim();
   return ({
-    "가방": "👜",
-    "의류": "🧢",
-    "전자기기": "🎧",
-    "지갑": "👛",
-    "휴대폰": "📱",
-    "카드": "💳",
-  } as Record<string, string>)[parent] || "📦";
+    "가방": "bag",
+    "의류": "cap",
+    "전자기기": "buds",
+    "지갑": "wallet",
+    "휴대폰": "phone",
+    "카드": "card",
+  } as Record<string, CategoryKind>)[parent] || "box";
 }
 
 export function foundItemImageUrl(value?: string | null) {

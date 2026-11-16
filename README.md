@@ -132,6 +132,14 @@ Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이�
 운영 Supabase를 사용합니다. 변경 내역과 중단·복구 절차 및 복구 한계는
 [검색 실험 복구 기록](docs/measurements.md)에 남깁니다.
 
+### 로컬 대화형 검색 API
+
+로컬 `.env`의 서버 전용 `OPENROUTER_API_KEY`를 사용한다.
+프런트를 빌드한 뒤 `uv run kakao-map --agent-search`로 실행하면 첫 화면의 검색 패널과 `/api/search-chat`이 대화형 검색에 연결된다.
+OpenRouter의 GPT-6 Luna로 대화를 처리하고 카카오 장소 조회 및 설정한 Supabase의 기관·물품 검색을 호출한다.
+로컬 검증에는 테스트 Supabase를 사용한다. Vite 개발 중에는 `/?search=chat`으로 열면 백엔드의 대화형 검색 API를 사용한다.
+사용 흐름과 API 예시는 [대화형 검색 에이전트](docs/agent-search.md)를 참고한다. Vercel 진입점은 기존 검색 화면을 제공한다.
+
 ### 검색 초안: 키워드 후보 + 의미 재정렬
 
 검색은 기관 범위의 `keyword_found_item_candidates`로 작은 검색 필드만 읽고 BM25를 계산합니다.

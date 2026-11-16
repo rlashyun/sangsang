@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { createAlertReservation } from "../api/client";
 import { DEFAULT_SEARCH_RADIUS_METERS, radiusKilometersLabel, SEARCH_RADIUS_OPTIONS_METERS } from "../lib/geo.js";
 import type { Place } from "../types";
+import { CloseIcon } from "./CloseIcon";
 
 const CONSENT_DETAILS = {
   title: "알림을 위한 개인정보 수집·이용",
@@ -121,7 +122,7 @@ export function NewItemAlert({ places, query, radiusMeters, onClose }: NewItemAl
     <dialog ref={dialogRef} className="new-item-alert" aria-labelledby="new-item-alert-title">
       <header className="alert-header">
         <div><p className="alert-eyebrow">알림 조건 확인</p><h2 id="new-item-alert-title">새 물건 알림</h2></div>
-        <button type="button" className="item-detail-close" aria-label="닫기" onClick={onClose} autoFocus><span aria-hidden="true">×</span></button>
+        <button type="button" className="item-detail-close" aria-label="닫기" onClick={onClose} autoFocus><CloseIcon /></button>
       </header>
       {hasConditions ? <div className="alert-columns">
         <section className="alert-summary" aria-labelledby="alert-summary-title">

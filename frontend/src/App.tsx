@@ -8,6 +8,7 @@ import { KakaoMap, type KakaoMapHandle } from "./components/KakaoMap";
 import { LocationSearch, PLACE_PAGE_SIZE } from "./components/LocationSearch";
 import { SelectionSummary } from "./components/SelectionSummary";
 import { UsageGuide } from "./components/UsageGuide";
+import { GUIDE_HASH, SURVEY_URL } from "./lib/feedback";
 import {
   DEFAULT_SEARCH_RADIUS_METERS,
   isWithinRadius,
@@ -23,8 +24,6 @@ import {
 import type { Institution, Place, SelectionSummary as SelectionSummaryValue } from "./types";
 
 const MAX_WAYPOINT_PLACES = 3;
-const GUIDE_HASH = "#guide";
-const SURVEY_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfFJwjc5S4Pd1sI1SS6QS6s1hWOaZDt5kuYzBPRnIJoNEO5Ag/viewform?usp=publish-editor";
 
 export function App() {
   const location = useLocation();

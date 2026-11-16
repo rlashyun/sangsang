@@ -50,6 +50,10 @@ interface KakaoMapProps {
   radiusMeters: number;
   visibleInstitutions: Institution[];
   mapBadge: string;
+  /** 지도 왼쪽을 가린 패널의 폭(px). 선택한 지점을 가려지지 않은 영역의 가운데에 둔다. */
+  leftInset?: number;
+  /** 보관기관 핀을 더블클릭해 고른 위치. 없으면 더블클릭 선택과 안내를 쓰지 않는다. */
+  onPointSelect?: (point: { latitude: number; longitude: number; name: string; address: string }) => void;
   onPlaceSelect: (place: Place) => void;
   onInstitutionSelect: (institutions: Institution[]) => void;
   onResetRadius: () => void;
@@ -179,6 +183,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   radiusMeters,
   visibleInstitutions,
   mapBadge,
+  leftInset = 0,
+  onPointSelect,
   onPlaceSelect,
   onInstitutionSelect,
   onResetRadius,
@@ -194,10 +200,13 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   // PRD 4.4 — 지도 분포는 유지하며 표시 밀도만 비교한다. 전환 시 지도 위치는 유지한다.
   const softenedMarkers = true;
   const preserveViewportRef = useRef(false);
+  const appliedInsetRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const mapColors = useMemo(() => readMapColorTokens(), [themeKey]);
 
   selectedPlaceRef.current = selectedPlace;
+  const onPointSelectRef = useRef(onPointSelect);
+  onPointSelectRef.current = onPointSelect;
 
   useImperativeHandle(forwardedRef, () => ({
     getCenter() {
@@ -220,6 +229,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       });
       mapRef.current = map;
       infoWindowRef.current = new kakao.maps.InfoWindow({ removable: true, zIndex: 30 });
+
       setMapReady(true);
     });
     return () => {
@@ -303,6 +313,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       return image;
     }
 
+    // 같은 핀을 450ms 안에 두 번 누르면 더블클릭으로 보고 그 기관 위치를 장소로 고른다.
+    const lastPin: { marker: any; at: number } = { marker: null, at: 0 };
     const markers = institutions.map((institution) => {
       const source = institution.source === "police" ? "police" : "partner";
       const image = softenedMarkers ? compactImages[source] : countsAvailable
@@ -317,6 +329,18 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       });
       const group = groups.get(coordinateKey(institution)) || [institution];
       kakao.maps.event.addListener(marker, "click", () => {
+        const now = Date.now();
+        if (onPointSelectRef.current && lastPin.marker === marker && now - lastPin.at < 450) {
+          lastPin.marker = null;
+          infoWindowRef.current.close();
+          onPointSelectRef.current({
+            latitude: institution.latitude, longitude: institution.longitude,
+            name: institution.name, address: institution.address,
+          });
+          return;
+        }
+        lastPin.marker = marker;
+        lastPin.at = now;
         if (softenedMarkers) {
           if (highlightedMarker) {
             highlightedMarker.marker.setImage(compactImages[highlightedMarker.source]);
@@ -330,7 +354,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
           group,
           selectedPlaceRef.current,
           countsAvailable,
-        ));
+        ) + (onPointSelectRef.current
+          ? '<div class="info-hint">더블클릭하면 이 위치를 장소로 선택해요</div>' : ""));
         infoWindowRef.current.open(map, marker);
         onInstitutionSelect(group);
       });
@@ -377,7 +402,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     if (places.length) {
       const bounds = new kakao.maps.LatLngBounds();
       places.forEach((place) => bounds.extend(new kakao.maps.LatLng(place.latitude, place.longitude)));
-      mapRef.current.setBounds(bounds, 48, 48, 48, 48);
+      mapRef.current.setBounds(bounds, 48, 48, 48, 48 + leftInset);
     }
 
     return () => nextMarkers.forEach(({ marker }) => marker.setMap(null));
@@ -424,7 +449,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       infoWindowRef.current?.close();
     }
     if (!preserveViewportRef.current) {
-      map.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48);
+      map.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48 + leftInset);
     }
     preserveViewportRef.current = false;
   }, [institutions, mapColors, mapReady, radiusMeters, searchCenters, selectedPlace, visibleInstitutions, softenedMarkers]);
@@ -443,6 +468,14 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     };
   }, [mapColors, mapReady, places, radiusMeters, searchCenters, selectedPlace]);
 
+  // 패널 폭이 바뀌면 보이는 지점이 남은 영역의 가운데에 머물도록 지도만 그만큼 민다.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const delta = leftInset - appliedInsetRef.current;
+    appliedInsetRef.current = leftInset;
+    if (delta) mapRef.current.panBy(-delta / 2, 0);
+  }, [mapReady, leftInset]);
+
   useEffect(() => {
     if (!mapReady || !mapRef.current || selectedPlace || !previewPlace) return;
     const kakao = window.kakao;
@@ -454,8 +487,11 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         : compactMarkerImage(kakao, mapColors, "partner", false, number));
       marker.setZIndex(place === previewPlace ? 6 : 4);
     });
-    map.setLevel(3);
-    map.panTo(new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude));
+    map.setLevel(3, { animate: false });
+    const target = new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude);
+    const projection = map.getProjection();
+    const point = projection.containerPointFromCoords(target);
+    map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
     const marker = searchMarkersRef.current.find(({ place }) => place === previewPlace)?.marker;
     if (marker) {
       infoWindowRef.current.setContent(
