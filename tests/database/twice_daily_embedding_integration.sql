@@ -2,7 +2,7 @@
 begin;
 set local role service_role;
 do $test$
-declare r jsonb; pm_item bigint; morning_id bigint; saved bigint;
+declare r jsonb; pm_item bigint; morning_id bigint; afternoon_id bigint; saved bigint;
 begin
  assert (select count(*) from public.found_items)=2, 'isolated two-item fixture DB required';
  assert (select count(*) from public.found_item_embeddings_bge_m3)=0, 'empty fixture embeddings required';
@@ -13,6 +13,7 @@ begin
  r:=public.ensure_embedding_run('2099-01-01');
  assert r is not null;
  morning_id:=(r->>'id')::bigint;
+ assert r->>'run_slot'='morning';
  r:=public.claim_embedding_run('2099-01-01');
  select public.save_run_embeddings((r->>'id')::bigint,(r->>'lease_token')::uuid,
   jsonb_agg(jsonb_build_object('item_id',f.id,'embedded_input',f.embedding_input,
@@ -20,6 +21,7 @@ begin
    'vector_source','openrouter_half_v2','embedding',to_json(array_fill(0.25::real,array[1024]))::text)))
  into saved from public.found_items f;
  assert saved=2;
+ perform public.checkpoint_embedding_run((r->>'id')::bigint,(r->>'lease_token')::uuid,0,2,0);
  assert (public.finish_embedding_run((r->>'id')::bigint,(r->>'lease_token')::uuid,true)->>'status')='succeeded';
 
  insert into public.found_items(item_source_code,atc_id,found_sequence,storage_location_id,
@@ -40,17 +42,23 @@ begin
  assert public.ensure_embedding_run('2099-01-01') is null, 'running afternoon source was ignored';
  update public.ingestion_runs set status='failed',finished_at=now()
  where status='running' and item_source_code='partner_api';
- assert (select status from public.embedding_runs where id=morning_id)='pending';
- assert (select count(*) from public.embedding_runs where business_date='2099-01-01')=1;
+ assert (select status from public.embedding_runs where id=morning_id)='succeeded';
+ assert (select succeeded_count from public.embedding_runs where id=morning_id)=2;
+ assert (select count(*) from public.embedding_runs where business_date='2099-01-01')=2;
  r:=public.claim_embedding_run('2099-01-01');
+ assert r->>'run_slot'='afternoon';
+ afternoon_id:=(r->>'id')::bigint;
+ assert afternoon_id<>morning_id;
+ assert (r->>'succeeded_count')::bigint=0;
  assert jsonb_array_length(public.embedding_run_batch((r->>'id')::bigint,(r->>'lease_token')::uuid,0))=1;
  assert (public.embedding_run_batch((r->>'id')::bigint,(r->>'lease_token')::uuid,0)->0->>'item_id')::bigint=pm_item;
  assert (select count(*) from public.found_item_embeddings_bge_m3)=2, 'morning vectors were changed';
  perform public.finish_embedding_run((r->>'id')::bigint,(r->>'lease_token')::uuid,true);
- update public.embedding_runs set next_attempt_at=now() where id=morning_id;
+ update public.embedding_runs set next_attempt_at=now() where id=afternoon_id;
  assert public.ensure_embedding_run('2099-01-02') is null;
  r:=public.claim_embedding_run();
  assert r->>'business_date'='2099-01-01', 'midnight blocked previous-day backlog';
+ assert (r->>'id')::bigint=afternoon_id;
  assert not has_function_privilege('anon','public.embedding_ingestion_ready(date)','execute');
  assert not has_function_privilege('authenticated','public.embedding_ingestion_ready(date)','execute');
 end $test$;
