@@ -791,21 +791,27 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   border-bottom: 1px solid var(--color-border-section);
 }
 .item-detail-header h2 { margin: 0; font-size: 18px; }
+/* 닫기 — 글자 없이 가운데 정렬한 X, 얇은 테두리 사각(사용자 선택 시안 3). */
 .item-detail-close {
   display: flex;
-  min-width: 72px;
-  min-height: 44px;
+  box-sizing: border-box;
+  flex: none;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  width: 40px;
+  height: 40px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  line-height: 0;
   border: 1px solid var(--color-border-control);
-  border-radius: 12px;
-  color: var(--color-action-text);
-  background: var(--color-bg-control);
+  border-radius: 10px;
+  color: var(--color-text-secondary);
+  background: transparent;
   cursor: pointer;
 }
-.item-detail-close span { font-size: 24px; }
-.item-detail-close:hover { background: var(--color-bg-control-hover); }
+.close-icon { display: block; flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.item-detail-close:hover { background: var(--color-bg-control-hover); color: var(--color-action-text); }
 .item-detail :is(button, a):focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .item-detail-content:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -4px; }
 .item-detail-content { min-height: 0; padding: 20px; overflow-y: auto; overscroll-behavior: contain; }
