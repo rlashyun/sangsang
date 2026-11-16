@@ -249,8 +249,8 @@ async (page) => {
   check(await page.getByRole("button", { name: "1.5km로 넓혀보기", exact: true }).count() === 0,
     "물품 검색 전에는 수동 반경 확장 버튼을 숨겨야 한다");
   const itemRows = page.getByRole("list", { name: "습득물 목록" }).locator("li");
-  const alertDialog = page.getByRole("dialog", { name: "새 물건 알림", exact: true });
-  await page.getByRole("button", { name: "새 물건 알림", exact: true }).click();
+  const alertDialog = page.getByRole("dialog", { name: "비슷한 물건 알림", exact: true });
+  await page.getByRole("button", { name: "비슷한 물건 알림", exact: true }).click();
   await alertDialog.getByRole("heading", { name: "먼저 찾는 물건을 검색해주세요" }).waitFor();
   check(await alertDialog.getByRole("textbox").count() === 0, "검색 조건 없이는 이메일부터 받지 않아야 한다");
   await alertDialog.getByRole("button", { name: "물건 찾기로 돌아가기" }).click();
@@ -327,14 +327,14 @@ async (page) => {
   await page.getByText("전체 120건 중 검색 결과 60건 · 유사도 높은 순", { exact: true }).waitFor();
   await showItem(8);
   await search.fill("입력 중인 다른 물건");
-  const alertTrigger = page.getByRole("button", { name: "새 물건 알림 받기", exact: true });
+  const alertTrigger = page.getByRole("button", { name: "비슷한 물건 알림 받기", exact: true });
   const requestsBeforeAlert = itemRequests;
   const pageBeforeAlert = await page.locator('.item-pagination button[aria-current="page"]').innerText();
   await alertTrigger.click();
   await alertDialog.waitFor();
   check(await alertDialog.locator(".alert-query").innerText() === "검정 지갑", "알림에는 마지막 제출 검색어만 전달해야 한다");
   check(await alertDialog.locator(".alert-summary").innerText().then(text => text.includes("서울역") && text.includes("1.5km")), "알림에 선택 장소와 현재 반경을 전달해야 한다");
-  check(await page.locator('.app-navigation button[aria-current="page"]').innerText() === "새 물건 알림", "알림 메뉴를 활성 표시해야 한다");
+  check(await page.locator('.app-navigation button[aria-current="page"]').innerText() === "비슷한 물건 알림", "알림 메뉴를 활성 표시해야 한다");
   check(await page.locator(".alert-backdrop").evaluate(el => el.getBoundingClientRect().top >= document.querySelector(".app-header").getBoundingClientRect().bottom - 1), "알림 블러 영역은 상단 메뉴 아래에서 시작해야 한다");
   await alertDialog.getByRole("button", { name: "알림 조건 수정하기", exact: true }).click();
   check(await alertDialog.locator('.alert-condition-form input').count() === 0, "알림 장소와 물품명은 편집할 수 없어야 한다");
@@ -623,10 +623,10 @@ async (page) => {
   await page.getByRole("heading", { name: "3개 장소 주변 습득물" }).waitFor();
   await page.getByRole("button", { name: "+ 장소 추가", exact: true }).waitFor({ state: "detached" });
 
-  await page.getByRole("button", { name: "새 물건 알림 받기", exact: true }).click();
+  await page.getByRole("button", { name: "비슷한 물건 알림 받기", exact: true }).click();
   const alertPlaces = alertDialog.locator(".alert-place-list li");
   await alertPlaces.first().waitFor();
-  check(await alertPlaces.count() === 3, "새 물건 알림 창으로 선택한 3곳을 모두 전달해야 한다");
+  check(await alertPlaces.count() === 3, "비슷한 물건 알림 창으로 선택한 3곳을 모두 전달해야 한다");
   await alertDialog.getByRole("button", { name: "알림 조건 수정하기" }).click();
   await alertDialog.getByRole("button", { name: "세 번째 장소 알림에서 제외" }).click();
   await alertDialog.getByRole("button", { name: "취소", exact: true }).click();

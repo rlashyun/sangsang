@@ -121,7 +121,7 @@ export function NewItemAlert({ places, query, radiusMeters, onClose }: NewItemAl
       }}>
     <dialog ref={dialogRef} className="new-item-alert" aria-labelledby="new-item-alert-title">
       <header className="alert-header">
-        <div><p className="alert-eyebrow">알림 조건 확인</p><h2 id="new-item-alert-title">새 물건 알림</h2></div>
+        <div><p className="alert-eyebrow">알림 조건 확인</p><h2 id="new-item-alert-title">비슷한 물건 알림</h2></div>
         <button type="button" className="item-detail-close" aria-label="닫기" onClick={onClose} autoFocus><CloseIcon /></button>
       </header>
       {hasConditions ? <div className="alert-columns">

@@ -70,7 +70,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
               <li>장소명이나 주소를 입력해 물건을 잃어버린 장소를 최대 3곳까지 선택해요.</li>
               <li>‘검은색 지갑’처럼 이름이나 특징을 검색해요.</li>
               <li>결과가 없으면 반경을 1km → 1.5km → 2km로 넓혀요.</li>
-              <li>그래도 못 찾았다면 결과 아래 ‘새 물건 알림 받기’를 눌러요.</li>
+              <li>그래도 못 찾았다면 결과 아래 ‘비슷한 물건 알림 받기’를 눌러요.</li>
             </ol>
             <aside className="usage-guide-note">
               <strong>방문 전 보관기관에 연락해요.</strong>
@@ -80,9 +80,9 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
           )}
 
           <section className="usage-guide-card" aria-labelledby="usage-alert-title">
-            <h2 id="usage-alert-title">새 물건 알림</h2>
+            <h2 id="usage-alert-title">비슷한 물건 알림</h2>
             <ol>
-              <li>{variant === "chat" ? "검색 결과 위의" : "검색 결과에서"} ‘새 물건 알림 받기’를 눌러요.</li>
+              <li>{variant === "chat" ? "검색 결과 위의" : "검색 결과에서"} ‘비슷한 물건 알림 받기’를 눌러요.</li>
               <li>검색 조건을 확인하고 이메일을 입력해요.</li>
               <li>확인 메일의 링크를 눌러 알림을 시작해요.</li>
             </ol>
