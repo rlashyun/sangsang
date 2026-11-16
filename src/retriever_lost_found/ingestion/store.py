@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from ..config import read_env_value, read_optional_env_value
-from ..integrations.deadline import request_timeout
+from ..integrations.supabase_rest import SupabaseRequestError, SupabaseRestClient
 
 
 SOURCE_LOCATION_CODES = {
@@ -32,12 +29,6 @@ class RunAlreadyActive(RuntimeError):
     """같은 출처의 동기화가 이미 실행 중입니다."""
 
 
-class SupabaseRequestError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
-        super().__init__(message)
-        self.status_code = status_code
-
-
 @dataclass(frozen=True, slots=True)
 class LocationReference:
     id: int
@@ -45,7 +36,7 @@ class LocationReference:
     normalized_name: str
 
 
-class SupabaseIngestionStore:
+class SupabaseIngestionStore(SupabaseRestClient):
     """service-role 전용 Supabase Data API 저장소입니다."""
 
     def __init__(self, url: str, secret_key: str, *, timeout: float = 30.0) -> None:
@@ -68,50 +59,6 @@ class SupabaseIngestionStore:
                 "SUPABASE_SECRET_KEY 또는 SUPABASE_SERVICE_ROLE_KEY가 설정되지 않았습니다."
             )
         return cls(url, secret_key)
-
-    def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        query: list[tuple[str, str]] | None = None,
-        payload: Any | None = None,
-        prefer: str | None = None,
-    ) -> Any:
-        url = f"{self.url}/rest/v1/{path.lstrip('/')}"
-        if query:
-            url += "?" + urllib.parse.urlencode(query)
-        body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = {
-            "Accept": "application/json",
-            "apikey": self.secret_key,
-            "Authorization": f"Bearer {self.secret_key}",
-            "User-Agent": "RetrieverLostFound/0.1",
-        }
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-        if prefer:
-            headers["Prefer"] = prefer
-        request = urllib.request.Request(url, data=body, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=request_timeout(self.deadline, self.timeout)) as response:
-                response_body = response.read()
-        except urllib.error.HTTPError as error:
-            response_body = error.read().decode("utf-8", errors="replace")[:1000]
-            response_body = response_body.replace(self.secret_key, "[REDACTED]")
-            raise SupabaseRequestError(
-                f"Supabase Data API HTTP {error.code}: {response_body or error.reason}",
-                status_code=error.code,
-            ) from None
-        except (urllib.error.URLError, TimeoutError) as error:
-            reason = getattr(error, "reason", error)
-            raise SupabaseRequestError(f"Supabase Data API 연결 실패: {reason}") from None
-        if not response_body:
-            return None
-        try:
-            return json.loads(response_body.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise SupabaseRequestError("Supabase Data API 응답이 JSON이 아닙니다.") from error
 
     def _fetch_all(
         self,

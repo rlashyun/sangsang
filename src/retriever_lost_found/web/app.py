@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from ..alerts.links import LINK_PATHS
+from ..alerts.reservations import AlertService
+from ..alerts.sender import create_email_sender
+from ..alerts.settings import load_alert_settings
+from ..alerts.store import SupabaseAlertStore
 from ..config import read_env_value, read_optional_env_value
 from ..integrations.embeddings import BgeM3Client
 from ..integrations.kakao import KakaoLocalClient, kakao_sdk_url
@@ -21,6 +27,7 @@ from ..integrations.supabase import (
     validate_location_ids,
 )
 from ..search.hybrid import search_with_deadline, SearchDeadlineExceeded
+from .alerts import create_alert_router
 
 
 DEFAULT_STATIC_DIR = Path(__file__).with_name("static")
@@ -36,6 +43,7 @@ def create_app(
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
     embedding_client: BgeM3Client | None = None,
+    alert_service: AlertService | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
     sdk_url = kakao_sdk_url(javascript_key)
@@ -85,6 +93,19 @@ def create_app(
     def index() -> HTMLResponse:
         html = (static_dir / "index.html").read_text(encoding="utf-8")
         return HTMLResponse(html.replace("__KAKAO_SDK_URL__", sdk_url))
+
+    def alert_link_page() -> HTMLResponse:
+        """설계 5.4 — 메일 속 확인·연장·취소 링크가 여는 화면. React 앱이 같은 index.html로 그린다.
+
+        여는 것만으로는 아무것도 바꾸지 않는다(화면이 요약을 보여 주고 버튼을 눌러야 POST한다).
+        주소에 링크 토큰이 있으므로 지도 SDK 등 외부 요청에 주소가 실려 나가지 않게 한다.
+        """
+        response = index()
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    for link_path in LINK_PATHS.values():
+        app.add_api_route(link_path, alert_link_page, methods=["GET"], response_class=HTMLResponse)
 
     def make_asset_response(asset_name: str, asset_media_type: str):
         def asset_response() -> FileResponse:
@@ -220,6 +241,8 @@ def create_app(
         latitude = optional_float(y, "y")
         return client.search_keyword(query, longitude=longitude, latitude=latitude)
 
+    # 설계 5.4 — 메일 설정이 없으면 서비스가 None이고 /api/alerts*는 503이다.
+    app.include_router(create_alert_router(alert_service))
     return app
 
 
@@ -239,12 +262,26 @@ def create_runtime_app() -> FastAPI:
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
     embedding_key = read_optional_env_value("OPENROUTER_API_KEY")
+    try:
+        alert_settings = load_alert_settings()
+    except ValueError as error:
+        # 메일 설정이 잘못돼도 지도 서비스는 멈추지 않게 알림 예약만 끈다(설계 14장).
+        print(f"[alerts] 알림 예약을 끕니다: {error}", file=sys.stderr)
+        alert_settings = None
+    alert_service = None
+    if alert_settings is not None:
+        alert_service = AlertService(
+            store=SupabaseAlertStore(supabase_url, supabase_secret_key),
+            sender=create_email_sender(alert_settings.mail),
+            settings=alert_settings,
+        )
     app = create_app(
         KakaoLocalClient(rest_api_key),
         javascript_key,
         map_location_client=map_location_client,
         found_item_client=found_item_client,
         embedding_client=BgeM3Client(embedding_key) if embedding_key else None,
+        alert_service=alert_service,
     )
     app.state.location_source = "supabase"
     app.state.item_counts_available = True

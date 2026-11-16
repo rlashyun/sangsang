@@ -2,12 +2,59 @@
 
 ## 오전·오후 임베딩 실행 이력 분리 — 2026-11-16 KST
 
+- PR #52 충돌 해결: 최신 `origin/main`(`a1a6f30`)을 병합하면서 이 절과 main의 알림 스케줄러 실측 기록을 모두 보존했다. 더미 외부 설정·시스템 TEMP 작업 폴더에서 전체 Python 테스트를 1회 실행해 **383 passed, 1 warning, 2.10초**였다. 경고는 기존 Starlette/httpx 폐기 예고이며 실제 수집·DB·메일 호출은 수행하지 않았다.
 - 조건: 최신 `origin/main`(`7690dc8`)을 `feat/twice-daily-ingestion`에 fast-forward하고 기존 미커밋 홍대입구역 점수 실험 기록을 보존·포함했다. 앱 Python 코드는 변경하지 않았으며 기존 완료 트리거·POST 콜백과 11시대/23시대 복구 RPC 호출을 그대로 사용한다.
 - 로컬 Python 3.12 venv, 시스템 TEMP 작업 디렉터리, 외부 서비스 더미 설정으로 `python -B -m pytest -q -p no:cacheprovider <tests>`를 1회 완주: **208 passed, 1 warning, 2.28초**. 최초 실행은 더미 `KAKAO_JAVASCRIPT_KEY` 누락으로 수집 단계에서 중단됐고 변수를 보완했다. 경고는 기존 FastAPI/Starlette TestClient의 httpx 사용 폐기 예고다. 운영 API를 호출하는 수집·임베딩 테스트는 수행하지 않았다.
 - 격리 PostgreSQL 18.6(PGlite 0.5.16, pgvector/pgcrypto), 초기 물품 2건·v2 벡터 0건에서 기존 임베딩 마이그레이션과 새 마이그레이션을 적용해 SQL 통합 검증을 수행했다. 기존 입력 스냅샷·벡터 보존·출처 장벽·lease/재개 검증에 더해 오전/오후 별도 행, 0건 회차 2행, 중복 콜백의 번호 미소비, 재시도의 동일 행·최초 시작 시각 유지, 자정 뒤 이전 날짜 재개, 11/23시 경계·수동 수집 보호, 23시 복구의 오전 집계 보존을 통과했다. 새 회귀 검증은 이전 스키마에서 `duplicate callbacks consumed IDs` 단언으로 실패하고 새 스키마에서 통과했다. 합성 과거 작업의 기존 필드 전체가 마이그레이션 전후 동일함도 별도 비교했다. 운영 DB는 PostgreSQL 17이며 격리 검증 엔진과 버전이 다르다.
 - **운영 적용 완료(2026-11-16 18:41 KST):** `20261116094120_record_embedding_runs_per_cycle.sql`. MCP 적용 후 원격 이력의 실제 버전에 로컬 파일명을 맞췄다. 적용 직전 수집 running 0건·유효 임베딩 lease 0건을 확인했다. 마이그레이션은 유효 lease가 있으면 중단하며, 기존 RPC 시그니처와 물품·벡터는 보존한다.
 - 운영 전후 물품 **295,402건**, 임베딩 **295,402건**으로 동일했다. 기존 작업 4건의 ID `1/32/37/46`, 집계·상태·완료 시각은 유지됐다. 새 `embedding_runs_overview`의 표시 번호는 `1/2/3/4`, 기존 기록의 회차는 `legacy`, 알 수 없는 최초 시작 시각은 NULL이다. 과거 실행을 오전·오후로 추정 분할하거나 실제 크론을 시험 호출하지 않았다. 다음 오후 실행부터 별도 행을 생성하므로 미래 실제 2회 실행 성공을 이번 검증으로 단정하지 않는다.
 - 운영 조회 뷰의 `security_invoker=true`, anon/authenticated SELECT 불가, 새 RPC의 anon EXECUTE 불가를 확인했다. 보안 advisor는 적용 전후 모두 기존 service_role 전용 테이블의 `rls_enabled_no_policy` INFO 20건뿐이며 새 경고는 없었다. TEMP에 설치한 CLI·격리 DB 도구·검증 스크립트·결과는 작업 후 정리하고 원래 자료는 보존한다.
+
+## ③ 스케줄러 리뷰 반영 마이그레이션 운영 적용 — 2026-11-15 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `20261115220000_alert_review_fixes.sql`(커밋 `97bea13`)을 2026-11-15 23:12 KST에 적용했다. 앞 절들과 같은 방식이다. `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행했고(`lock_timeout` 5초), 같은 트랜잭션에서 `supabase_migrations.schema_migrations`에 `20261115220000 alert_review_fixes`를 기록했다. 전체 요청은 4.5초 걸렸다.
+- 바뀐 것은 세 가지다. 검색 투영 `found_item_search_documents`에 `visible_since` 열과 인덱스를 더했고, `alert_candidate_items`를 바꿨고, `discard_alert_reservation`을 새로 만들었다. 설계 17장 참조.
+- 적용 전 상태(23:11 KST): 실행 중 쿼리 0건, 수집·임베딩 running 0건이었다. 23:00 오후 임베딩 크론은 이미 끝나 있었다. 알림 예약 0건, IP 기록 0건, 검색 투영 295,256행(308MB)이었다.
+- 적용 전 검증 1 — 로컬: 격리 로컬 Supabase(포트 553xx, DB만 띄움)에 마이그레이션 47개를 처음부터 모두 적용했다. 이어서 다음 순서로 확인했고 모두 통과했다.
+  1. `tests/database/verify_alert_scheduler.sql` 실행. 새로 넣은 확인 항목: 나중에 기관이 연결된 물품, 예약 전 물품 제외, 실패 예약의 IP 기록 삭제, 확인된 예약은 지우지 않음
+  2. 저장소 밖 되돌리기 SQL 실행
+  3. 마이그레이션 다시 적용
+  4. 검증 스크립트 다시 실행
+- 적용 전 검증 2 — 운영 리허설: 운영 DB에서 같은 SQL과 함수 호출을 실행한 뒤 `raise exception`으로 되돌렸다. 서울역·시청 1km "지갑" 예약에 예약 시각과 커서를 3일 전으로 두고 돌렸다.
+  - 후보: partner_api 162건, police_api 39건(앞 절 리허설과 같다). 두 출처 후보 조회는 함께 214ms였다.
+  - 실패 예약 정리: IP 기록 1건이 0건이 되고 예약도 지워졌다.
+  - 기존 투영 295,256행은 모두 적용 시각을 `visible_since`로 가졌다.
+  - 리허설 뒤 열과 이력이 남지 않았음을 확인했다. 시험 이메일은 `example.invalid` 주소였고 실제 발송은 없었다.
+- 적용 후 확인:
+  - `visible_since`는 `timestamptz not null default now()`이고 NULL 행은 0건이다. 인덱스가 생겼다.
+  - 두 함수는 service_role만 실행할 수 있다(anon/authenticated 불가). `discard_alert_reservation`은 SECURITY INVOKER이고 search_path가 비어 있다.
+  - `alert_candidate_items`가 `visible_since`를 쓴다. 운영 이력에 11-15 버전 3개가 모두 있다.
+- 검색 영향 확인(읽기만, 1회): 운영 키워드 후보 RPC `keyword_found_item_candidates`를 서울역 1km(기관 19곳) "지갑"으로 호출했다. 결과 2,583건, 176ms였고 응답에 새 열이 없었다.
+- 이 객체들을 쓰는 코드는 PR #49를 병합해야 배포된다. 알림 데이터가 0건이라 운영 동작은 지금 바뀌지 않는다. 되돌리기 SQL은 저장소 밖 `sangsang-work-docs/email-scheduler/rollback-20261115220000_alert_review_fixes.sql`에 있고 로컬에서 확인했다. 운영에서 되돌리려면 이 SQL을 실행한 뒤 이력 행도 지워야 한다.
+
+## ③ 스케줄러 여러 장소(최대 3곳) 마이그레이션 운영 적용 — 2026-11-15 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `20261115130000_alert_reservation_places.sql`(커밋 `4fe3861`)을 2026-11-15 22:08 KST에 적용했다. 앞 절과 같은 방식이다. `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행하고, `supabase_migrations.schema_migrations`에 `20261115130000 alert_reservation_places`를 기록했다. 전체 요청은 3.4초 걸렸다.
+- 적용 전 상태: 알림 예약 0건, 메일 0건, 실행 중 쿼리 0건이었다. 운영 이력의 2026-11-15 버전은 `20261115090000` 하나였다.
+- 적용 전 검증 1 — 로컬: 격리 로컬 Supabase(포트 553xx, DB만 띄움)에 마이그레이션 46개를 처음부터 모두 적용했다. 이어서 `tests/database/verify_alert_scheduler.sql`을 1회 실행해 통과했다. 이 검증 SQL에는 여러 장소 확인 항목을 새로 넣었다: 두 장소 반경의 합집합, 물품마다 가장 가까운 장소, 4곳 거부, 취소 뒤 장소 행 유지.
+- 적용 전 검증 2 — 로컬 REST: 같은 로컬 DB에 REST를 붙여 `AlertService`를 실제로 돌렸다. 두 장소 예약을 만들고, 장소를 화면 순서대로 읽고, 요약을 받고, 삭제했다. 삭제할 때 장소 행도 함께 지워졌다. 확인 메일은 콘솔로만 출력했다.
+- 적용 전 검증 3 — 운영 리허설: 운영 DB에서 같은 SQL과 함수 호출을 실행한 뒤 `raise exception`으로 되돌렸다. 서울역·시청 1km, 커서 3일 전, "지갑" 예약으로 돌렸다. 후보는 partner_api 162건, police_api 39건이었다. 메일 물품에 붙은 가장 가까운 장소는 서울서대문경찰서 → "시청", 서울역(한국철도공사)·서울남대문서울역파출소 → "서울역"이었다. 리허설 뒤 장소 테이블이 없고 옛 칸이 남아 있음을 확인했다.
+- 적용 후 확인:
+  - `alert_reservation_places`는 RLS가 켜져 있다. anon/authenticated는 읽을 수 없고, service_role은 읽고 쓸 수 있다.
+  - 예약 테이블의 `place_name`·`latitude`·`longitude` 칸은 지워졌다.
+  - `create_alert_reservation`은 새 형식 `(text, text, jsonb, integer, text, text, timestamptz, integer, integer)` 하나만 남았다.
+  - 알림 함수 12개는 service_role만 실행할 수 있다.
+  - 운영 이력에 두 버전이 모두 기록됐다.
+  - 로컬 PC에서 운영 REST로 `get_reservation`(없는 id)과 장소 embed 조회를 1회씩 읽기만 했다. 관계 오류는 없었다.
+- 이 객체들을 쓰는 코드는 PR #49를 병합해야 배포된다. 알림 데이터가 0건이어서 옮긴 행도 없다. 되돌리려면 새 마이그레이션이 필요하다. 장소 테이블을 지우고, 예약 테이블에 장소 칸 3개와 옛 함수를 다시 만들어야 한다.
+
+## ③ 스케줄러(분실물 알림) DB 마이그레이션 운영 적용 — 2026-11-15 KST
+
+- 사용자 요청으로 운영 Supabase `retriever`에 `20261115090000_create_alert_scheduler.sql`(커밋 `fa401bc` 기준)을 2026-11-15 21:40 KST에 적용했다. 운영 이력에는 로컬 파일이 없는 버전 6개와 로컬에만 있는 `20261111042228` 1개가 있어 `supabase db push`를 쓰지 않았다. 대신 `supabase db query --linked -f`로 이 파일만 한 트랜잭션에서 실행하고, 같은 트랜잭션에서 `supabase_migrations.schema_migrations`에 `20261115090000 create_alert_scheduler`를 기록했다. 어긋난 이력 7개는 이번에 손대지 않았다.
+- 적용 전 상태: 알림 테이블·함수 0개, `found_items_source_first_seen_idx` 없음, 실행 중 쿼리 0건, `found_items` 약 295,271건(362MB)이었다. 다음 크론(KST 23:00 오후 임베딩)과 겹치지 않는 시각에 적용했다.
+- 적용 전 리허설: 같은 SQL을 운영 DB에서 실행하고, 이어서 예약 생성 → 확인 → 출처별 매칭 대기열·후보 조회 → 메일 claim·payload·finish → 종료 안내 큐 → 취소 → 정리 함수를 차례로 호출했다. 끝에서 `raise exception`으로 전체를 되돌렸다. 오류는 없었고, 함수 호출 구간은 688ms, 전체 요청(새 인덱스 생성 포함)은 7.7초였다. 서울역 1.5km "지갑" 예약에서 두 출처 모두 실제 후보 물품이 나왔다. 리허설 뒤 알림 테이블·인덱스가 남지 않았음을 확인했다. 시험 이메일은 `example.invalid` 주소였고 실제 발송은 없었다.
+- 적용 후 확인: 테이블 6개(`alert_reservations`·`alert_match_cursors`·`alert_messages`·`alert_notified_items`·`alert_runs`·`alert_request_log`)는 모두 RLS가 켜져 있다. 함수 12개는 service_role만 실행할 수 있고 anon/authenticated는 실행할 수 없다. 테이블도 anon/authenticated가 읽을 수 없다. 인덱스 `found_items (item_source_code, first_seen_at)`가 생겼고, 알림 데이터는 0건이며, 운영 이력도 기록됐다.
+- 기존 테이블에는 인덱스 1개만 더했고 데이터는 바꾸지 않았다. 이 객체들을 쓰는 코드(`/api/alerts`, `/api/cron/alert-send`)는 PR #49를 병합해야 배포되므로, 적용 시점에 운영 동작은 바뀌지 않는다. 남은 순서는 Vercel Production 환경 변수 → 프런트 연결 → 병합·배포 → 실제 흐름 확인이다. 이 SQL에는 자동 원복이 없다. 되돌리려면 새 마이그레이션으로 알림 테이블·함수와 인덱스를 지워야 한다.
 
 ## 하루 두 번 수집 DB 마이그레이션 운영 적용 — 2026-11-14 KST
 
