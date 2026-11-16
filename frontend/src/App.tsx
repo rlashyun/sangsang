@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { NewItemAlert } from "./components/NewItemAlert";
 
 import { fetchInstitutions, geocodeAddress, searchPlaces } from "./api/client";
@@ -7,6 +7,8 @@ import { FoundItemBrowser } from "./components/FoundItemBrowser";
 import { KakaoMap, type KakaoMapHandle } from "./components/KakaoMap";
 import { LocationSearch, PLACE_PAGE_SIZE } from "./components/LocationSearch";
 import { SelectionSummary } from "./components/SelectionSummary";
+import { UsageGuide } from "./components/UsageGuide";
+import { GUIDE_HASH, SURVEY_URL } from "./lib/feedback";
 import {
   DEFAULT_SEARCH_RADIUS_METERS,
   isWithinRadius,
@@ -26,13 +28,26 @@ const MAX_WAYPOINT_PLACES = 3;
 export function App() {
   const location = useLocation();
   const navigate = useNavigate();
+  const searchPath = `${location.pathname}${location.search}`;
+  const guideIsOpen = location.hash === GUIDE_HASH;
   const alertIsOpen = location.state?.newItemAlert === true;
+  const searchNavRef = useRef<HTMLAnchorElement>(null);
+  const guideLinkRef = useRef<HTMLAnchorElement>(null);
+  const guideWasOpen = useRef(false);
   const [alertQuery, setAlertQuery] = useState("");
   const mapRef = useRef<KakaoMapHandle>(null);
   const searchPanelRef = useRef<HTMLElement>(null);
   const sheetDrag = useRef<{ pointerId: number; y: number; height: number } | null>(null);
   const skipSheetClick = useRef(false);
   const [sheetExpanded, setSheetExpanded] = useState(false);
+
+  useEffect(() => {
+    if (guideWasOpen.current && !guideIsOpen && !alertIsOpen) {
+      const focusTarget = location.state?.fromGuideSearch ? searchNavRef : guideLinkRef;
+      focusTarget.current?.focus({ preventScroll: true });
+    }
+    guideWasOpen.current = guideIsOpen;
+  }, [alertIsOpen, guideIsOpen, location.state]);
 
   function finishSheetDrag(event: PointerEvent<HTMLButtonElement>, canceled = false) {
     const drag = sheetDrag.current;
@@ -334,21 +349,28 @@ export function App() {
 
   return (
     <>
-      {/* PRD 4.4 — 메뉴는 로고 옆에 유지한다. 후속 화면은 구현 후 연결한다. */}
+      {/* PRD 4.4 — 이용안내를 열어도 검색과 지도 상태를 유지한다. */}
       <header className="app-header">
         <a className="app-wordmark" href="/" aria-label="RETRIEVER 홈">RETRIEVER</a>
         <nav className="app-navigation" aria-label="주요 메뉴">
-          <a className={`app-nav-link${alertIsOpen ? "" : " active"}`} href="#page-title" aria-current={alertIsOpen ? undefined : "page"}
-            onClick={event => { if (alertIsOpen) { event.preventDefault(); void navigate(-1); } }}>물건 찾기</a>
+          <Link ref={searchNavRef} className={`app-nav-link${alertIsOpen ? "" : " active"}`}
+            to="#page-title" aria-current={alertIsOpen ? undefined : "page"}
+            onClick={event => { if (alertIsOpen) { event.preventDefault(); void navigate(-1); } }}>물건 찾기</Link>
           <button className={`app-nav-link${alertIsOpen ? " active" : ""}`} type="button" aria-current={alertIsOpen ? "page" : undefined}
             disabled={addingWaypoint}
-            aria-haspopup="dialog" onClick={() => { if (!alertIsOpen) void navigate(`${location.pathname}${location.search}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}>새 물건 알림</button>
+            aria-haspopup="dialog" onClick={() => { if (!alertIsOpen) void navigate(`${searchPath}${location.hash}`, { state: { ...location.state, newItemAlert: true }, preventScrollReset: true }); }}>새 물건 알림</button>
         </nav>
         <div className="app-header-actions">
-          <button className="app-guide-link" type="button" disabled title="이용안내 화면 준비 중">이용안내</button>
-          <button className="app-guide-link" type="button" disabled title="의견 접수 폼 준비 중">
+          <Link ref={guideLinkRef} className="app-guide-link" to={`${searchPath}${GUIDE_HASH}`} state={{ openedGuide: true }}
+            aria-haspopup="dialog" aria-expanded={guideIsOpen}>이용안내</Link>
+          <a
+            className="app-guide-link"
+            href={SURVEY_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             의견 보내기 <span aria-hidden="true">↗</span>
-          </button>
+          </a>
         </div>
       </header>
       <main className="app-shell">
@@ -470,6 +492,10 @@ export function App() {
           onResetRadius={resetLocation}
         />
       </main>
+      {guideIsOpen && <UsageGuide searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {
+        if (location.state?.openedGuide) void navigate(-1);
+        else void navigate(searchPath, { replace: true });
+      }} />}
       {alertIsOpen && <NewItemAlert places={selectedPlace ? searchCenters : []} query={alertQuery} radiusMeters={radiusMeters} onClose={() => { void navigate(-1); }} />}
     </>
   );

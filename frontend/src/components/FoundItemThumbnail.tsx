@@ -10,11 +10,12 @@ export function FoundItemThumbnail({ item }: { item: FoundItem }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const hasImage = imageUrl !== null && failedUrl !== imageUrl;
   const isLoaded = hasImage && loadedUrl === imageUrl;
+  const isLoading = hasImage && !isLoaded;
 
   return (
     <div className="item-placeholder item-thumbnail">
-      <div className="item-thumbnail-visual">
-        {!isLoaded && <CategoryIcon category={item.raw_category_name} />}
+      <div className={`item-thumbnail-visual${isLoading ? " item-thumbnail-loading" : ""}`} aria-busy={isLoading}>
+        {!hasImage && <CategoryIcon category={item.raw_category_name} />}
         {hasImage && (
           <img
             src={imageUrl}

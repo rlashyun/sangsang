@@ -1,11 +1,5 @@
-// 의견 보내기는 외부 폼(예: 구글 폼)을 새 창으로 연다. 주소는 공개 값이라 VITE_ 환경 변수로 받는다.
-// https 주소만 허용해 javascript: 같은 값이 링크로 들어가지 않게 하고, 비어 있으면 null을 돌려준다.
-export function feedbackFormUrl(): string | null {
-  const value = String(import.meta.env.VITE_FEEDBACK_FORM_URL ?? "").trim();
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" ? url.toString() : null;
-  } catch {
-    return null;
-  }
-}
+// 의견 보내기와 이용안내의 설문조사가 함께 여는 외부 폼(PRD 4.4). 두 화면이 같은 주소를 쓴다.
+export const SURVEY_URL = "https://docs.google.com/forms/d/e/1FAIpQLSfFJwjc5S4Pd1sI1SS6QS6s1hWOaZDt5kuYzBPRnIJoNEO5Ag/viewform?usp=publish-editor";
+
+// 이용안내 창은 주소 해시로 열어 뒤로 가기·새로고침에서도 상태가 유지된다.
+export const GUIDE_HASH = "#guide";

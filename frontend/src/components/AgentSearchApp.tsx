@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
 import { nextSearchRadiusMeters, previousSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
-import { feedbackFormUrl } from "../lib/feedback";
+import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
 import { applyPreviewTheme } from "../lib/theme";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
@@ -58,10 +58,10 @@ export function AgentSearchApp() {
   const [selectedInstitution, setSelectedInstitution] = useState<Institution[]>([]);
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
   const [mapInset, setMapInset] = useState(0);
-  const [guideOpen, setGuideOpen] = useState(false);
   // 장소 변경 중: 확정한 장소를 화면에서 비우고 처음처럼 입력·지도 더블클릭으로 고르게 한다.
   const [placeChanging, setPlaceChanging] = useState(false);
-  const feedbackUrl = useMemo(() => feedbackFormUrl(), []);
+  const searchPath = `${location.pathname}${location.search}`;
+  const guideIsOpen = location.hash === GUIDE_HASH;
   const controller = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const feed = useRef<HTMLDivElement>(null);
@@ -335,12 +335,11 @@ export function AgentSearchApp() {
     <header className="app-header">
       <a className="app-wordmark" href={`/${location.search}`} aria-label="RETRIEVER 홈">RETRIEVER</a>
       <div className="app-header-actions">
-        <button className="app-guide-link" type="button" aria-haspopup="dialog" onClick={() => setGuideOpen(true)}>이용안내</button>
-        {feedbackUrl
-          ? <a className="app-guide-link" href={feedbackUrl} target="_blank" rel="noopener noreferrer">
-            <FeedbackIcon />의견 보내기<span className="sr-only"> (새 창에서 열림)</span>
-          </a>
-          : <button className="app-guide-link" type="button" disabled title="의견 접수 폼 준비 중"><FeedbackIcon />의견 보내기</button>}
+        <Link className="app-guide-link" to={`${searchPath}${GUIDE_HASH}`} state={{ openedGuide: true }}
+          aria-haspopup="dialog" aria-expanded={guideIsOpen}>이용안내</Link>
+        <a className="app-guide-link" href={SURVEY_URL} target="_blank" rel="noopener noreferrer">
+          <FeedbackIcon />의견 보내기<span className="sr-only"> (새 창에서 열림)</span>
+        </a>
       </div>
     </header>
     <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
@@ -443,7 +442,10 @@ export function AgentSearchApp() {
         onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect} onResetRadius={showFullScope} />
     </main>
     {detail && <FoundItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)} onClose={() => void navigate(-1)} />}
-    {guideOpen && <UsageGuide onClose={() => setGuideOpen(false)} />}
+    {guideIsOpen && <UsageGuide searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {
+      if (location.state?.openedGuide) void navigate(-1);
+      else void navigate(searchPath, { replace: true });
+    }} />}
     {alertOpen && <NewItemAlert places={searchCenters} query={conditions?.item_query || ""} radiusMeters={mappedRadius} onClose={() => void navigate(-1)} />}
   </>;
 }

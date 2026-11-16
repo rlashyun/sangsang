@@ -148,6 +148,220 @@ class SchemaMigrationTests(unittest.TestCase):
         )
         self.assertIn(f"grant execute on function {signature} to service_role", migration)
 
+    def _alert_migration(self) -> str:
+        return " ".join(
+            (MIGRATIONS / "20261115090000_create_alert_scheduler.sql")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+
+    def test_alert_scheduler_tables_are_service_role_only(self) -> None:
+        # 절대 규칙 6 · 설계 4장 — 알림 예약 테이블도 RLS를 켜고 service_role만 접근한다.
+        migration = self._alert_migration()
+        tables = (
+            "alert_reservations",
+            "alert_match_cursors",
+            "alert_messages",
+            "alert_notified_items",
+            "alert_runs",
+            "alert_request_log",
+        )
+        for table in tables:
+            self.assertIn(f"create table public.{table} (", migration)
+            self.assertIn(f"alter table public.{table} enable row level security", migration)
+        table_list = ", ".join(f"public.{table}" for table in tables)
+        self.assertIn(f"revoke all on table {table_list} from public, anon, authenticated", migration)
+        self.assertIn(
+            f"grant select, insert, update, delete on table {table_list} to service_role",
+            migration,
+        )
+        sequences = (
+            "public.alert_reservations_id_seq, public.alert_messages_id_seq,"
+            " public.alert_runs_id_seq"
+        )
+        self.assertIn(f"revoke all on sequence {sequences} from public, anon, authenticated", migration)
+        self.assertIn(f"grant usage, select on sequence {sequences} to service_role", migration)
+
+    def test_alert_scheduler_functions_are_service_role_only(self) -> None:
+        migration = self._alert_migration()
+        signatures = (
+            "create_alert_reservation(text, text, text, double precision, double precision,"
+            " integer, text, text, timestamptz, integer, integer)",
+            "confirm_alert_reservation(bigint)",
+            "extend_alert_reservation(bigint, integer)",
+            "cancel_alert_reservation(bigint)",
+            "alert_match_queue(text)",
+            "alert_candidate_items(bigint, text)",
+            "record_alert_match(bigint, text, timestamptz, jsonb)",
+            "enqueue_alert_expiry_notices(interval)",
+            "claim_alert_messages(integer, integer, bigint)",
+            "alert_message_payload(bigint)",
+            "finish_alert_message(bigint, text, text)",
+            "close_ended_alert_reservations()",
+        )
+        for signature in signatures:
+            self.assertIn(
+                f"revoke all on function public.{signature} from public, anon, authenticated",
+                migration,
+            )
+            self.assertIn(f"grant execute on function public.{signature} to service_role", migration)
+        # 함수마다 한 번씩 — 주석에 같은 문구를 쓰지 않는다.
+        self.assertEqual(migration.count("security invoker"), len(signatures))
+        self.assertEqual(migration.count("set search_path = ''"), len(signatures))
+
+    def test_alert_scheduler_keeps_its_rules_in_the_database(self) -> None:
+        migration = self._alert_migration()
+        # 설계 8장 — 끝난 예약에는 이메일이 남을 수 없다.
+        self.assertIn(
+            "status in ('expired', 'cancelled', 'unconfirmed_expired') and email is null)",
+            migration,
+        )
+        # 설계 14장 — IP 제한은 예약 행이 아니라 24시간 기록으로 센다. 취소해도 제한이 풀리지 않고,
+        # IP 해시는 24시간이 지나면 지운다.
+        self.assertNotIn("ip_hash = null", migration)
+        self.assertIn("from public.alert_request_log as request where request.ip_hash = p_ip_hash", migration)
+        self.assertIn(
+            "delete from public.alert_request_log where created_at <= now() - interval '24 hours'",
+            migration,
+        )
+        # 설계 4.4 — 한 번 알린 물품은 다시 들어갈 수 없다.
+        self.assertIn("primary key (reservation_id, found_item_id)", migration)
+        # 설계 4.3 — 예약마다 대기 알림 메일 1통, 같은 만료일 안내 1통, 확인 메일 1통
+        self.assertIn(
+            "on public.alert_messages (reservation_id) where kind = 'match' and status = 'pending'",
+            migration,
+        )
+        self.assertIn(
+            "on public.alert_messages (reservation_id, expiry_for) where kind = 'expiry_notice'",
+            migration,
+        )
+        self.assertIn("on public.alert_messages (reservation_id) where kind = 'confirm'", migration)
+        # PRD 4.1 — 화면의 Haversine과 경계를 맞추는 구면 계산
+        self.assertIn("reservation.radius_m, false", migration)
+        # 절대 규칙 5 — 반경 안 기관 id와 같은 물품만 후보가 된다(미매칭 NULL은 빠진다).
+        self.assertIn("join scope on scope.id = item.storage_location_id", migration)
+        # 커서 이후 새 물품을 바로 찾는 인덱스, 보존기간 삭제가 cascade로 이 표를 찾는 인덱스
+        self.assertIn("on public.found_items (item_source_code, first_seen_at)", migration)
+        self.assertIn("on public.alert_notified_items (found_item_id)", migration)
+        # PRD 4.3-E — 알림 반경은 1·1.5·2km, 비교는 D+1부터, 종료 안내는 마지막 날 실행에서만(24시간 창)
+        # 그날 알림 메일과 한 통으로 보낸다.
+        self.assertIn("check (radius_m in (1000, 1500, 2000))", migration)
+        self.assertIn(
+            "(reservation.created_at at time zone 'asia/seoul')::date"
+            " < (now() at time zone 'asia/seoul')::date",
+            migration,
+        )
+        self.assertIn("p_window interval default interval '24 hours'", migration)
+        self.assertIn("set kind = 'expiry_notice', expiry_for = reservation.expires_at", migration)
+        # 설계 4.6 — 450통 계산이 동시 실행에서도 맞도록 잠근다.
+        self.assertIn("pg_advisory_xact_lock(pg_catalog.hashtext('alert_messages_claim'))", migration)
+        self.assertIn("for update skip locked", migration)
+
+    def _alert_places_migration(self) -> str:
+        return " ".join(
+            (MIGRATIONS / "20261115130000_alert_reservation_places.sql")
+            .read_text(encoding="utf-8")
+            .lower()
+            .split()
+        )
+
+    def test_alert_places_table_is_service_role_only(self) -> None:
+        # 절대 규칙 6 · 설계 16장 — 장소 표도 RLS를 켜고 service_role만 접근한다.
+        migration = self._alert_places_migration()
+        self.assertIn("create table public.alert_reservation_places (", migration)
+        self.assertIn("alter table public.alert_reservation_places enable row level security", migration)
+        self.assertIn(
+            "revoke all on table public.alert_reservation_places from public, anon, authenticated", migration
+        )
+        self.assertIn(
+            "grant select, insert, update, delete on table public.alert_reservation_places to service_role",
+            migration,
+        )
+        # 예약을 지우면(확인 메일 실패 등) 장소도 지운다. 이메일만 지우는 종료·취소에서는 남아 통계에 쓰인다.
+        self.assertIn("references public.alert_reservations (id) on delete cascade", migration)
+        self.assertIn("check (position between 1 and 3)", migration)
+        self.assertIn("primary key (reservation_id, position)", migration)
+        self.assertIn("unique (reservation_id, latitude, longitude)", migration)
+
+    def test_alert_places_moves_the_single_place_columns(self) -> None:
+        migration = self._alert_places_migration()
+        self.assertIn(
+            "insert into public.alert_reservation_places (reservation_id, position, place_name, latitude, longitude)"
+            " select id, 1, place_name, latitude, longitude from public.alert_reservations",
+            migration,
+        )
+        for column in ("place_name", "latitude", "longitude"):
+            self.assertIn(f"drop column {column}", migration)
+        # 옛 함수(장소 칸 3개를 받던 것)는 지운다. 남겨 두면 지운 칸을 쓰다 실패한다.
+        self.assertIn(
+            "drop function public.create_alert_reservation(text, text, text, double precision,"
+            " double precision, integer, text, text, timestamptz, integer, integer)",
+            migration,
+        )
+
+    def test_alert_places_functions_are_service_role_only(self) -> None:
+        migration = self._alert_places_migration()
+        signatures = (
+            "create_alert_reservation(text, text, jsonb, integer, text, text, timestamptz, integer, integer)",
+            "alert_candidate_items(bigint, text)",
+            "alert_message_payload(bigint)",
+        )
+        for signature in signatures:
+            self.assertIn(
+                f"revoke all on function public.{signature} from public, anon, authenticated", migration
+            )
+            self.assertIn(f"grant execute on function public.{signature} to service_role", migration)
+        self.assertEqual(migration.count("security invoker"), len(signatures))
+        self.assertEqual(migration.count("set search_path = ''"), len(signatures))
+
+    def test_alert_places_cover_every_radius_and_name_the_nearest(self) -> None:
+        migration = self._alert_places_migration()
+        # 설계 16장 — 장소마다 반경 안 기관을 합친다(같은 기관은 한 번). PRD 4.1 — 구면 계산.
+        self.assertIn("select distinct location.id", migration)
+        self.assertIn("reservation.radius_m, false", migration)
+        self.assertIn("join scope on scope.id = item.storage_location_id", migration)
+        # 장소는 1~3곳만 받는다.
+        self.assertIn("jsonb_array_length(p_places) not between 1 and 3", migration)
+        # 메일 속 물품마다 가장 가까운 장소
+        self.assertIn("'near_place_name'", migration)
+        self.assertIn("order by extensions.st_distance(", migration)
+
+
+    def _alert_review_migration(self) -> str:
+        return " ".join(
+            (MIGRATIONS / "20261115220000_alert_review_fixes.sql").read_text(encoding="utf-8").lower().split()
+        )
+
+    def test_alert_review_functions_are_service_role_only(self) -> None:
+        migration = self._alert_review_migration()
+        signatures = ("alert_candidate_items(bigint, text)", "discard_alert_reservation(bigint, text)")
+        for signature in signatures:
+            self.assertIn(
+                f"revoke all on function public.{signature} from public, anon, authenticated", migration
+            )
+            self.assertIn(f"grant execute on function public.{signature} to service_role", migration)
+        self.assertEqual(migration.count("security invoker"), len(signatures))
+        self.assertEqual(migration.count("set search_path = ''"), len(signatures))
+
+    def test_alert_cursor_follows_when_an_item_became_visible(self) -> None:
+        # 리뷰 2026-11-15 — 나중에 기관이 연결된 물품도 알린다. 예약 이후 새 물품만이라는 규칙은 따로 지킨다.
+        migration = self._alert_review_migration()
+        self.assertIn(
+            "alter table public.found_item_search_documents add column visible_since timestamptz not null default now()",
+            migration,
+        )
+        self.assertIn("on document.visible_since > reservation.checked_until", migration)
+        self.assertIn("and item.first_seen_at > reservation.created_at", migration)
+        self.assertIn("(select max(candidates.visible_since) from candidates)", migration)
+        # 절대 규칙 5 — 투영(matched 물품에만 있음)과 반경 범위를 그대로 거친다.
+        self.assertIn("join scope on scope.id = document.storage_location_id", migration)
+
+    def test_discarding_a_failed_reservation_frees_its_ip_slot_only(self) -> None:
+        migration = self._alert_review_migration()
+        self.assertIn("and status = 'pending' returning created_at into v_created_at", migration)
+        self.assertIn("request.created_at = v_created_at limit 1", migration)
+
 
 if __name__ == "__main__":
     unittest.main()

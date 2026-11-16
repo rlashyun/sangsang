@@ -190,6 +190,16 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 
 기준: 2026-11-09 역할 변경. 제품 요구사항은 `docs/PRD.md`가 기준이다.
 
+### Supabase 마이그레이션과 GitHub 연동 (PRD 4.5, 5)
+
+- `supabase/migrations/`는 운영에 적용한 SQL과 앞으로 적용할 변경을 버전별로 보관한다. 운영 적용 이력과 파일의 버전·이름·본문을 함께 대조한다. 이미 적용한 SQL 수정·삭제·임의 재번호 대신 새 마이그레이션으로 변경·복구한다.
+- PR #53의 과거 SQL 복원과 파일 버전 정렬은 운영 적용 이력에 맞춘 일회성 정리다. 복원한 SQL을 운영에 재실행하거나 이력 행을 고쳐 다시 적용하지 않는다. 본문이 없는 이력은 현재 함수·인덱스 정의 등으로 따로 확인하고 검증 한계를 남긴다.
+- GitHub 연동 기준은 Working directory `.`, Production branch `main`, Automatic branching **끔**이다. Deploy to production은 PR #53 병합 후 최신 main과 운영 이력을 다시 대조한 뒤 사용자가 활성화한다. 문서에 적힌 목표 설정을 실제 활성화 완료로 간주하지 않는다.
+- 연동 후 DB 변경은 새 SQL을 포함한 PR → 검증 → main 병합 → Supabase 적용 결과 확인 순서다. Vercel 앱 배포와 DB 적용은 별개이므로 GitHub 병합만으로 DB 적용 성공을 단정하지 않는다. 앱과 SQL이 함께 바뀌면 기존 앱과의 호환성과 적용 순서를 PR에 적는다.
+- 운영 긴급 수동 적용도 같은 SQL을 저장소에 남기고 실제 적용 버전과 대조해 자동 배포의 중복·누락을 막는다. `maintenance/`·`repairs/`·`rollbacks/` SQL은 수동 작업 자료이며 자동 실행하거나 통째로 `migrations/`에 옮기지 않는다.
+- 이력 일치는 새 DB에서 전체 스키마를 재생성할 수 있다는 검증이 아니다. 전체 재생성 검증 전에는 Automatic branching을 켜지 않는다. Preview의 운영 DB 연결 금지와 기존 명시 승인 예외는 2장 그대로 적용한다.
+- 절차·공식 문서는 `supabase/README.md`, 대조 결과·미검증 범위는 `docs/measurements.md`에서 확인한다. 비밀값은 직접 열람·출력하지 않는다.
+
 ### 세션 완료 조건
 
 ① PRD의 해당 항목 충족 ② `uv run --with 'pytest>=8,<9' pytest -q` 통과 ③ 근거 주석 존재 ④ 환경 변수·문서 갱신 반영 ⑤ 잰 숫자가 있으면 `docs/measurements.md`에 기록
@@ -208,7 +218,7 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 | **테스트가 실패하면 테스트를 고치지 않는다. 구현을 고친다** | 가장 흔한 실패 모드. 특히 임계값 assertion을 느슨하게 바꾸는 일 |
 | **보안·수집 규칙 테스트를 skip·주석 처리하지 않는다** | 2장 절대 규칙이 실제로 지켜지는지 확인하는 유일한 수단이다 |
 | **테스트용 우회 경로(인증 무시 플래그 등)를 만들지 않는다** | 그 경로가 곧 우회 표면이다 |
-| 테스트는 영역별 디렉토리에 둔다 — `tests/{database,deployment,ingestion,web}/` | 현재 구조를 따른다 |
+| 테스트는 영역별 디렉토리에 둔다 — `tests/{alerts,database,deployment,ingestion,web}/`. `alerts/`는 ③ 스케줄러 영역이며 가짜 저장소·발송기(`alert_fakes.py`)를 `tests/web/`의 알림 테스트도 함께 쓴다 | 현재 구조를 따른다 |
 
 실행: `uv run pytest` · CI는 `main` 대상 PR과 push에서 자동 실행
 
@@ -227,7 +237,8 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 | **`docs/frontend-guidelines.md`** | React 작업 전 — 파일 역할, 상태·API·라우팅·테스트 규칙 |
 | **`README.md`** | 환경 구성·실행 명령·환경 변수 |
 | `.env.example` | 필요한 환경 변수 목록 |
-| `supabase/migrations/` | 스키마의 사실상 원본 |
+| **`supabase/README.md`** | DB 변경·GitHub 자동 배포 설정과 검증 한계 |
+| `supabase/migrations/` | 운영 적용 이력과 새 변경 SQL. 새 DB 전체 재생성은 별도 검증 필요 |
 | `vercel.json` | 크론 스케줄·함수 제한 |
 
 ### 규칙 파일이 두 개인 이유
@@ -263,11 +274,11 @@ src/retriever_lost_found/
 ├─ integrations/             Kakao · Supabase · 경찰청 API 연동
 ├─ search/hybrid.py          BM25 후보와 의미 재정렬
 └─ web/                      FastAPI 라우트 · 크론 · Vite 빌드 결과 제공
-supabase/migrations/         재현 가능한 DB 스키마
+supabase/migrations/         운영 적용 이력과 새 변경 SQL
 tests/                       기능 영역별 테스트
 ```
 
-**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/cron/{partner,police}-sync`(Bearer 인증)
+**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/alerts`·`/api/alerts/{summary,confirm,extend,cancel}`(무캐시, ③ 스케줄러) · `/alerts/{confirm,extend,cancel}`(메일 링크 화면) · `/api/cron/{partner,police}-sync` · `/api/cron/alert-send`(Bearer 인증)
 
 ---
 
@@ -427,7 +438,11 @@ PRD 7.1의 마일스톤은 **날짜가 고정되어 있지 않다("유동적으�
 | 2026-11-05 | **영역별 역할 분담표를 폐지하고 이번 스프린트 작업별 담당으로 대체**(6장, `docs/team-roles.md`). "스케줄러"(분실물 알림 예약)와 "UI/UX"(디자인 개편)의 뜻을 명시하고, 2장에 10번 부연을 추가하고, 9.3 담당을 갱신했다(크론 실패 알림은 권희준). 스프린트 밖 할 일은 `docs/backlog.md`로 정리하고 8장 문서 지도에 등록. 9.1 D5의 README `tools/` 서술을 정정 |
 | 2026-11-05 | 검색어 없는 습득물 목록을 RPC `found_items_page` 50건 커서 페이징으로 전환(1단계). 3장 탐색 흐름과 9.3 성능 행에 반영. 마이그레이션은 같은 날 운영에 적용·검증 |
 | 2026-11-05 | **정량 결과는 모두 `docs/measurements.md`에 기록하기로 함**(6장 문서 보관 규칙의 예외, 세션 완료 조건 ⑤, 8장 문서 지도). 9.3에 PR #28 배포 후 실측과 검색어 경로 작업 보류를 반영 |
+| 2026-11-06 | 8장 엔드포인트에 알림 예약 API(`/api/alerts*`)와 발송 크론(`/api/cron/alert-send`) 추가 |
 | 2026-11-09 | **6장 스프린트 역할을 2026-11-09 ~ 11-15 담당·마감으로 교체**(`docs/team-roles.md`). 9.3 담당 열의 ①~⑦이 지난 스프린트 번호임을 적음 |
+| 2026-11-15 | 8장 엔드포인트에 메일 링크 화면 경로(`/alerts/{confirm,extend,cancel}`) 추가. 알림 매칭은 수집 크론이 아니라 `/api/cron/alert-send` 앞단에서 돈다 |
+| 2026-11-15 | 7장 테스트 영역 목록에 `tests/alerts/`(③ 스케줄러, 설계 문서에서 새 영역으로 정함)를 추가 |
+| 2026-11-16 | PR #53 기준 마이그레이션 이력 관리·GitHub 연동 전제·앱/DB 적용 순서를 6장과 문서 지도에 추가. 운영 이력 일치와 새 DB 전체 재생성 검증을 구분 |
 
 2026-11-08 UI 문서 갱신: 반경·유사도·디자인·알림 일정의 승인된 변경을 PRD와 맞추고, 사진·상세 main 반영과 새 UI 미구현을 구분했다. 과거 변경 이력과 성능 측정은 유지한다.
 

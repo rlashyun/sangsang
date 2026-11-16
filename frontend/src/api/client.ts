@@ -2,6 +2,7 @@ import type {
   AgentEvent, AgentMatches, AgentResponse, AgentTurn,
   FoundItemsPayload,
   InstitutionPayload,
+  Place,
   PlacesPayload,
 } from "../types";
 
@@ -97,4 +98,28 @@ export async function fetchAgentPage(session_id: string, revision: number, curso
 export async function cancelAgentTurn(session_id: string, run_id: string) {
   const response = await postAgent("cancel", { session_id, run_id });
   return (await response.json() as { accepted: boolean }).accepted;
+}
+
+type AlertReservation = {
+  email: string;
+  query: string;
+  places: Pick<Place, "name" | "latitude" | "longitude">[];
+  radius_m: number;
+  consent: true;
+};
+
+// PRD 4.3-E — HTTP 202 means the confirmation email was sent and activation is pending.
+export async function createAlertReservation(reservation: AlertReservation) {
+  const response = await fetch("/api/alerts", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(reservation),
+  });
+  const payload = await response.json().catch(() => null) as { status?: string; error?: string } | null;
+  if (response.status !== 202 || payload?.status !== "pending") {
+    const fallback = response.status === 429
+      ? "알림 신청 한도에 도달했어요. 나중에 다시 시도해 주세요."
+      : "지금은 알림을 신청할 수 없어요. 잠시 뒤 다시 시도해 주세요.";
+    throw new Error(typeof payload?.error === "string" && payload.error ? payload.error : fallback);
+  }
 }

@@ -122,14 +122,10 @@ FastAPI `app`을 진입점으로 사용합니다.
 - `DATA_GO_KR_SERVICE_KEY`
 - `CRON_SECRET`
 
-대화형 검색 화면의 `의견 보내기`는 외부 폼(https)을 새 창으로 엽니다. 폼 주소를
-`VITE_FEEDBACK_FORM_URL`에 넣으면 프런트 빌드에 포함됩니다. 브라우저에 공개되는 값이며
-선택 항목입니다. 비워 두면 버튼이 비활성으로 남고, 테스트·CI에는 필요하지 않습니다.
-
 검색 의미 확장에는 서버 전용 `OPENROUTER_API_KEY`를 선택적으로 설정합니다.
 키가 없으면 키워드 검색만 실행하며, 테스트·CI에서는 빈 값으로 둡니다.
 Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이블을 준비하고
-`supabase/migrations/20261111042228_scoped_bge_m3_semantic_search.sql`을 적용합니다.
+`supabase/migrations/20261111042456_scoped_bge_m3_semantic_search.sql`을 적용합니다.
 운영 DB를 Preview에 연결하지 않습니다.
 
 단, 2026-11-11 김성현이 명시적으로 승인한 `seonghyun_search` 검색 실험 Preview는
@@ -215,8 +211,10 @@ DB 트리거 적용 이후 최종 저장 결과를 기준으로 기록합니다.
 
 수집 종료 후에도 완료 트리거와 인증된 POST 콜백으로 임베딩을 연결합니다.
 오전·오후 각각 두 출처의 종료를 기다리며 오전 이력으로 오후 완료를 대신하지 않습니다.
-같은 날 오후에 누락분이 생기면 완료된 임베딩 작업을 다시 열어 신규·누락분만
-처리하고 기존 벡터는 유지합니다. 두 복구 크론은 콜백 유실과 중단된 작업을 보완합니다.
+`embedding_runs`는 KST 날짜·입력 버전·회차(`run_slot`)마다 한 행을 기록합니다.
+`morning`은 09시대, `afternoon`은 21시대 수집 종료 후 실행하며, 신규·누락이 0건이어도
+별도의 완료 행을 남깁니다. 재시도·복구는 같은 회차의 행을 이어 쓰고 기존 벡터는 유지합니다.
+두 복구 크론은 콜백 유실과 중단된 작업을 보완하며 추가 회차를 만들지 않습니다.
 감사 로그의 `business_date`는 수집일(KST)이고 `metadata.cleanup_enabled`로
 오전 정리/오후 수집 전용 실행을 구분합니다.
 요청은 `Authorization: Bearer $CRON_SECRET`이 일치해야 실행됩니다.
@@ -228,6 +226,34 @@ Hobby도 프로젝트당 크론 100개를 지원하며 각 크론은 하루 한 
 앱과 크론 설정을 배포합니다. 기존 감사 기록은 오전 실행으로 취급하므로 먼저 적용해도
 기존 앱과 호환됩니다. 이 마이그레이션은 완료 판정·복구 함수만 교체하며 물품·벡터를
 수정하거나 초기화하지 않습니다.
+
+### 임베딩 실행 기록 확인
+
+회차별 기록에는 `record_embedding_runs_per_cycle` 마이그레이션도 필요합니다.
+기존 앱의 RPC 호출과 호환되므로 앱 배포 전에 적용할 수 있습니다. 마이그레이션은
+물품·벡터·기존 작업 ID/집계를 보존합니다. 실행 중인 임베딩 lease가 있으면 적용을
+중단하므로 작업 종료 후 다시 적용합니다. 과거 일일 합산은 `legacy`로 남기고,
+적용 당일의 기존 일일 행은 오전 기록으로 재사용하며 오후부터 별도 행을 만듭니다.
+과거 오전·오후 결과를 추정해서 두 행으로 복제하지 않습니다.
+
+Supabase Table Editor에서 **`embedding_runs_overview`** 뷰를 열고 `id` 오름차순으로
+보면 번호가 `1, 2, 3…`으로 표시됩니다. `business_date`, `run_slot`, 예정 시각,
+상태, 생성·시작·완료 시각(KST), 처리·재사용·실패·잔여 건수가 앞쪽에 배치됩니다.
+표시용 `id`는 조회 시 계산되므로 행 삭제나 과거 날짜 작업 추가 시 바뀔 수 있습니다.
+실제 작업을 식별할 때는 뒤쪽의 `run_id`를 사용합니다. 원본 테이블의 `id`는 재번호하지 않습니다.
+
+- `scheduled_at_kst`는 예정 수집 회차이며 실제 임베딩 시작은 `started_at_kst`입니다.
+  과거 작업의 시작 시각은 추정하지 않고 NULL로 둡니다.
+- `succeeded_count`는 해당 회차에 저장한 벡터 수이며 `reused_count`를 포함합니다.
+  `failed_count`는 누적 실패 시도 물품 수로, `remaining_count`와 다릅니다.
+- `new_today_count`는 그날 처음 저장한 물품의 누적 스냅샷으로 회차별 신규 수가 아닙니다.
+- 수동 CLI 실행은 `manual` 회차로 구분하며 자동 오전·오후 기록과 섞지 않습니다.
+- 수집 실패·미호출 여부는 `ingestion_runs`에서 함께 확인합니다. 임베딩 성공만으로
+  두 출처 수집의 성공을 판단하지 않습니다.
+
+되돌릴 때는 이 마이그레이션 직전의 SQL 함수 정의와 날짜별 유일 제약이 한 쌍입니다.
+회차별 행이 이미 쌓였다면 이전 날짜별 제약을 바로 복원할 수 없습니다. 기존 행을 보존해
+집계·보관하는 별도 역방향 마이그레이션을 먼저 작성해야 하며, 과거 마이그레이션을 재실행하지 않습니다.
 
 ## 기관의 카카오 검색어 확인
 
@@ -244,6 +270,63 @@ uv run python scripts/search_storage_location_kakao.py 5052
 원래 기관 데이터를 적재하고 스키마 마이그레이션을 적용한 DB에서 수동 실행하는 파일이며,
 해당 값은 운영 DB에 이미 반영했습니다. 물품 원문이나 물품 연결 상태는 이 파일로 갱신하지 않습니다.
 서로 다른 DB에서도 같은 기관을 가리키도록 생성 ID 대신 출처·원본 기관 키로 연결합니다.
+
+## 분실물 알림 메일(스케줄러)
+
+검색 조건과 이메일로 알림을 예약하면, 등록 다음날부터 7일 동안 새로 들어온 습득물 중 유사한 물품을
+메일로 알리고 마지막 날에는 종료·연장을 안내합니다(PRD 2.1-4, 4.2 P1, 4.3-E).
+설계는 `docs/alert-scheduler/`(최신 결정은 설계 문서 15장), 화면 연결은 같은 폴더의 `frontend-handoff.md`에 있습니다.
+
+- `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 한 번 돕니다.
+  출처별 매칭(120초 안) → 마지막 날 종료 안내 → 발송 → 정리 순서입니다. 수집 크론은 알림을 건드리지 않습니다.
+- 유사 판정은 운영 검색의 키워드 단계(동의어·BM25)와 같습니다. 같은 검색어로 같은 반경을 검색했을 때
+  결과에 나오는 새 물품을 알립니다(`alerts/judge.py`).
+- 최근 24시간 동안 하루 발송 상한(Resend 기본 100통, Gmail SMTP 기본 450통)까지 보냅니다.
+- 메일 속 링크는 `/alerts/confirm`·`/alerts/extend`·`/alerts/cancel` 화면을 엽니다.
+- 운영 DB에는 `supabase db push`로 `20261115090000_create_alert_scheduler.sql`을 적용합니다.
+- 메일 설정이 하나라도 없으면 알림 예약 API(`/api/alerts*`)는 503을 돌려줍니다.
+  Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
+
+발신 수단은 **Gmail 앱 비밀번호(SMTP)** 입니다. 도메인을 사면 `MAIL_PROVIDER=resend`로
+Resend 무료 플랜에 옮길 수 있고, 코드는 고치지 않아도 됩니다.
+
+서버 전용 환경 변수입니다. 브라우저로 전달하지 않습니다.
+
+- `MAIL_PROVIDER` — `smtp`(기본, 비워도 됨) 또는 `resend`
+- `RESEND_API_KEY` — Resend API 키(`MAIL_PROVIDER=resend`일 때 필수)
+- `MAIL_FROM` — 보내는 주소. Resend는 **인증한 도메인의 주소**여야 합니다. 예: `리트리버 <alert@우리도메인>`
+- `MAIL_SMTP_HOST` — `smtp.gmail.com` (`MAIL_PROVIDER=smtp`일 때)
+- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS) (〃)
+- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소 (〃)
+- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리, 공백 없이 (〃)
+- `PUBLIC_BASE_URL` — 메일 속 링크 주소의 앞부분. 로컬은 `http://127.0.0.1:8000`
+- `ALERT_SECRET` — 링크 토큰과 IP 해시에 쓰는 무작위 문자열
+- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본은 Resend 100, SMTP 450
+
+**나중에 Resend로 옮길 때** — Resend 무료 플랜은 하루 100통·월 3,000통이고(하루는 UTC 기준),
+**도메인을 사서 인증하지 않으면 계정 주인 주소로만 보낼 수 있습니다.**
+
+1. Resend 대시보드 Domains에서 도메인을 추가하고, 안내하는 DNS 레코드(SPF·DKIM)를 도메인 관리 화면에 등록합니다.
+2. 인증이 끝나면(보통 몇 분~몇 시간) API Keys에서 발송 권한 키를 만들어 `RESEND_API_KEY`에 넣습니다.
+3. `MAIL_FROM`을 그 도메인 주소로 바꿉니다.
+
+메일마다 대기열 id와 내용으로 만든 `Idempotency-Key`를 붙여, 같은 메일을 다시 보내도
+Resend가 24시간 동안 한 번만 보냅니다(Gmail SMTP에는 이 기능이 없습니다).
+
+**Gmail 준비** — 서비스 전용 Gmail 계정에 2단계 인증을 켠 뒤 https://myaccount.google.com/apppasswords
+에서 앱 비밀번호를 만듭니다. 계정 비밀번호를 바꾸면 앱 비밀번호가 무효가 되어 메일이 멈춥니다.
+`ALERT_SECRET`은 다음 명령으로 만듭니다. 값을 바꾸면 이미 보낸 메일의 링크가 모두 무효가 됩니다.
+
+```powershell
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+배포 전에는 DB 없이 메일 한 통만 보내 발송 설정과 스팸함 분류를 확인합니다.
+실제 메일이 나가므로 받는 주소를 확인한 뒤 실행합니다.
+
+```powershell
+uv run python -m retriever_lost_found.alerts.send_test --to 받을주소@example.com
+```
 
 ## 프로젝트 구조
 
