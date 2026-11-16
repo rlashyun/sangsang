@@ -20,6 +20,9 @@ class Institution:
     institution_id: int
     latitude: float
     longitude: float
+    name: str = ""
+    address: str = ""
+    phone: str = ""
 
 
 @dataclass(frozen=True)

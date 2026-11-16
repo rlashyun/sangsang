@@ -56,6 +56,9 @@ export function AgentSearchApp() {
   const [institutionsLoaded, setInstitutionsLoaded] = useState(false);
   const [institutionError, setInstitutionError] = useState("");
   const [selectedInstitution, setSelectedInstitution] = useState<Institution[]>([]);
+  const selectedInstitutionRef = useRef(selectedInstitution);
+  selectedInstitutionRef.current = selectedInstitution;
+  const [institutionItemIds, setInstitutionItemIds] = useState<number[]>([]);
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
   const [mapInset, setMapInset] = useState(0);
   // 장소 변경 중: 확정한 장소를 화면에서 비우고 처음처럼 입력·지도 더블클릭으로 고르게 한다.
@@ -121,7 +124,13 @@ export function AgentSearchApp() {
     const allowed = new Set(conditions.institution_ids);
     const groupInScope = group.filter(row => row.storage_location_id !== undefined && allowed.has(row.storage_location_id));
     if (groupInScope.length) {
-      setSelectedInstitution(groupInScope);
+      const currentGroup = selectedInstitutionRef.current;
+      const sameGroup = groupInScope.length === currentGroup.length
+        && groupInScope.every((row, index) => row.storage_location_id === currentGroup[index].storage_location_id);
+      if (!sameGroup) {
+        setInstitutionItemIds([]);
+        setSelectedInstitution(groupInScope);
+      }
       setTab("results");
     }
   }, [conditions, currentPlace, response?.matches]);
@@ -155,18 +164,8 @@ export function AgentSearchApp() {
     const request = new AbortController();
     controller.current = request;
     setLastTurn(turn);
-    setPlaceChanging(false);
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
-    setTab("chat");
-    // PRD 4.3-B — Only the newest search supplies recommendations and result pages.
-    setResponse(current => current && {
-      ...current, matches: null, recommended_item_ids: [], search_attempts: [],
-    });
-    setItems([]);
-    setCursor(null);
-    setItemPage(0);
-    setSelectedInstitution([]);
     if (turn.type === "message" && !retry) {
       setMessages(current => [...current, { author: "user", text: turn.text }]);
       setDraft("");
@@ -206,7 +205,16 @@ export function AgentSearchApp() {
       }
       if (result.message) replies.push({ author: "agent", text: result.message });
       if (replies.length) setMessages(current => [...current, ...replies]);
-      if (result.status !== "cancelled") {
+      if (result.status === "answered") {
+        // PRD 4.3 — An informational turn advances the session without replacing results.
+        setResponse(current => current ? { ...current, revision: result.revision } : result);
+        const candidateIndex = result.place_candidates.findIndex(place => place.candidate_id === result.highlight_candidate_id);
+        if (candidateIndex >= 0) {
+          setPlacePage(Math.floor(candidateIndex / PLACE_PAGE_SIZE));
+          setSelectedCandidate(result.highlight_candidate_id ?? null);
+        }
+      } else if (result.status !== "cancelled") {
+        setPlaceChanging(result.status === "awaiting_place_clarification");
         setResponse(result.status === "ended" ? null : result);
         setItems(result.matches?.items ?? []);
         setCursor(result.matches?.next_cursor ?? null);
@@ -214,7 +222,7 @@ export function AgentSearchApp() {
         setPlacePage(0);
         setSelectedCandidate(null);
         setSelectedInstitution([]);
-        if ((result.matches?.total_count ?? 0) > 0) setTab("results");
+        setTab((result.matches?.total_count ?? 0) > 0 ? "results" : "chat");
       }
       setLastTurn(null);
     } catch (err) {
@@ -298,7 +306,14 @@ export function AgentSearchApp() {
 
   function send(event: FormEvent) {
     event.preventDefault();
-    if (draft.trim()) void submit({ type: "message", text: draft.trim() });
+    if (draft.trim()) {
+      const visibleItemIds = selectedInstitution.length
+        ? institutionItemIds
+        : items.slice(itemPage * ITEM_PAGE_SIZE, (itemPage + 1) * ITEM_PAGE_SIZE).map(item => item.item_id);
+      void submit({
+        type: "message", text: draft.trim(), changing_place: placeChanging, visible_item_ids: visibleItemIds,
+      });
+    }
   }
 
   function toggleResults() {
@@ -416,8 +431,8 @@ export function AgentSearchApp() {
         </div>
         <div className="agent-drawer-body">
           {groupIds && submittedQuery
-            ? <AgentInstitutionResults key={`${response?.revision}:${groupIds}`} ids={groupIds}
-              query={submittedQuery} name={groupNames} institutions={institutionIndex} onOpen={openDetail} onClear={showFullScope} />
+            ? <AgentInstitutionResults key={`${submittedQuery}:${groupIds}`} ids={groupIds}
+              query={submittedQuery} name={groupNames} institutions={institutionIndex} onOpen={openDetail} onClear={showFullScope} onVisibleItems={setInstitutionItemIds} />
             : matchCount === 0 ? <p className="agent-bubble">일치하는 습득물을 찾지 못했어요.</p> : <>
               <AgentResultList items={items.slice(itemPage * ITEM_PAGE_SIZE, (itemPage + 1) * ITEM_PAGE_SIZE)} institutions={institutionIndex} onOpen={openDetail} />
               {pageCount > 1 && <nav className="agent-pagination" aria-label="습득물 결과 페이지">

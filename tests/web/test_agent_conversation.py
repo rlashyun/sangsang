@@ -12,7 +12,7 @@ from retriever_lost_found.web.agent_search import Institution, PlaceCandidate, S
 def decision(action, *, place=None, item=None, message="알겠습니다.", asks_for=None):
     return {
         "action": action, "message": message, "place_query": place, "item_query": item,
-        "clear_item_query": False, "asks_for": asks_for,
+        "clear_item_query": False, "asks_for": asks_for, "item_changes": None, "target": None,
     }
 
 
@@ -171,3 +171,29 @@ def test_short_reply_to_place_question_remains_a_place_clue():
     assert turn.state.candidates == (candidate,)
     assert turn.pending is None
     find_places.assert_called_once_with("강남 나이키 매장")
+
+
+def test_item_updates_keep_other_clues_and_only_limit_the_search_query():
+    place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
+    state = Conversation("강남역", confirmed=place)
+    full_features = "앞면에 작은 로고가 있고 뒷면에 작은 긁힘이 있어요"
+    for text, patch in [
+        ("검은 나이키 지갑이에요", {"kind": "지갑", "color": "검은", "brand": "나이키"}),
+        ("앞면 로고와 뒷면 긁힘", {"features": full_features}),
+        ("갈색이었어요", {"color": "갈색"}),
+        ("브랜드는 빼 주세요", {"brand": ""}),
+    ]:
+        changes = dict.fromkeys(("kind", "color", "brand", "features")) | patch
+        model = Mock(return_value={**decision("search"), "item_changes": changes})
+        result = respond_to_message(state, text, model=model, find_places=Mock())
+        assert result.status == "ready_to_search"
+        state = result.state
+        if patch == {"color": "갈색"}:
+            assert state.item_details.brand == "나이키"
+
+    assert state.item_details.kind == "지갑"
+    assert state.item_details.color == "갈색"
+    assert state.item_details.brand == ""
+    assert state.item_details.features == full_features
+    assert len(result.pending.query) <= 30
+    assert "검은" not in result.pending.query

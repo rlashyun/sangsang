@@ -280,7 +280,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     kakao_client = KakaoLocalClient(rest_api_key)
     agent_router = None
     if agent_search:
-        from .agent_adapters import adapt_institutions, adapt_places, adapt_search_page
+        from .agent_adapters import adapt_institutions, adapt_places, adapt_search_item, adapt_search_page
         from .agent_api import create_agent_router
 
         def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None):
@@ -293,6 +293,9 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             find_places=lambda query: adapt_places(kakao_client, query),
             get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),
             search_items=search_items,
+            find_items_by_id=lambda scope, item_ids: [
+                adapt_search_item(row) for row in found_item_client.fetch_item_details(list(scope), item_ids)
+            ],
         )
     try:
         alert_settings = load_alert_settings()
