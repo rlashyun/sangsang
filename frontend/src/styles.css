@@ -1810,7 +1810,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 
 /* PRD 4.3-A · 4.4 — 대화 패널을 기존 지도 위에 놓고 모바일에서는 지도 위쪽을 열어 둔다. */
-.agent-shell { --search-panel-width: min(450px, calc(48vw - 24px)); }
+.agent-shell { --search-panel-width: min(450px, calc(48vw - 24px)); --agent-drawer-width: calc(var(--search-panel-width) * .85); }
 .agent-panel {
   position: relative;
   z-index: 5;
@@ -1842,16 +1842,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   cursor: pointer;
 }
 .agent-radius-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; }
-.agent-tabs { display: flex; gap: 5px; }
-.agent-tabs button, .agent-history {
-  cursor: pointer;
-  border: 0;
-  border-radius: 8px;
-  padding: 7px 10px;
-  color: var(--color-text-secondary);
-  background: transparent;
-}
-.agent-tabs button[aria-pressed="true"] { background: var(--color-bg-selected); color: var(--color-action-text); font-weight: 700; }
 .agent-feed { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 9px; padding: 2px; }
 .agent-bubble {
   align-self: flex-start;
@@ -1864,10 +1854,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   background: var(--color-bg-hover);
 }
 .agent-bubble-user { align-self: flex-end; background: var(--color-action); color: var(--color-text-on-solid); }
-.agent-intro { color: var(--color-text-secondary); }
-.agent-intro strong { color: var(--color-text-primary); }
-.agent-examples, .agent-pagination { display: flex; flex-wrap: wrap; gap: 5px; }
-.agent-examples button, .agent-pagination button {
+.agent-pagination { display: flex; flex-wrap: wrap; gap: 5px; }
+.agent-pagination button {
   min-height: 30px;
   padding: 4px 9px;
   background: var(--color-bg-surface);
@@ -1908,13 +1896,68 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .agent-list-heading, .agent-status { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--color-text-secondary); }
 .agent-list-heading { margin-block: 2px 7px; }
-.agent-history { align-self: center; }
 .agent-unread { display: inline-block; width: 6px; height: 6px; margin-left: 3px; border-radius: 50%; vertical-align: top; background: var(--color-error); }
 .agent-status { padding: 7px 9px; border-radius: 9px; background: var(--color-bg-hover); }
 .agent-status-error { color: var(--color-error); }
-.agent-compose { display: flex; gap: 7px; padding-top: 8px; border-top: 1px solid var(--color-border-separator); }
+.agent-compose { display: flex; align-items: center; gap: 7px; padding-top: 8px; border-top: 1px solid var(--color-border-separator); }
+.agent-compose .agent-photo, .agent-compose .agent-send { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; }
+.agent-compose .agent-photo { background: var(--color-bg-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border-input); border-radius: 10px; }
+.agent-compose .agent-photo:hover { background: var(--color-bg-selected); color: var(--color-action-text); }
+.agent-compose .agent-send { border-radius: 50%; }
+.agent-compose svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .agent-compose input { flex: 1; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--color-border-input); border-radius: 10px; background: var(--color-bg-surface); color: inherit; }
 .agent-panel button:disabled { opacity: .55; cursor: not-allowed; }
+
+.agent-results-open { align-self: flex-start; display: inline-flex; align-items: center; gap: 3px; padding: 8px 12px; border: 0; border-radius: 16px; background: var(--color-bg-selected); color: var(--color-action-text); font-weight: 700; cursor: pointer; }
+
+/* 결과 서랍 — 채팅 패널 오른쪽에 이어 붙는 절반 너비 패널 (사용자 선택 시안 1) */
+.agent-panel-joined { border-radius: 20px 0 0 20px; border-right-color: var(--color-border-separator); box-shadow: none; }
+.agent-drawer {
+  position: absolute;
+  z-index: 4;
+  top: var(--layout-gutter);
+  bottom: var(--layout-gutter);
+  left: calc(var(--layout-gutter) + var(--search-panel-width));
+  width: var(--agent-drawer-width);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-panel);
+  border-left: 0;
+  border-radius: 0 20px 20px 0;
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-floating);
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+.agent-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 10px 14px; border-bottom: 1px solid var(--color-border-separator); }
+.agent-drawer-head button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+.agent-drawer-head button:hover { background: var(--color-bg-hover); }
+.agent-drawer-head svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.agent-drawer-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
+.agent-drawer .agent-item-list { gap: 0; }
+.agent-drawer .agent-item { gap: 8px; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--color-border-separator); border-radius: 0; }
+.agent-drawer .agent-item .item-thumbnail { flex: 0 0 40px; width: 40px; height: 40px; }
+.agent-drawer .agent-item .item-thumbnail span { font-size: 20px; }
+.agent-drawer .agent-list-heading, .agent-drawer .agent-bubble, .agent-drawer .agent-pagination { margin-inline: 12px; }
+@media (min-width: 821px) {
+  .agent-shell-drawer .institution-status, .agent-shell-drawer .map-toolbar { left: calc(var(--search-panel-width) + var(--agent-drawer-width) + var(--layout-gutter) * 2); }
+  .agent-shell-drawer .map-toolbar { max-width: calc(100% - var(--search-panel-width) - var(--agent-drawer-width) - var(--layout-gutter) * 3); }
+}
+@media (max-width: 820px) {
+  .agent-panel-joined { border-radius: 20px; box-shadow: var(--shadow-floating); }
+  .agent-drawer {
+    z-index: 6;
+    top: auto;
+    left: var(--layout-gutter);
+    right: var(--layout-gutter);
+    bottom: var(--layout-gutter);
+    width: auto;
+    height: 56%;
+    border: 1px solid var(--color-border-panel);
+    border-radius: 20px;
+  }
+}
 
 @media (max-width: 820px) {
   .app-shell.agent-shell { --layout-gutter: 9px; height: calc(100dvh - 64px); min-height: 0; overflow: hidden; display: flex; align-items: stretch; justify-content: end; }
