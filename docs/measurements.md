@@ -1,5 +1,13 @@
 # 실측 기록
 
+## 운영 기준 마이그레이션 이력 정렬 — 2026-11-16 KST
+
+- 조건: GitHub `main`의 `c1cfc01`과 운영 Supabase `retriever`의 `supabase_migrations.schema_migrations`를 읽기 전용으로 대조했다. 이 확인은 SQL 파일과 적용 이력의 정렬이며 운영 스키마·물품·임베딩·이력 행을 수정하지 않았다.
+- 최신 main에는 파일 48개, 운영에는 이력 53개가 있었다. 운영 이력에 보관된 원문으로 임베딩 백필·압축 가져오기·가져오기 함수 제한·cosine 인덱스 생성·ANN 검증 제거의 누락 파일 5개를 복원했다. `scoped_bge_m3_semantic_search`는 SQL을 바꾸지 않고 파일 버전을 `20261111042228`에서 운영의 `20261111042456`으로 맞췄다.
+- 정리 후 파일 53개와 운영 이력 53개의 버전·이름이 모두 일치했다. SQL 본문이 저장된 52개는 주석·공백·문장 구분자를 제외한 본문 비교가 모두 일치했다. 원문 자체가 없는 `20261115220000_alert_review_fixes`는 이미 main에 반영된 원본 파일을 유지했고, 두 함수 `alert_candidate_items`·`discard_alert_reservation`의 본문을 현재 운영 정의와 별도로 비교해 일치함을 확인했다. `visible_since` 인덱스도 운영에서 확인했다. 전체 스키마 재생성 검증이나 운영 자동 배포 시험을 수행한 결과는 아니다.
+- 격리 TEMP 체크아웃, 기존 Python 3.12 venv, `PYTHONPATH`는 해당 체크아웃의 `src`, 외부 서비스 설정은 더미 값으로 두고 `python -B -m pytest -q -p no:cacheprovider tests`를 1회 실행했다. **383 passed, 1 warning, 1.78초**였다. 경고는 기존 Starlette/httpx 폐기 예고다. 실제 수집·임베딩·메일 요청은 실행하지 않았다.
+- 자동 배포를 사용하려면 이 정리를 main에 병합한 뒤 최신 운영 이력과 다시 대조한다. 유료 테스트 DB가 필요하지 않은 현재 목적에서는 GitHub 연동의 `Automatic branching`을 끄고 기존 운영 프로젝트로만 배포한다. Supabase/Vercel 설정은 이번 작업에서 변경하지 않는다.
+
 ## 오전·오후 임베딩 실행 이력 분리 — 2026-11-16 KST
 
 - PR #52 충돌 해결: 최신 `origin/main`(`a1a6f30`)을 병합하면서 이 절과 main의 알림 스케줄러 실측 기록을 모두 보존했다. 더미 외부 설정·시스템 TEMP 작업 폴더에서 전체 Python 테스트를 1회 실행해 **383 passed, 1 warning, 2.10초**였다. 경고는 기존 Starlette/httpx 폐기 예고이며 실제 수집·DB·메일 호출은 수행하지 않았다.
