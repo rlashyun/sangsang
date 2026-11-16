@@ -33,6 +33,8 @@ class Turn(Payload):
     session_id: str | None = Field(default=None, max_length=80)
     revision: int | None = Field(default=None, ge=0)
     text: str | None = Field(default=None, min_length=1, max_length=1000)
+    changing_place: bool = False
+    visible_item_ids: list[int] = Field(default_factory=list, max_length=10)
     candidate_id: str | None = Field(default=None, min_length=1, max_length=200)
     radius_m: Literal[1000, 1500, 2000] | None = None
     # 지도 더블클릭으로 고른 지점. 국내 좌표 범위만 받는다.
@@ -61,8 +63,10 @@ class Session:
     scope: tuple[int, ...] = ()
     radius_m: int | None = None
     manual_radius: int | None = None
-    page_query: str | None = None
+    last_search_query: str | None = None
     cursor: str | None = None
+    match_count: int | None = None
+    items: dict[int, dict[str, Any]] = field(default_factory=dict)
     run_id: str | None = None
     cancelled: Event = field(default_factory=Event)
     request_ids: set[str] = field(default_factory=set)
@@ -77,6 +81,30 @@ def _json(content: dict, status: int = 200) -> JSONResponse:
     return JSONResponse(content, status_code=status, headers={"Cache-Control": "no-store"})
 
 
+def _item_details_message(item: dict[str, Any], institutions: Sequence[Institution]) -> str:
+    institution = next((row for row in institutions if row.institution_id == item["institution_id"]), None)
+    name = item.get("item_name") or "선택한 습득물"
+    storage = (institution.name if institution else "") or item.get("raw_storage_name")
+    if not storage:
+        return f"‘{name}’의 보관기관 정보가 표시되어 있지 않아요."
+    lines = [f"‘{name}’의 보관기관은 {storage}입니다."]
+    if institution and institution.address:
+        lines.append(f"주소는 {institution.address}입니다.")
+    if institution and institution.phone:
+        lines.append(f"방문 전에 {institution.phone}으로 수령 가능 여부를 확인해 주세요.")
+    return " ".join(lines)
+
+
+def _requested_radius(action: str, target: int | None, current: int | None) -> int | None:
+    radii = (1000, 1500, 2000)
+    if action == "set_radius":
+        return target if target in radii else None
+    current = current or radii[0]
+    if action == "expand_radius":
+        return next((radius for radius in radii if radius > current), None)
+    return next((radius for radius in reversed(radii) if radius < current), None)
+
+
 def create_agent_router(
     *,
     model: Model | None = None,
@@ -84,6 +112,7 @@ def create_agent_router(
     find_places: Callable[[str], Sequence[PlaceCandidate]],
     get_institutions: Callable[[], Sequence[Institution]],
     search_items: Callable[[tuple[int, ...], str, str | None], SearchPage],
+    find_items_by_id: Callable[[tuple[int, ...], list[int]], Sequence[dict[str, Any]]] | None = None,
 ) -> APIRouter:
     if model is None:
         if not openrouter_api_key:
@@ -153,7 +182,9 @@ def create_agent_router(
                 session.state = Conversation()
                 session.status = "ended"
                 session.scope = ()
-                session.cursor = session.page_query = None
+                session.cursor = session.last_search_query = None
+                session.items.clear()
+                session.match_count = None
                 session.touched = monotonic()
                 session.revision += 1
                 return _json({"session_id": session_id, "run_id": run_id, "revision": session.revision, "status": "ended"})
@@ -182,15 +213,74 @@ def create_agent_router(
                             return ()
 
                         place_query = None
-                        reply = respond_to_message(state, turn.text, model=model, find_places=deferred_places)
+                        visible_by_id = {item_id: session.items[item_id] for item_id in turn.visible_item_ids if item_id in session.items}
+                        missing_ids = [item_id for item_id in turn.visible_item_ids if item_id not in visible_by_id and item_id > 0]
+                        if missing_ids and scope and find_items_by_id:
+                            try:
+                                visible_by_id.update(
+                                    (item["item_id"], item) for item in find_items_by_id(scope, missing_ids)
+                                    if item["item_id"] in missing_ids and item["institution_id"] in scope
+                                )
+                            except (RuntimeError, ValueError):
+                                pass
+                        # Preserve positions when an item is no longer available.
+                        visible_items = [visible_by_id.get(item_id) for item_id in turn.visible_item_ids]
+                        reply = respond_to_message(
+                            state, turn.text, model=model, find_places=deferred_places,
+                            changing_place=turn.changing_place, radius_m=radius,
+                            match_count=session.match_count, last_search_query=session.last_search_query,
+                            visible_items=visible_items,
+                        )
                         if session.cancelled.is_set():
                             raise RunCancelled
-                        prior_place = state.place_query
+                        prior_place = state
                         state = reply.state
-                        if state.place_query != prior_place:
+                        # PRD 4.3-A — Reopening selection can invalidate a confirmed place with the same search text.
+                        if state.place_query != prior_place.place_query or (prior_place.confirmed and not state.confirmed):
                             manual_radius = radius = None
                             scope = ()
                         result = {"status": reply.status, "message": reply.message}
+                        if reply.decision is not None:
+                            decision = reply.decision
+                            target = decision.target or 0
+                            # PRD 4.3 — Use only server-owned candidates, visible result IDs and allowed radii.
+                            if decision.action == "preview_place":
+                                if not turn.changing_place and 1 <= target <= len(state.candidates):
+                                    candidate = state.candidates[target - 1]
+                                    result = {
+                                        "status": "answered", "highlight_candidate_id": candidate.candidate_id,
+                                        "message": "지도에서 해당 장소를 확인해 주세요. 맞다면 ‘이 위치 선택하기’를 눌러 주세요.",
+                                    }
+                                else:
+                                    result = {"status": "answered", "message": "목록에서 어떤 장소를 뜻하는지 알려주세요."}
+                            elif decision.action == "item_details":
+                                if 1 <= target <= len(visible_items) and (item := visible_items[target - 1]) is not None:
+                                    try:
+                                        institutions = get_institutions()
+                                    except RuntimeError:
+                                        institutions = ()
+                                    answer = _item_details_message(item, institutions)
+                                else:
+                                    answer = "전체 검색 결과에서 확인할 물품의 번호나 이름을 알려주세요."
+                                result = {"status": "answered", "message": answer}
+                            elif state.confirmed is None or state.item_query is None or turn.changing_place:
+                                result = {"status": "answered", "message": "장소와 물품을 먼저 정해 주세요."}
+                            else:
+                                requested = _requested_radius(decision.action, decision.target, radius)
+                                if requested is None:
+                                    answer = {
+                                        "expand_radius": "이미 최대 반경인 2km까지 찾고 있어요.",
+                                        "shrink_radius": "이미 최소 반경인 1km로 찾고 있어요.",
+                                        "set_radius": "검색 반경은 1km, 1.5km, 2km 중에서 정할 수 있어요.",
+                                    }[decision.action]
+                                    result = {"status": "answered", "message": answer}
+                                elif requested == radius:
+                                    result = {"status": "answered", "message": "이미 그 반경으로 찾고 있어요."}
+                                else:
+                                    manual_radius = requested
+                                    result = {"status": "ready_to_search"}
+                            if result["status"] == "answered":
+                                state = replace(state, recent=(*state.recent, (turn.text, result["message"]))[-4:])
                         if place_query is not None:
                             yield line({"type": "tool.started", "tool": "places"})
                             if session.cancelled.is_set():
@@ -261,10 +351,14 @@ def create_agent_router(
                     elif result["status"] != "error":
                         session.state, session.scope, session.radius_m = state, scope, radius
                         session.manual_radius = manual_radius
-                        session.status = result["status"]
-                        matches = result.get("matches")
-                        session.cursor = matches["next_cursor"] if matches else None
-                        session.page_query = result["search_attempts"][-1]["query"] if session.cursor else None
+                        if result["status"] != "answered":
+                            session.status = result["status"]
+                            matches = result.get("matches")
+                            session.items = {item["item_id"]: item for item in matches["items"]} if matches else {}
+                            session.match_count = matches["total_count"] if matches else None
+                            session.cursor = matches["next_cursor"] if matches else None
+                            attempts = result.get("search_attempts")
+                            session.last_search_query = attempts[-1]["query"] if attempts else None
                         session.revision += 1
                     session.run_id = None
                     session.touched = monotonic()
@@ -307,9 +401,9 @@ def create_agent_router(
             session = get_session(payload.session_id)
             if session is None:
                 return expired()
-            if session.run_id or session.revision != payload.revision or payload.cursor != session.cursor:
+            if session.run_id or session.revision != payload.revision or payload.cursor != session.cursor or session.last_search_query is None:
                 return conflict()
-            scope, query = session.scope, session.page_query
+            scope, query = session.scope, session.last_search_query
         try:
             page = await run_in_threadpool(search_items, scope, query, payload.cursor)
             if any(item["institution_id"] not in scope for item in page.items):
@@ -319,6 +413,7 @@ def create_agent_router(
         with lock:
             if session.revision != payload.revision or session.run_id or session.cursor != payload.cursor:
                 return conflict()
+            session.items.update((item["item_id"], item) for item in page.items)
             session.cursor = page.next_cursor
             session.touched = monotonic()
         return _json({"matches": {"items": page.items, "total_count": page.total_count, "next_cursor": page.next_cursor}})

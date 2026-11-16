@@ -28,13 +28,23 @@ def adapt_places(client: KakaoLocalClient, query: str) -> list[PlaceCandidate]:
 
 
 def adapt_institutions(rows: list[dict[str, Any]]) -> list[Institution]:
-    return [Institution(row["storage_location_id"], row["latitude"], row["longitude"]) for row in rows]
+    return [
+        Institution(
+            row["storage_location_id"], row["latitude"], row["longitude"],
+            row.get("name") or "", row.get("address") or "", row.get("phone") or "",
+        )
+        for row in rows
+    ]
 
 
-def adapt_search_page(page: dict[str, Any]) -> SearchPage:
-    items = tuple({
+def adapt_search_item(row: dict[str, Any]) -> dict[str, Any]:
+    return {
         **{key: value for key, value in row.items() if key != "match_score"},
         "item_id": row["id"],
         "institution_id": row["storage_location_id"],
-    } for row in page["items"])
+    }
+
+
+def adapt_search_page(page: dict[str, Any]) -> SearchPage:
+    items = tuple(adapt_search_item(row) for row in page["items"])
     return SearchPage(items, page["total_count"], page["next_cursor"])

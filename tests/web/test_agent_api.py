@@ -14,8 +14,10 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     first = {"item_id": 1, "institution_id": 42}
     second = {"item_id": 2, "institution_id": 42}
     model = Mock(side_effect=[
-        {"action": "search", "message": "확인할게요.", "place_query": "강남역", "item_query": "갈색 지갑", "clear_item_query": False, "asks_for": None},
+        {"action": "search", "message": "확인할게요.", "place_query": "강남역", "item_query": "갈색 지갑", "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
         {"query": "브라운 지갑"},
+        {"action": "search_status", "message": "", "place_query": None, "item_query": None,
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
     ])
     search = Mock(side_effect=[SearchPage((), 0), SearchPage((first,), 2, "next"), SearchPage((second,), 2)])
     router = create_agent_router(
@@ -45,6 +47,13 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     assert response.json()["matches"]["items"] == [second]
     assert client.post("/api/search-chat/pages", json=page_params).status_code == 409
     assert model.call_count == 2
+    response = client.post("/api/search-chat/turns", json={
+        "type": "message", "request_id": "search-status", "text": "지금 어떤 조건으로 찾아?",
+        "session_id": result["session_id"], "revision": result["revision"],
+    })
+    answer = json.loads(response.text.splitlines()[-1])["response"]
+    assert answer["status"] == "answered"
+    assert all(query in answer["message"] for query in ("갈색 지갑", "브라운 지갑"))
     assert [call.args for call in search.call_args_list] == [
         ((42,), "갈색 지갑", None), ((42,), "브라운 지갑", None), ((42,), "브라운 지갑", "next"),
     ]
@@ -54,7 +63,7 @@ def test_chat_api_confirms_map_point_before_and_after_item():
     # 지도 더블클릭으로 고른 지점: 물품 없이 먼저 고르면 물품을 묻고, 이어서 물품을 말하면 검색한다.
     model = Mock(side_effect=[
         {"action": "search", "message": "", "place_query": None, "item_query": "갈색 지갑",
-         "clear_item_query": False, "asks_for": None},
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
     ])
     item = {"item_id": 1, "institution_id": 42}
     search = Mock(return_value=SearchPage((item,), 1))
@@ -117,7 +126,7 @@ def test_runtime_agent_reuses_places_institutions_and_ranked_search(monkeypatch)
             {"storage_location_id": 99, "latitude": 38.0, "longitude": 127.03},
         ]) as institutions,
         patch.object(OpenRouterAgentModel, "__call__", side_effect=[
-            {"action": "search", "message": "확인할게요.", "place_query": "서울 강남구 예시로 1", "item_query": "갈색 지갑", "clear_item_query": False, "asks_for": None},
+            {"action": "search", "message": "확인할게요.", "place_query": "서울 강남구 예시로 1", "item_query": "갈색 지갑", "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
         ]),
     ):
         client = TestClient(web_app.create_runtime_app(agent_search=True))
@@ -150,11 +159,11 @@ def test_runtime_agent_reuses_places_institutions_and_ranked_search(monkeypatch)
 def test_item_denial_clears_results_and_cursor_without_losing_confirmed_place():
     model = Mock(side_effect=[
         {"action": "search", "message": "", "place_query": "나이키 강남", "item_query": "나이키",
-         "clear_item_query": False, "asks_for": None},
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
         {"action": "search", "message": "", "place_query": None, "item_query": None,
-         "clear_item_query": True, "asks_for": None},
+         "clear_item_query": True, "asks_for": None, "item_changes": None, "target": None},
         {"action": "search", "message": "", "place_query": None, "item_query": "검은 지갑",
-         "clear_item_query": False, "asks_for": None},
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
     ])
     search = Mock(side_effect=[
         SearchPage(({"item_id": 1, "institution_id": 42},), 2, "old-cursor"),
@@ -199,9 +208,9 @@ def test_item_denial_clears_results_and_cursor_without_losing_confirmed_place():
 def test_place_only_message_can_confirm_before_the_item_question():
     model = Mock(side_effect=[
         {"action": "search", "message": "", "place_query": "강남역", "item_query": None,
-         "clear_item_query": False, "asks_for": None},
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
         {"action": "search", "message": "", "place_query": None, "item_query": "검은 지갑",
-         "clear_item_query": False, "asks_for": None},
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
     ])
     locations = Mock(return_value=[Institution(42, 37.5, 127.03)])
     search = Mock(return_value=SearchPage(({"item_id": 1, "institution_id": 42},), 1))
@@ -232,3 +241,92 @@ def test_place_only_message_can_confirm_before_the_item_question():
     assert result["status"] == "results"
     assert model.call_args_list[1].args[1]["awaiting_answer"] == "item"
     search.assert_called_once_with((42,), "검은 지갑", None)
+
+
+def test_chat_actions_preserve_results_and_apply_only_validated_targets():
+    def decision(action, *, place=None, item=None, target=None):
+        return {
+            "action": action, "message": "", "place_query": place, "item_query": item,
+            "clear_item_query": False, "asks_for": None, "item_changes": None, "target": target,
+        }
+
+    model = Mock(side_effect=[
+        decision("search", place="강남역", item="검은 지갑"),
+        decision("preview_place", target=2),
+        decision("search_status"),
+        decision("item_details", target=2),
+        decision("item_details", target=1),
+        decision("expand_radius"),
+        {**decision("clarify"), "message": "어느 역인가요?", "asks_for": "place",
+         "item_changes": {"kind": "지갑", "color": "갈색", "brand": None, "features": None}},
+        decision("search", place="강남역"),
+    ])
+    first = {"item_id": 1, "institution_id": 42, "item_name": "검은 지갑"}
+    second = {"item_id": 2, "institution_id": 42, "item_name": "카드지갑"}
+    search = Mock(side_effect=[
+        SearchPage((first,), 2, "next"), SearchPage((second,), 2),
+        SearchPage((first,), 1), SearchPage((second,), 1),
+    ])
+    lookup = Mock(return_value=[{"item_id": 999, "institution_id": 99, "item_name": "범위 밖"}])
+    router = create_agent_router(
+        model=model,
+        find_places=lambda query: [
+            PlaceCandidate("p1", query, "", 37.5, 127.03),
+            PlaceCandidate("p2", query + " 신분당선", "", 37.5, 127.03),
+        ],
+        get_institutions=lambda: [Institution(42, 37.5, 127.03, "역무실", "서울시", "02-123-4567")],
+        search_items=search, find_items_by_id=lookup,
+    )
+    client = TestClient(create_app(Mock(), "dummy", agent_router=router))
+    previous = None
+
+    def turn(request_id, text=None, **payload):
+        nonlocal previous
+        if text is not None:
+            payload.update(type="message", text=text)
+        if previous:
+            payload.update(session_id=previous["session_id"], revision=previous["revision"])
+        response = client.post("/api/search-chat/turns", json={"request_id": request_id, **payload})
+        assert response.status_code == 200
+        previous = json.loads(response.text.splitlines()[-1])["response"]
+        return previous
+
+    turn("start", "강남역에서 검은 지갑을 잃어버렸어요")
+    preview = turn("preview", "두 번째요")
+    assert preview["highlight_candidate_id"] == "p2"
+    assert preview["conditions"]["place"] is None
+    search.assert_not_called()
+    turn("confirm", type="select_place", candidate_id="p2")
+    answer = turn("conditions", "지금 어떤 조건이야?")
+    assert answer["status"] == "answered"
+    assert "1km" in answer["message"] and "검은 지갑" in answer["message"]
+    response = client.post("/api/search-chat/pages", json={
+        "session_id": answer["session_id"], "revision": answer["revision"], "cursor": "next",
+    })
+    assert response.json()["matches"]["items"] == [second]
+    details = turn("detail", "두 번째 물건은 어디서 받아?", visible_item_ids=[1, 2])
+    assert details["status"] == "answered"
+    assert all(value in details["message"] for value in ("카드지갑", "역무실", "서울시", "02-123-4567"))
+    rejected = turn("invalid-item", "첫 번째 것은?", visible_item_ids=[999])
+    assert "범위 밖" not in rejected["message"]
+    lookup.assert_called_once_with((42,), [999])
+    assert search.call_count == 2
+    wider = turn("widen", "좀 더 넓혀줘")
+    assert wider["conditions"]["radius_m"] == 1500
+    search.assert_called_with((42,), "검은 지갑", None)
+    clarifying = turn("clarify-place", "근처 역이었고 지갑은 갈색이었어요.", changing_place=True)
+    assert clarifying["status"] == "awaiting_place_clarification"
+    assert clarifying["matches"] is None
+    assert "갈색" in clarifying["conditions"]["item_query"]
+    changed = turn("change-place", "강남역", changing_place=True)
+    assert changed["status"] == "awaiting_place_selection"
+    assert changed["conditions"]["item_query"] == clarifying["conditions"]["item_query"]
+    assert changed["conditions"]["radius_m"] is None
+    assert changed["conditions"]["institution_ids"] == []
+    assert model.call_args.args[1]["awaiting_answer"] == "place"
+    assert model.call_args.args[1]["changing_place"] is True
+    assert search.call_count == 3
+    confirmed = turn("confirm-new", type="select_place", candidate_id="p1")
+    assert confirmed["conditions"]["place"]["candidate_id"] == "p1"
+    assert confirmed["conditions"]["radius_m"] == 1000
+    search.assert_called_with((42,), clarifying["conditions"]["item_query"], None)

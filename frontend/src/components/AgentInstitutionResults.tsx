@@ -10,13 +10,14 @@ function toAgentItems(items: FoundItem[]): AgentItem[] {
     ? [{ ...item, item_id: item.id, institution_id: item.storage_location_id }] : []);
 }
 
-export function AgentInstitutionResults({ ids, query, name, institutions, onOpen, onClear }: {
+export function AgentInstitutionResults({ ids, query, name, institutions, onOpen, onClear, onVisibleItems }: {
   ids: string;
   query: string;
   name: string;
   institutions: Map<number, Institution>;
   onOpen: (item: AgentItem) => void;
   onClear: () => void;
+  onVisibleItems: (ids: number[]) => void;
 }) {
   const [items, setItems] = useState<FoundItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -44,6 +45,11 @@ export function AgentInstitutionResults({ ids, query, name, institutions, onOpen
     });
     return () => active.current?.abort();
   }, [ids, query]);
+
+  useEffect(() => {
+    const pageItems = items.slice(page * AGENT_ITEM_PAGE_SIZE, (page + 1) * AGENT_ITEM_PAGE_SIZE);
+    onVisibleItems(toAgentItems(pageItems).map(item => item.item_id));
+  }, [items, page, onVisibleItems]);
 
   async function changePage(target: number) {
     if (active.current) return;

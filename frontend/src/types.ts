@@ -109,6 +109,7 @@ export interface AgentResponse {
     institution_ids: number[];
   };
   place_candidates: AgentPlace[];
+  highlight_candidate_id?: string;
   search_attempts: { query: string }[];
   recommended_item_ids: number[];
   matches: AgentMatches | null;
@@ -116,7 +117,7 @@ export interface AgentResponse {
 }
 
 export type AgentTurn =
-  | { type: "message"; text: string }
+  | { type: "message"; text: string; changing_place: boolean; visible_item_ids: number[] }
   | { type: "select_place"; candidate_id: string }
   | { type: "select_point"; latitude: number; longitude: number; name?: string; address?: string }
   | { type: "change_radius"; radius_m: number };
