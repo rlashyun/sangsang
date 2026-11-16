@@ -1,12 +1,14 @@
 import { useEffect, useRef, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-const categories = ["가방", "의류(모자)", "전자기기(무선이어폰)", "지갑", "휴대폰", "카드"];
+const categories = ["가방", "모자", "무선이어폰", "지갑", "휴대폰", "카드"];
 
 type UsageGuideProps = {
   searchPath: string;
   surveyUrl: string;
   onDismiss: () => void;
+  // chat: 대화형 검색 화면용 안내, classic: 기존 검색 화면용 안내
+  variant?: "chat" | "classic";
 };
 
 function isBackdropClick(event: MouseEvent<HTMLDialogElement>) {
@@ -17,7 +19,7 @@ function isBackdropClick(event: MouseEvent<HTMLDialogElement>) {
 }
 
 // PRD 4.4 — 검색 화면 위에서 서비스 소개와 두 탭의 이용 방법을 안내한다.
-export function UsageGuide({ searchPath, surveyUrl, onDismiss }: UsageGuideProps) {
+export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classic" }: UsageGuideProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const pointerStartedOutside = useRef(false);
@@ -47,6 +49,21 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss }: UsageGuideProps
         <p className="usage-guide-intro">잃어버린 장소에서부터 찾아보세요. 주변 보관기관과 그곳에 등록된 습득물을 한눈에 볼 수 있어요.</p>
 
         <div className="usage-guide-steps">
+          {variant === "chat" ? (
+          <section className="usage-guide-card" aria-labelledby="usage-find-title">
+            <h2 id="usage-find-title">물건 찾기</h2>
+            <ol>
+              <li>대화창에 물건을 잃어버린 장소를 말해 주세요. 지도에서 보관기관 핀을 두 번 눌러 고를 수도 있어요.</li>
+              <li>후보 장소 중 맞는 곳을 확인해요. 틀리면 ‘장소 변경’으로 다시 고를 수 있어요.</li>
+              <li>‘검은색 지갑’처럼 잃어버린 물건의 이름이나 특징을 말해 주세요.</li>
+              <li>결과 목록에서 물품을 눌러 상세 정보를 보고, 필요하면 검색 반경을 넓혀요.</li>
+            </ol>
+            <aside className="usage-guide-note">
+              <strong>방문 전 보관기관에 연락해요.</strong>
+              <p>상세 화면에 연락처와 수령 방법이 있어요.</p>
+            </aside>
+          </section>
+          ) : (
           <section className="usage-guide-card" aria-labelledby="usage-find-title">
             <h2 id="usage-find-title">물건 찾기</h2>
             <ol>
@@ -60,14 +77,12 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss }: UsageGuideProps
               <p>상세 화면에 연락처와 수령 방법이 있어요.</p>
             </aside>
           </section>
+          )}
 
           <section className="usage-guide-card" aria-labelledby="usage-alert-title">
-            <div className="usage-guide-card-heading">
-              <h2 id="usage-alert-title">새 물건 알림</h2>
-              <span className="usage-guide-status">준비 중</span>
-            </div>
+            <h2 id="usage-alert-title">새 물건 알림</h2>
             <ol>
-              <li>검색 결과에서 ‘새 물건 알림 받기’를 눌러요.</li>
+              <li>{variant === "chat" ? "검색 결과 위의" : "검색 결과에서"} ‘새 물건 알림 받기’를 눌러요.</li>
               <li>검색 조건을 확인하고 이메일을 입력해요.</li>
               <li>확인 메일의 링크를 눌러 알림을 시작해요.</li>
             </ol>
@@ -89,7 +104,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss }: UsageGuideProps
         <div className="usage-guide-actions">
           <section className="usage-guide-action" aria-labelledby="usage-search-title">
             <h2 id="usage-search-title">이제 잃어버린 물건을 찾아볼까요?</h2>
-            <p>잃어버린 장소를 검색하는 것부터 시작해 보세요.</p>
+            <p>{variant === "chat" ? "잃어버린 장소를 말하는 것부터 시작해 보세요." : "잃어버린 장소를 검색하는 것부터 시작해 보세요."}</p>
             <Link className="usage-guide-button" to={searchPath} state={{ fromGuideSearch: true }}>물건 찾으러 가기 <span aria-hidden="true">→</span></Link>
           </section>
           <section className="usage-guide-action" aria-labelledby="usage-survey-title">

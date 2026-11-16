@@ -457,7 +457,7 @@ export function AgentSearchApp() {
         onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect} onResetRadius={showFullScope} />
     </main>
     {detail && <FoundItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)} onClose={() => void navigate(-1)} />}
-    {guideIsOpen && <UsageGuide searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {
+    {guideIsOpen && <UsageGuide variant="chat" searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {
       if (location.state?.openedGuide) void navigate(-1);
       else void navigate(searchPath, { replace: true });
     }} />}
