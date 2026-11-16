@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..integrations.agent_model import OpenRouterAgentModel
 
-from .agent_conversation import Conversation, Model, confirm_place, respond_to_message, search_conversation
+from .agent_conversation import ITEM_QUESTION, Conversation, Model, confirm_place, respond_to_message, search_conversation
 from .agent_search import Institution, PlaceCandidate, SearchPage
 
 
@@ -145,7 +145,7 @@ def create_agent_router(
                 or not any(place.candidate_id == turn.candidate_id for place in session.state.candidates)
             ):
                 return conflict()
-            if turn.type == "change_radius" and session.state.confirmed is None:
+            if turn.type == "change_radius" and (session.state.confirmed is None or session.state.item_query is None):
                 return conflict()
             session.request_ids.add(turn.request_id)
             run_id = uuid4().hex
@@ -203,31 +203,28 @@ def create_agent_router(
                             yield line({"type": "tool.completed", "tool": "places"})
                             state = replace(state, candidates=candidates)
                             if candidates:
-                                question = "지도에 표시한 장소가 맞나요?"
-                                if state.item_query is None:
-                                    question += " 어떤 물품을 잃어버렸나요?"
-                                result = {"status": "awaiting_place_selection", "message": question}
+                                result = {"status": "awaiting_place_selection", "message": "지도에 표시한 장소가 맞나요?"}
                             state = replace(state, recent=(*state.recent[:-1], (turn.text, result["message"])))
                     elif turn.type == "select_place":
-                        state, _ = confirm_place(state, turn.candidate_id)
-                        if state.item_query:
-                            result = {"status": "ready_to_search"}
-                        else:
-                            result = {"status": "awaiting_clarification", "message": "이 위치로 정했어요. 어떤 물품을 잃어버렸나요?"}
-                            state = replace(state, recent=(*state.recent, ("장소를 골랐어요.", result["message"]))[-4:])
+                        state, pending = confirm_place(state, turn.candidate_id)
+                        result = {"status": "ready_to_search"} if pending else {
+                            "status": "awaiting_clarification", "message": ITEM_QUESTION,
+                        }
                     elif turn.type == "select_point":
                         # 지도에서 직접 고른 지점은 후보 조회 없이 바로 확정 장소가 된다.
                         point = PlaceCandidate(
                             f"point:{turn.latitude:.6f},{turn.longitude:.6f}", turn.name or "지도에서 고른 위치", turn.address or "",
                             turn.latitude, turn.longitude,
                         )
-                        state = replace(state, confirmed=point, candidates=(), place_query=state.place_query or point.name)
+                        state, pending = confirm_place(
+                            replace(state, candidates=(point,), place_query=point.name), point.candidate_id,
+                        )
                         manual_radius = radius = None
                         scope = ()
-                        if state.item_query:
+                        if pending:
                             result = {"status": "ready_to_search"}
                         else:
-                            result = {"status": "awaiting_clarification", "message": "이 위치로 정했어요. 어떤 물품을 잃어버렸나요?"}
+                            result = {"status": "awaiting_clarification", "message": ITEM_QUESTION}
                             state = replace(state, recent=(*state.recent, ("지도에서 위치를 골랐어요.", result["message"]))[-4:])
                     else:
                         manual_radius = turn.radius_m

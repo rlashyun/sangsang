@@ -23,7 +23,7 @@ const TOOL_LABELS: Record<string, string> = {
   found_items: "습득물을 찾고 있어요.",
 };
 
-type ChatMessage = { author: "user" | "agent"; text: string };
+type ChatMessage = { author: "user" | "agent"; text: string } | { confirmedPlace: AgentPlace };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
 
@@ -34,6 +34,7 @@ function mapPlace(place: AgentPlace): Place {
 export function AgentSearchApp() {
   const location = useLocation();
   const navigate = useNavigate();
+  // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [response, setResponse] = useState<AgentResponse | null>(null);
@@ -111,10 +112,9 @@ export function AgentSearchApp() {
   }, [pagePlaces]);
   const showFullScope = useCallback(() => setSelectedInstitution([]), []);
   // 검색 중에는 새 지점을 받지 않는다(submit도 진행 중이면 무시한다).
-  const onMapPointSelect = useCallback((point: { latitude: number; longitude: number; name: string; address: string }) => {
-    if (controller.current) return;
+  function onMapPointSelect(point: { latitude: number; longitude: number; name: string; address: string }) {
     void submit({ type: "select_point", ...point });
-  }, [submit]);
+  }
 
   const onMapInstitutionSelect = useCallback((group: Institution[]) => {
     if (!response?.matches || !currentPlace || !conditions?.place) return;
@@ -159,6 +159,14 @@ export function AgentSearchApp() {
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
     setTab("chat");
+    // PRD 4.3-B — Only the newest search supplies recommendations and result pages.
+    setResponse(current => current && {
+      ...current, matches: null, recommended_item_ids: [], search_attempts: [],
+    });
+    setItems([]);
+    setCursor(null);
+    setItemPage(0);
+    setSelectedInstitution([]);
     if (turn.type === "message" && !retry) {
       setMessages(current => [...current, { author: "user", text: turn.text }]);
       setDraft("");
@@ -191,7 +199,13 @@ export function AgentSearchApp() {
         setError(result.error?.message || result.message || "검색 중 문제가 생겼어요.");
         return;
       }
-      if (result.message) setMessages(current => [...current, { author: "agent", text: result.message }]);
+      const replies: ChatMessage[] = [];
+      if ((turn.type === "select_place" || turn.type === "select_point") && result.status !== "cancelled" && result.conditions.place) {
+        // PRD 4.3-A — Show the confirmed location before asking for item details.
+        replies.push({ confirmedPlace: result.conditions.place });
+      }
+      if (result.message) replies.push({ author: "agent", text: result.message });
+      if (replies.length) setMessages(current => [...current, ...replies]);
       if (result.status !== "cancelled") {
         setResponse(result.status === "ended" ? null : result);
         setItems(result.matches?.items ?? []);
@@ -277,7 +291,7 @@ export function AgentSearchApp() {
     setSelectedInstitution([]);
     setTab("chat");
     setMessages(current => [...current, {
-      author: "agent", text: "새 장소를 알려주세요. 장소를 입력하거나 지도를 더블클릭해 고를 수 있어요.",
+      author: "agent", text: "새 장소를 알려주세요. 장소를 입력하거나 지도에서 보관기관 핀을 두 번 눌러 고를 수 있어요.",
     }]);
     input.current?.focus();
   }
@@ -308,13 +322,15 @@ export function AgentSearchApp() {
   const drawerOpen = tab === "results" && Boolean(response?.matches) && !placeChanging;
   // 이미 받은 단서는 다시 묻지 않고 빠진 것만 안내한다.
   const hasPlaceClue = Boolean(currentPlace);
-  const hasItemClue = Boolean(conditions?.item_query);
-  const composePlaceholder = hasPlaceClue && !hasItemClue ? "잃어버린 물건을 입력하세요"
-    : hasItemClue && !hasPlaceClue ? "잃어버린 장소를 입력하세요"
-      : "잃어버린 장소와 물건을 입력하세요";
+  const composePlaceholder = !hasPlaceClue ? "잃어버린 장소를 입력하세요"
+    : conditions?.item_query ? "메시지를 입력하세요" : "잃어버린 물건을 입력하세요";
   const groupNames = selectedInstitution.map(institution => institution.name).join(", ");
   const groupIds = selectedInstitution.map(institution => institution.storage_location_id).join(",");
   const submittedQuery = response?.search_attempts.at(-1)?.query ?? conditions?.item_query ?? "";
+  // PRD 4.3-A — 외부 검색어에도 사용자가 확정한 분실 장소를 사용한다.
+  const daangnSearch = response?.matches && conditions?.place && conditions.item_query
+    ? `https://www.daangn.com/kr/search/community/?${new URLSearchParams({ q: `${conditions.place.name} ${conditions.item_query}` })}`
+    : null;
   return <>
     <header className="app-header">
       <a className="app-wordmark" href={`/${location.search}`} aria-label="RETRIEVER 홈">RETRIEVER</a>
@@ -327,8 +343,8 @@ export function AgentSearchApp() {
           : <button className="app-guide-link" type="button" disabled title="의견 접수 폼 준비 중"><FeedbackIcon />의견 보내기</button>}
       </div>
     </header>
-    <main className={`app-shell agent-shell${tab === "results" && response?.matches ? " agent-shell-drawer" : ""}`}>
-      <section className={`agent-panel${tab === "results" && response?.matches ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
+    <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
+      <section className={`agent-panel${drawerOpen ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
         {(conditions?.item_query || currentPlace || pagePlaces.length > 0) && <dl className="agent-summary">
           <div><dt>장소</dt><dd>{currentPlace?.name || "선택 대기 중"}</dd>
             {currentPlace && <button type="button" disabled={busy} onClick={startPlaceChange}>장소 변경</button>}
@@ -342,33 +358,40 @@ export function AgentSearchApp() {
             </span>}</div>
         </dl>}
         <div ref={feed} className="agent-feed">
-          <>
-            {messages.length === 0 && <>
-              <p className="agent-bubble agent-bubble-agent">안녕하세요. 잃어버린 물건을 함께 찾아볼게요.</p>
-              <ol className="agent-welcome-steps" aria-label="이용 순서">
-                <li><span aria-hidden="true">1</span>잃어버린 장소를 적거나, 지도에서 보관기관 핀을 더블클릭하세요</li>
-                <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
-                <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
-              </ol>
-            </>}
-            {messages.map((message, index) => <p key={index} className={`agent-bubble agent-bubble-${message.author}`}>{message.text}</p>)}
-            {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates">
-              {pagePlaces.map(({ id, place, number }) => <li key={id} id={`agent-place-${id}`}>
-                <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
-                  disabled={busy} onClick={() => setSelectedCandidate(id)}>
-                  <span>{number}</span><span><strong>{place.name}</strong><small>{place.address}</small></span>
-                </button>
-                {id === selectedCandidate && <button type="button" className="agent-place-confirm" disabled={busy}
-                  onClick={() => void submit({ type: "select_place", candidate_id: id })}>이 위치 선택하기</button>}
-              </li>)}
-            </ol>}
-            {numberedPlaces.length > PLACE_PAGE_SIZE && !confirmingPlace && <nav className="agent-pagination" aria-label="장소 후보 페이지">
-              {Array.from({ length: Math.ceil(numberedPlaces.length / PLACE_PAGE_SIZE) }, (_, page) =>
-                <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
-                  onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
-            </nav>}
-            {response?.matches && currentPlace && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
-          </>
+          {messages.length === 0 && <>
+            <p className="agent-bubble agent-bubble-agent">안녕하세요. 잃어버린 물건을 함께 찾아볼게요.</p>
+            <ol className="agent-welcome-steps" aria-label="이용 순서">
+              <li><span aria-hidden="true">1</span>잃어버린 장소를 적거나, 지도에서 보관기관 핀을 더블클릭하세요</li>
+              <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
+              <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
+            </ol>
+          </>}
+          {messages.map((message, index) => "confirmedPlace" in message
+            ? <div className="agent-confirmed-card" key={index}>
+              <small>확정된 장소</small>
+              <strong>{message.confirmedPlace.name}</strong>
+              {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
+            </div>
+            : <p key={index} className={`agent-bubble agent-bubble-${message.author}`}>{message.text}</p>)}
+          {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates">
+            {pagePlaces.map(({ id, place, number }) => <li key={id} id={`agent-place-${id}`}>
+              <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
+                disabled={busy} onClick={() => setSelectedCandidate(id)}>
+                <span>{number}</span><span><strong>{place.name}</strong><small>{place.address}</small></span>
+              </button>
+              {id === selectedCandidate && <button type="button" className="agent-place-confirm" disabled={busy}
+                onClick={() => void submit({ type: "select_place", candidate_id: id })}>이 위치 선택하기</button>}
+            </li>)}
+          </ol>}
+          {numberedPlaces.length > PLACE_PAGE_SIZE && !confirmingPlace && <nav className="agent-pagination" aria-label="장소 후보 페이지">
+            {Array.from({ length: Math.ceil(numberedPlaces.length / PLACE_PAGE_SIZE) }, (_, page) =>
+              <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
+                onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
+          </nav>}
+          {response?.matches && currentPlace && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
+          {daangnSearch && <a className="agent-daangn-link" href={daangnSearch} target="_blank" rel="noopener noreferrer">
+            당근에서 찾아보기 <span aria-hidden="true">↗</span>
+          </a>}
         </div>
         {(progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
           <span>{error || (cancelling ? "검색을 취소하고 있어요." : progress) || "다음 결과를 불러오고 있어요."}</span>
@@ -388,7 +411,7 @@ export function AgentSearchApp() {
         </form>
       </section>
 
-      {tab === "results" && response?.matches && <aside className="agent-drawer" aria-label="전체 검색 결과">
+      {drawerOpen && <aside className="agent-drawer" aria-label="전체 검색 결과">
         <div className="agent-drawer-head">
           <strong>결과 {matchCount.toLocaleString("ko-KR")}건</strong>
         </div>
