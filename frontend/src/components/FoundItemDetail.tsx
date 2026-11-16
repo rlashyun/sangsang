@@ -85,8 +85,8 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
     >
       <header className="item-detail-header">
         <h2 id="item-detail-title">{showPickup ? "물품 수령 안내" : "물품 상세정보"}</h2>
-        <button className="item-detail-close" type="button" onClick={onClose} autoFocus>
-          닫기 <span aria-hidden="true">×</span>
+        <button className="item-detail-close" type="button" aria-label="닫기" onClick={onClose} autoFocus>
+          <span aria-hidden="true">×</span>
         </button>
       </header>
       {showPickup ? <ItemPickupGuide
