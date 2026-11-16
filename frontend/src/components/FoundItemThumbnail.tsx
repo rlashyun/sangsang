@@ -1,7 +1,8 @@
 import { useState } from "react";
 
-import { categoryIcon, foundItemImageUrl } from "../lib/presentation";
+import { foundItemImageUrl } from "../lib/presentation";
 import type { FoundItem } from "../types";
+import { CategoryIcon } from "./CategoryIcon";
 
 export function FoundItemThumbnail({ item }: { item: FoundItem }) {
   const imageUrl = foundItemImageUrl(item.image_url);
@@ -13,7 +14,7 @@ export function FoundItemThumbnail({ item }: { item: FoundItem }) {
   return (
     <div className="item-placeholder item-thumbnail">
       <div className="item-thumbnail-visual">
-        {!isLoaded && <span aria-hidden="true">{categoryIcon(item.raw_category_name)}</span>}
+        {!isLoaded && <CategoryIcon category={item.raw_category_name} />}
         {hasImage && (
           <img
             src={imageUrl}

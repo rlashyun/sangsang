@@ -277,6 +277,12 @@ export function AgentSearchApp() {
   }
 
   const drawerOpen = tab === "results" && Boolean(response?.matches);
+  // 이미 받은 단서는 다시 묻지 않고 빠진 것만 안내한다.
+  const hasPlaceClue = Boolean(currentPlace);
+  const hasItemClue = Boolean(conditions?.item_query);
+  const composePlaceholder = hasPlaceClue && !hasItemClue ? "잃어버린 물건을 입력하세요"
+    : hasItemClue && !hasPlaceClue ? "잃어버린 장소를 입력하세요"
+      : "잃어버린 장소와 물건을 입력하세요";
   const groupNames = selectedInstitution.map(institution => institution.name).join(", ");
   const groupIds = selectedInstitution.map(institution => institution.storage_location_id).join(",");
   const submittedQuery = response?.search_attempts.at(-1)?.query ?? conditions?.item_query ?? "";
@@ -337,7 +343,7 @@ export function AgentSearchApp() {
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1-1.5h5.8l1 1.5h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.2" /></svg>
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
-            maxLength={1000} placeholder="잃어버린 장소와 물건을 입력하세요" />
+            maxLength={1000} placeholder={composePlaceholder} />
           <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || !draft.trim()}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
