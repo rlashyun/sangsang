@@ -38,6 +38,8 @@ class Turn(Payload):
     # 지도 더블클릭으로 고른 지점. 국내 좌표 범위만 받는다.
     latitude: float | None = Field(default=None, ge=33.0, le=39.0)
     longitude: float | None = Field(default=None, ge=124.0, le=132.0)
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    address: str | None = Field(default=None, max_length=200)
 
 
 class NextPage(Payload):
@@ -209,7 +211,7 @@ def create_agent_router(
                     elif turn.type == "select_point":
                         # 지도에서 직접 고른 지점은 후보 조회 없이 바로 확정 장소가 된다.
                         point = PlaceCandidate(
-                            f"point:{turn.latitude:.6f},{turn.longitude:.6f}", "지도에서 고른 위치", "",
+                            f"point:{turn.latitude:.6f},{turn.longitude:.6f}", turn.name or "지도에서 고른 위치", turn.address or "",
                             turn.latitude, turn.longitude,
                         )
                         state = replace(state, confirmed=point, candidates=(), place_query=state.place_query or point.name)

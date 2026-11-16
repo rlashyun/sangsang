@@ -64,10 +64,11 @@ def test_chat_api_confirms_map_point_before_and_after_item():
         get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
     )
     client = TestClient(create_app(Mock(), "dummy", agent_router=router))
-    point = {"type": "select_point", "request_id": "pt", "latitude": 37.5, "longitude": 127.03}
+    point = {"type": "select_point", "request_id": "pt", "latitude": 37.5, "longitude": 127.03, "name": "강남역 분실물센터"}
     first = json.loads(client.post("/api/search-chat/turns", json=point).text.splitlines()[-1])["response"]
     assert first["status"] == "awaiting_clarification"
     assert first["conditions"]["place"]["latitude"] == 37.5
+    assert first["conditions"]["place"]["name"] == "강남역 분실물센터"
     search.assert_not_called()
 
     reply = {"type": "message", "request_id": "item", "text": "갈색 지갑",

@@ -111,7 +111,7 @@ export function AgentSearchApp() {
   }, [pagePlaces]);
   const showFullScope = useCallback(() => setSelectedInstitution([]), []);
   // 검색 중에는 새 지점을 받지 않는다(submit도 진행 중이면 무시한다).
-  const onMapPointSelect = useCallback((point: { latitude: number; longitude: number }) => {
+  const onMapPointSelect = useCallback((point: { latitude: number; longitude: number; name: string; address: string }) => {
     if (controller.current) return;
     void submit({ type: "select_point", ...point });
   }, [submit]);
@@ -169,10 +169,10 @@ export function AgentSearchApp() {
     if (turn.type === "select_point") {
       // 서버 응답 전에도 고른 지점을 바로 보여 준다.
       setConfirmingPlace({
-        candidate_id: "point", name: "지도에서 고른 위치", address: "",
+        candidate_id: "point", name: turn.name ?? "지도에서 고른 위치", address: turn.address ?? "",
         latitude: turn.latitude, longitude: turn.longitude,
       });
-      if (!retry) setMessages(current => [...current, { author: "user", text: "지도에서 위치를 골랐어요." }]);
+      if (!retry) setMessages(current => [...current, { author: "user", text: turn.name ? `지도에서 ${turn.name}을(를) 골랐어요.` : "지도에서 위치를 골랐어요." }]);
     }
     try {
       const result = await runAgentTurn(turn, response, event => {
