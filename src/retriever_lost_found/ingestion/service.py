@@ -13,7 +13,6 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -25,6 +24,7 @@ from .collector import (
     create_source_client,
     retention_start,
 )
+from ..errors import safe_error as _safe_error
 from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 from .overseas import is_overseas_custody
 
@@ -306,14 +306,6 @@ def _enrich_ambiguous_rows(
     stats["elapsed_seconds"] = round(time.monotonic() - started, 3)
     stats["failure_attempts_by_reason"] = failure_attempts_by_reason
     return stats
-
-
-def _safe_error(error: BaseException, secrets: Iterable[str] = ()) -> str:
-    message = f"{type(error).__name__}: {error}"
-    for secret in secrets:
-        if secret:
-            message = message.replace(secret, "[REDACTED]")
-    return message[:1000]
 
 
 def _empty_result(source_code: str, status: str) -> dict[str, Any]:

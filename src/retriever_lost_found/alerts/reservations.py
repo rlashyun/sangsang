@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
+
+from .errors import AlertLimitError
+from .links import (
+    KOREA_TIMEZONE,
+    MAX_EXTENSIONS,
+    expires_at_for,
+    ip_hash,
+    last_alert_day,
+    mail_links,
+    new_link_nonce,
+    parse_timestamp,
+    token_matches,
+    token_reservation_id,
+)
+from .sender import EmailSender, with_idempotency_key
+from .settings import AlertSettings
+from .store import AlertPlace, AlertStore
+from .templates import alert_period, confirmation_email, format_day
+
+ALLOWED_RADII_METERS = (1000, 1500, 2000)  # PRD 4.3-E — 알림 화면의 1·1.5·2km(2026-11-09 결정)
+MAX_QUERY_LENGTH = 30  # PRD 3.3 · D3 — 습득물 검색어 상한
+MAX_PLACE_NAME_LENGTH = 100
+MAX_PLACES = 3  # 설계 16장 — 검색 화면과 같이 장소는 최대 3곳(App.tsx MAX_WAYPOINT_PLACES)
+MAX_EMAIL_LENGTH = 254
+# 설계 14장 — 서비스 대상인 대한민국(독도 포함) 밖 좌표로는 예약하지 않는다.
+LATITUDE_RANGE = (33.0, 38.7)
+LONGITUDE_RANGE = (124.5, 132.0)
+PENDING_MESSAGE = "확인 메일을 보냈습니다. 24시간 안에 링크를 눌러 주세요."
+BAD_LINK = "링크가 올바르지 않습니다."
+_FORBIDDEN_EMAIL_CHARACTERS = set('<>,;:"()[]\\')
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def normalize_email(value: Any) -> str:
+    """설계 5.4 — 앞뒤 공백을 지우고 소문자로 저장해 이메일 제한을 대소문자로 피하지 못하게 한다."""
+    if not isinstance(value, str):
+        raise ValueError("이메일 형식이 올바르지 않습니다.")
+    email = value.strip().lower()
+    local, _, domain = email.partition("@")
+    if (
+        not email
+        or len(email) > MAX_EMAIL_LENGTH
+        or email.count("@") != 1
+        or not local
+        or "." not in domain
+        or domain.startswith(".")
+        or domain.endswith(".")
+        or any(character.isspace() for character in email)
+        or any(character in _FORBIDDEN_EMAIL_CHARACTERS for character in email)
+    ):
+        raise ValueError("이메일 형식이 올바르지 않습니다.")
+    return email
+
+
+def _query(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("검색어를 입력해 주세요.")
+    query = value.strip()
+    if len(query) > MAX_QUERY_LENGTH:
+        raise ValueError("습득물 검색어는 30자 이하여야 합니다.")
+    return query
+
+
+def _place_name(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("장소 이름이 없습니다.")
+    place_name = value.strip()
+    if len(place_name) > MAX_PLACE_NAME_LENGTH:
+        raise ValueError("장소 이름은 100자 이하여야 합니다.")
+    return place_name
+
+
+def _coordinate(value: Any, name: str, bounds: tuple[float, float]) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} 좌표가 숫자가 아닙니다.")
+    number = float(value)
+    if not bounds[0] <= number <= bounds[1]:  # NaN도 여기서 걸린다
+        raise ValueError("대한민국 안의 장소만 예약할 수 있습니다.")
+    return number
+
+
+def _places(value: Any) -> list[AlertPlace]:
+    """설계 16장 — 화면 Place 목록 [{name, latitude, longitude}] 1~3곳. 좌표가 같은 장소는 하나로 합친다."""
+    if value is None:
+        raise ValueError("알림을 받을 장소를 1곳 이상 골라 주세요.")
+    if not isinstance(value, list):
+        raise ValueError("장소 목록 형식이 올바르지 않습니다.")
+    places: list[AlertPlace] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            raise ValueError("장소 형식이 올바르지 않습니다.")
+        place = AlertPlace(
+            name=_place_name(entry.get("name")),
+            latitude=_coordinate(entry.get("latitude"), "위도", LATITUDE_RANGE),
+            longitude=_coordinate(entry.get("longitude"), "경도", LONGITUDE_RANGE),
+        )
+        if all((known.latitude, known.longitude) != (place.latitude, place.longitude) for known in places):
+            places.append(place)
+    if not places:
+        raise ValueError("알림을 받을 장소를 1곳 이상 골라 주세요.")
+    if len(places) > MAX_PLACES:
+        raise ValueError("알림을 받을 장소는 3곳까지 고를 수 있습니다.")
+    return places
+
+
+def _radius(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in ALLOWED_RADII_METERS:
+        raise ValueError("반경은 1km, 1.5km, 2km 중 하나여야 합니다.")
+    return value
+
+
+@dataclass
+class AlertService:
+    """설계 5.4 — 예약 API의 규칙. 저장·발송은 주입받는다(테스트는 가짜를 쓴다)."""
+
+    store: AlertStore
+    sender: EmailSender
+    settings: AlertSettings
+    clock: Callable[[], datetime] = utc_now
+
+    def create(self, payload: dict[str, Any], client_ip: str) -> dict[str, str]:
+        email = normalize_email(payload.get("email"))
+        query = _query(payload.get("query"))
+        places = _places(payload.get("places"))
+        radius_m = _radius(payload.get("radius_m"))
+        if payload.get("consent") is not True:
+            raise ValueError("개인정보 수집·이용에 동의해야 알림을 예약할 수 있습니다.")
+
+        now = self.clock()
+        client_ip_hash = ip_hash(self.settings.secret, client_ip)
+        created = self.store.create_reservation(
+            email=email,
+            query=query,
+            places=places,
+            radius_m=radius_m,
+            ip_hash=client_ip_hash,
+            link_nonce=new_link_nonce(),
+            expires_at=expires_at_for(now),
+        )
+        status = created.get("status")
+        if status == "email_limit":
+            raise AlertLimitError("같은 이메일로 진행 중인 알림 예약은 3개까지입니다.")
+        if status == "ip_limit":
+            raise AlertLimitError("같은 곳에서 하루에 만들 수 있는 알림 예약은 5개까지입니다. 내일 다시 시도해 주세요.")
+        if status != "created":
+            raise RuntimeError("알림 예약을 저장하지 못했습니다.")
+        reservation_id = int(created["reservation_id"])
+        message_id = int(created["message_id"])
+
+        try:
+            # 설계 2장 — 확인 메일도 하루 450통 안에서 센다.
+            if not self.store.claim_messages(
+                limit=1, daily_cap=self.settings.daily_send_limit, message_id=message_id
+            ):
+                self._discard(reservation_id, client_ip_hash)
+                raise AlertLimitError("오늘 보낼 수 있는 메일을 모두 보냈습니다. 내일 다시 시도해 주세요.")
+            reservation = self.store.get_reservation(reservation_id)
+            if reservation is None:
+                raise RuntimeError("예약을 다시 읽지 못했습니다.")
+            message = with_idempotency_key(
+                confirmation_email(email, reservation, mail_links(self.settings, reservation, now)),
+                message_id,
+            )
+            # 설계 14장 — 보냄 기록을 먼저 남긴다. 보낸 뒤 기록에 실패하면 발송 크론이 같은 확인 메일을
+            # 다시 보내게 되기 때문이다. 발송이 실패하면 예약째 지우므로 450통 계산에서도 빠진다.
+            self.store.finish_message(message_id, "sent")
+        except AlertLimitError:
+            raise
+        except Exception:
+            self._discard(reservation_id, client_ip_hash)
+            raise RuntimeError("알림 예약을 저장하지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
+        try:
+            session = self.sender.open()
+            try:
+                session.send(message)
+            finally:
+                session.close()
+        except Exception:
+            # 설계 5.4 — 발송에 실패하면 예약을 남기지 않아 사용자가 바로 다시 시도할 수 있다.
+            # SendError가 아닌 예외도 같다. 남겨 두면 "보냄"으로 기록된 채 메일은 안 나가고 한도만 줄어든다.
+            self._discard(reservation_id, client_ip_hash)
+            raise RuntimeError("확인 메일을 보내지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
+        return {"status": "pending", "message": PENDING_MESSAGE}
+
+    def _discard(self, reservation_id: int, client_ip_hash: str | None) -> None:
+        """실패한 예약을 지운다. 지우기마저 실패하면 미확인 예약으로 남았다가 24시간 뒤 정리된다.
+
+        IP 기록도 함께 지워 실패한 시도가 IP 하루 5건 제한을 깎지 않게 한다(리뷰 2026-11-15).
+        """
+        try:
+            self.store.discard_reservation(reservation_id, client_ip_hash)
+        except Exception:
+            pass
+
+    def _reservation(self, token: Any) -> dict[str, Any]:
+        if not isinstance(token, str):
+            raise ValueError(BAD_LINK)
+        reservation = self.store.get_reservation(token_reservation_id(token))
+        if reservation is None or not token_matches(self.settings.secret, token, str(reservation["link_nonce"])):
+            raise ValueError(BAD_LINK)
+        return reservation
+
+    def summary(self, token: Any) -> dict[str, Any]:
+        """설계 5.4 — 링크 페이지의 요약. 상태를 바꾸지 않는다(링크를 열기만 해서는 처리하지 않는다)."""
+        reservation = self._reservation(token)
+        return {
+            "status": reservation["status"],
+            "places": [{"name": place["name"]} for place in reservation["places"]],
+            "radius_m": int(reservation["radius_m"]),
+            "query": reservation["query"],
+            "expires_at": parse_timestamp(reservation["expires_at"]).astimezone(KOREA_TIMEZONE).isoformat(),
+            # PRD 4.3-E — 화면이 자정 만료 시각을 날짜로 바꾸지 않아도 되게 마지막 알림 날짜를 준다.
+            "last_day": last_alert_day(reservation["expires_at"]).isoformat(),
+            "extensions_left": MAX_EXTENSIONS - int(reservation["extension_count"]),
+        }
+
+    def confirm(self, token: Any) -> dict[str, str]:
+        reservation = self._reservation(token)
+        result = self.store.confirm_reservation(int(reservation["id"]))
+        messages = {
+            "confirmed": f"알림 예약이 켜졌습니다. {alert_period(reservation)} 알려 드립니다.",
+            "already_active": "이미 켜져 있는 예약입니다.",
+            "link_expired": "확인 링크의 유효 시간(24시간)이 지났습니다. 다시 예약해 주세요.",
+            "ended": "이미 끝난 예약입니다.",
+        }
+        if result not in messages:
+            raise ValueError(BAD_LINK)
+        return {"result": result, "message": messages[result]}
+
+    def extend(self, token: Any) -> dict[str, Any]:
+        reservation = self._reservation(token)
+        outcome = self.store.extend_reservation(int(reservation["id"]))
+        result = outcome.get("result")
+        if result == "extended":
+            expires_at = parse_timestamp(outcome["expires_at"]).astimezone(KOREA_TIMEZONE)
+            last_day = last_alert_day(expires_at)
+            left = int(outcome["extensions_left"])
+            return {
+                "result": "extended",
+                "message": f"알림을 {format_day(last_day)}까지 연장했습니다. 남은 연장은 {left}회입니다.",
+                "expires_at": expires_at.isoformat(),
+                "last_day": last_day.isoformat(),
+                "extensions_left": left,
+            }
+        if result == "limit_reached":
+            return {"result": result, "message": "연장할 수 있는 횟수(3회)를 모두 사용했습니다."}
+        if result == "ended":
+            return {"result": result, "message": "끝났거나 아직 확인하지 않은 예약은 연장할 수 없습니다."}
+        raise ValueError(BAD_LINK)
+
+    def cancel(self, token: Any) -> dict[str, str]:
+        reservation = self._reservation(token)
+        result = self.store.cancel_reservation(int(reservation["id"]))
+        if result == "cancelled":
+            return {"result": result, "message": "알림 예약을 취소했습니다. 이메일 주소도 지웠습니다."}
+        if result == "already_ended":
+            return {"result": result, "message": "이미 끝난 예약입니다."}
+        raise ValueError(BAD_LINK)

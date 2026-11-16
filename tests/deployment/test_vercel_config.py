@@ -21,6 +21,9 @@ class VercelConfigTests(unittest.TestCase):
                 {"path": "/api/cron/partner-sync-afternoon", "schedule": "0 12 * * *"},
                 {"path": "/api/cron/police-sync-afternoon", "schedule": "0 12 * * *"},
                 {"path": "/api/cron/embedding-sync-afternoon", "schedule": "0 14 * * *"},
+                # 설계 3장 — 발송 전용 크론. Hobby 크론은 지정 시간대 안 아무 때나 돌므로
+                # 09시대 수집과 겹치지 않게 KST 11시(UTC 02시)에 둔다(2026-11-06 팀 결정).
+                {"path": "/api/cron/alert-send", "schedule": "0 2 * * *"},
             ],
         )
         self.assertGreaterEqual(config["functions"]["api/index.py"]["maxDuration"], 300)

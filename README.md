@@ -233,6 +233,63 @@ uv run python scripts/search_storage_location_kakao.py 5052
 해당 값은 운영 DB에 이미 반영했습니다. 물품 원문이나 물품 연결 상태는 이 파일로 갱신하지 않습니다.
 서로 다른 DB에서도 같은 기관을 가리키도록 생성 ID 대신 출처·원본 기관 키로 연결합니다.
 
+## 분실물 알림 메일(스케줄러)
+
+검색 조건과 이메일로 알림을 예약하면, 등록 다음날부터 7일 동안 새로 들어온 습득물 중 유사한 물품을
+메일로 알리고 마지막 날에는 종료·연장을 안내합니다(PRD 2.1-4, 4.2 P1, 4.3-E).
+설계는 `docs/alert-scheduler/`(최신 결정은 설계 문서 15장), 화면 연결은 같은 폴더의 `frontend-handoff.md`에 있습니다.
+
+- `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 한 번 돕니다.
+  출처별 매칭(120초 안) → 마지막 날 종료 안내 → 발송 → 정리 순서입니다. 수집 크론은 알림을 건드리지 않습니다.
+- 유사 판정은 운영 검색의 키워드 단계(동의어·BM25)와 같습니다. 같은 검색어로 같은 반경을 검색했을 때
+  결과에 나오는 새 물품을 알립니다(`alerts/judge.py`).
+- 최근 24시간 동안 하루 발송 상한(Resend 기본 100통, Gmail SMTP 기본 450통)까지 보냅니다.
+- 메일 속 링크는 `/alerts/confirm`·`/alerts/extend`·`/alerts/cancel` 화면을 엽니다.
+- 운영 DB에는 `supabase db push`로 `20261115090000_create_alert_scheduler.sql`을 적용합니다.
+- 메일 설정이 하나라도 없으면 알림 예약 API(`/api/alerts*`)는 503을 돌려줍니다.
+  Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
+
+발신 수단은 **Gmail 앱 비밀번호(SMTP)** 입니다. 도메인을 사면 `MAIL_PROVIDER=resend`로
+Resend 무료 플랜에 옮길 수 있고, 코드는 고치지 않아도 됩니다.
+
+서버 전용 환경 변수입니다. 브라우저로 전달하지 않습니다.
+
+- `MAIL_PROVIDER` — `smtp`(기본, 비워도 됨) 또는 `resend`
+- `RESEND_API_KEY` — Resend API 키(`MAIL_PROVIDER=resend`일 때 필수)
+- `MAIL_FROM` — 보내는 주소. Resend는 **인증한 도메인의 주소**여야 합니다. 예: `리트리버 <alert@우리도메인>`
+- `MAIL_SMTP_HOST` — `smtp.gmail.com` (`MAIL_PROVIDER=smtp`일 때)
+- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS) (〃)
+- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소 (〃)
+- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리, 공백 없이 (〃)
+- `PUBLIC_BASE_URL` — 메일 속 링크 주소의 앞부분. 로컬은 `http://127.0.0.1:8000`
+- `ALERT_SECRET` — 링크 토큰과 IP 해시에 쓰는 무작위 문자열
+- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본은 Resend 100, SMTP 450
+
+**나중에 Resend로 옮길 때** — Resend 무료 플랜은 하루 100통·월 3,000통이고(하루는 UTC 기준),
+**도메인을 사서 인증하지 않으면 계정 주인 주소로만 보낼 수 있습니다.**
+
+1. Resend 대시보드 Domains에서 도메인을 추가하고, 안내하는 DNS 레코드(SPF·DKIM)를 도메인 관리 화면에 등록합니다.
+2. 인증이 끝나면(보통 몇 분~몇 시간) API Keys에서 발송 권한 키를 만들어 `RESEND_API_KEY`에 넣습니다.
+3. `MAIL_FROM`을 그 도메인 주소로 바꿉니다.
+
+메일마다 대기열 id와 내용으로 만든 `Idempotency-Key`를 붙여, 같은 메일을 다시 보내도
+Resend가 24시간 동안 한 번만 보냅니다(Gmail SMTP에는 이 기능이 없습니다).
+
+**Gmail 준비** — 서비스 전용 Gmail 계정에 2단계 인증을 켠 뒤 https://myaccount.google.com/apppasswords
+에서 앱 비밀번호를 만듭니다. 계정 비밀번호를 바꾸면 앱 비밀번호가 무효가 되어 메일이 멈춥니다.
+`ALERT_SECRET`은 다음 명령으로 만듭니다. 값을 바꾸면 이미 보낸 메일의 링크가 모두 무효가 됩니다.
+
+```powershell
+uv run python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+배포 전에는 DB 없이 메일 한 통만 보내 발송 설정과 스팸함 분류를 확인합니다.
+실제 메일이 나가므로 받는 주소를 확인한 뒤 실행합니다.
+
+```powershell
+uv run python -m retriever_lost_found.alerts.send_test --to 받을주소@example.com
+```
+
 ## 프로젝트 구조
 
 ```text
