@@ -46,7 +46,6 @@ export function AgentSearchApp() {
   const [placePage, setPlacePage] = useState(0);
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null);
   const [tab, setTab] = useState<"chat" | "results">("chat");
-  const [showHistory, setShowHistory] = useState(false);
   const [progress, setProgress] = useState("");
   const [pendingScope, setPendingScope] = useState<Scope | null>(null);
   const [confirmingPlace, setConfirmingPlace] = useState<AgentPlace | null>(null);
@@ -130,7 +129,6 @@ export function AgentSearchApp() {
   }, [conditions, currentPlace, response?.matches]);
 
   const matchCount = response?.matches?.total_count ?? 0;
-  const picks = response?.recommended_item_ids.flatMap(id => items.filter(item => item.item_id === id)) ?? [];
   const pageCount = Math.ceil((cursor ? matchCount : items.length) / ITEM_PAGE_SIZE);
   const busy = Boolean(progress) || paging;
   const detail = openItem?.item_id === location.state?.agentItemId ? openItem : null;
@@ -139,8 +137,8 @@ export function AgentSearchApp() {
   const nextRadius = nextSearchRadiusMeters(mappedRadius);
 
   useEffect(() => {
-    if (!picks.length && !selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [messages, picks.length, selectedCandidate]);
+    if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
+  }, [messages, selectedCandidate]);
 
   // 채팅·결과 서랍이 가린 지도 왼쪽 폭. 모바일은 지도가 위쪽에 따로 있어 가리는 폭이 없다.
   useLayoutEffect(() => {
@@ -218,6 +216,7 @@ export function AgentSearchApp() {
         setPlacePage(0);
         setSelectedCandidate(null);
         setSelectedInstitution([]);
+        if ((result.matches?.total_count ?? 0) > 0) setTab("results");
       }
       setLastTurn(null);
     } catch (err) {
@@ -322,10 +321,6 @@ export function AgentSearchApp() {
     void navigate(location.pathname + location.search, { state: { agentAlert: true } });
   }
 
-  const previousMessage = messages.at(-2);
-  const recentCount = previousMessage && "confirmedPlace" in previousMessage ? 3 : 1;
-  const hiddenCount = Math.max(0, messages.length - recentCount);
-  const rows = picks.length && !showHistory ? messages.slice(-recentCount) : messages;
   const drawerOpen = tab === "results" && Boolean(response?.matches) && !placeChanging;
   // 이미 받은 단서는 다시 묻지 않고 빠진 것만 안내한다.
   const hasPlaceClue = Boolean(currentPlace);
@@ -365,10 +360,7 @@ export function AgentSearchApp() {
             </span>}</div>
         </dl>}
         <div ref={feed} className="agent-feed">
-          {picks.length > 0 && hiddenCount > 0 && <button type="button" className="agent-history" onClick={() => setShowHistory(!showHistory)}>
-            {showHistory ? "이전 대화 접기" : `이전 대화 보기 (${hiddenCount})`}
-          </button>}
-          {rows.map((message, index) => "confirmedPlace" in message
+          {messages.map((message, index) => "confirmedPlace" in message
             ? <div className="agent-confirmed-card" key={index}>
               <small>확정된 장소</small>
               <strong>{message.confirmedPlace.name}</strong>
@@ -390,13 +382,6 @@ export function AgentSearchApp() {
               <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
                 onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
           </nav>}
-          {picks.length > 0 && <section aria-label="먼저 볼 후보">
-            <div className="agent-list-heading">
-              <span>먼저 볼 후보 {picks.length}건 · 전체 {matchCount.toLocaleString("ko-KR")}건</span>
-              <button type="button" onClick={() => { showFullScope(); setTab("results"); }}>전체 {matchCount.toLocaleString("ko-KR")}건 보기 ›</button>
-            </div>
-            <AgentResultList items={picks} institutions={institutionIndex} onOpen={openDetail} />
-          </section>}
           {response?.matches && conditions?.place && <button type="button" className="agent-alert-link" onClick={openAlerts}>새 물건 알림 받기</button>}
           {daangnSearch && <a className="agent-daangn-link" href={daangnSearch} target="_blank" rel="noopener noreferrer">
             당근에서 찾아보기 <span aria-hidden="true">↗</span>
