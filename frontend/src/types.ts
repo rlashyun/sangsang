@@ -118,6 +118,7 @@ export interface AgentResponse {
 export type AgentTurn =
   | { type: "message"; text: string }
   | { type: "select_place"; candidate_id: string }
+  | { type: "select_point"; latitude: number; longitude: number; name?: string; address?: string }
   | { type: "change_radius"; radius_m: number };
 
 export type AgentEvent =

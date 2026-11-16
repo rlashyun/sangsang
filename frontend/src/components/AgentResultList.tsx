@@ -2,6 +2,8 @@ import { FoundItemThumbnail } from "./FoundItemThumbnail";
 import { formatRegisteredDate } from "../lib/presentation";
 import type { AgentItem, Institution } from "../types";
 
+export const AGENT_ITEM_PAGE_SIZE = 6;
+
 export function AgentResultList({ items, institutions, onOpen }: {
   items: AgentItem[];
   institutions: Map<number, Institution>;

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { categoryIcon, formatRegisteredDate, foundItemImageUrl, sourceLabel } from "../lib/presentation";
+import { formatRegisteredDate, foundItemImageUrl, sourceLabel } from "../lib/presentation";
 import type { FoundItem, Institution } from "../types";
 import { ItemPickupGuide } from "./ItemPickupGuide";
+import { CategoryIcon } from "./CategoryIcon";
+import { CloseIcon } from "./CloseIcon";
 
 interface FoundItemDetailProps {
   item: FoundItem;
@@ -85,8 +87,8 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
     >
       <header className="item-detail-header">
         <h2 id="item-detail-title">{showPickup ? "물품 수령 안내" : "물품 상세정보"}</h2>
-        <button className="item-detail-close" type="button" onClick={onClose} autoFocus>
-          닫기 <span aria-hidden="true">×</span>
+        <button className="item-detail-close" type="button" aria-label="닫기" onClick={onClose} autoFocus>
+          <CloseIcon />
         </button>
       </header>
       {showPickup ? <ItemPickupGuide
@@ -116,7 +118,7 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
               </>
             ) : (
               <div className="item-detail-photo-empty">
-                <span aria-hidden="true">{categoryIcon(item.raw_category_name)}</span>
+                <CategoryIcon category={item.raw_category_name} />
                 <p>{imageFailed ? "사진을 불러오지 못했습니다." : "등록된 사진이 없습니다."}</p>
               </div>
             )}

@@ -50,6 +50,37 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     ]
 
 
+def test_chat_api_confirms_map_point_before_and_after_item():
+    # 지도 더블클릭으로 고른 지점: 물품 없이 먼저 고르면 물품을 묻고, 이어서 물품을 말하면 검색한다.
+    model = Mock(side_effect=[
+        {"action": "search", "message": "", "place_query": None, "item_query": "갈색 지갑",
+         "clear_item_query": False, "asks_for": None},
+    ])
+    item = {"item_id": 1, "institution_id": 42}
+    search = Mock(return_value=SearchPage((item,), 1))
+    router = create_agent_router(
+        model=model, find_places=lambda _: [],
+        get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
+    )
+    client = TestClient(create_app(Mock(), "dummy", agent_router=router))
+    point = {"type": "select_point", "request_id": "pt", "latitude": 37.5, "longitude": 127.03, "name": "강남역 분실물센터"}
+    first = json.loads(client.post("/api/search-chat/turns", json=point).text.splitlines()[-1])["response"]
+    assert first["status"] == "awaiting_clarification"
+    assert first["conditions"]["place"]["latitude"] == 37.5
+    assert first["conditions"]["place"]["name"] == "강남역 분실물센터"
+    search.assert_not_called()
+
+    reply = {"type": "message", "request_id": "item", "text": "갈색 지갑",
+             "session_id": first["session_id"], "revision": first["revision"]}
+    done = json.loads(client.post("/api/search-chat/turns", json=reply).text.splitlines()[-1])["response"]
+    assert done["matches"]["total_count"] == 1
+    assert search.call_count == 1
+    assert model.call_args.args[1]["awaiting_answer"] == "item"
+
+    outside = {**point, "request_id": "far", "latitude": 10.0}
+    assert client.post("/api/search-chat/turns", json=outside).status_code == 400
+
+
 def test_luna_openrouter_request():
     model = OpenRouterAgentModel("dummy")
     with patch("retriever_lost_found.integrations.agent_model.build_opener") as opener:
