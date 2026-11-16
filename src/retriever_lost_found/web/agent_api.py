@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..integrations.agent_model import OpenRouterAgentModel
 
-from .agent_conversation import Conversation, Model, confirm_place, respond_to_message, search_conversation
+from .agent_conversation import ITEM_QUESTION, Conversation, Model, confirm_place, respond_to_message, search_conversation
 from .agent_search import Institution, PlaceCandidate, SearchPage
 
 
@@ -139,7 +139,7 @@ def create_agent_router(
                 or not any(place.candidate_id == turn.candidate_id for place in session.state.candidates)
             ):
                 return conflict()
-            if turn.type == "change_radius" and session.state.confirmed is None:
+            if turn.type == "change_radius" and (session.state.confirmed is None or session.state.item_query is None):
                 return conflict()
             session.request_ids.add(turn.request_id)
             run_id = uuid4().hex
@@ -200,8 +200,10 @@ def create_agent_router(
                                 result = {"status": "awaiting_place_selection", "message": "지도에 표시한 장소가 맞나요?"}
                             state = replace(state, recent=(*state.recent[:-1], (turn.text, result["message"])))
                     elif turn.type == "select_place":
-                        state, _ = confirm_place(state, turn.candidate_id)
-                        result = {"status": "ready_to_search"}
+                        state, pending = confirm_place(state, turn.candidate_id)
+                        result = {"status": "ready_to_search"} if pending else {
+                            "status": "awaiting_clarification", "message": ITEM_QUESTION,
+                        }
                     else:
                         manual_radius = turn.radius_m
                         result = {"status": "ready_to_search"}

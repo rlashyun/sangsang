@@ -9,31 +9,37 @@ from retriever_lost_found.web.agent_conversation import Conversation, confirm_pl
 from retriever_lost_found.web.agent_search import Institution, PlaceCandidate, SearchPage, search_confirmed_place
 
 
-def decision(action, *, place=None, item=None, message="알겠습니다."):
-    return {"action": action, "message": message, "place_query": place, "item_query": item}
+def decision(action, *, place=None, item=None, message="알겠습니다.", asks_for=None):
+    return {
+        "action": action, "message": message, "place_query": place, "item_query": item,
+        "clear_item_query": False, "asks_for": asks_for,
+    }
 
 
 def test_conversation_retains_place_and_applies_item_correction():
     place = PlaceCandidate("p1", "강남역", "서울 강남구", 37.5, 127.03)
     find_places = Mock(return_value=[place])
     model = Mock(side_effect=[
-        decision("clarify", place="강남역", message="어떤 물품인가요?"),
+        decision("clarify", place="강남역", message="어떤 물품인가요?", asks_for="item"),
         decision("search", item="검은 지갑", message=""),
         decision("search", item="갈색 카드지갑"),
     ])
     first = respond_to_message(Conversation(), "강남역에서 잃어버렸어요", model=model, find_places=find_places)
-    assert first.status == "awaiting_clarification"
-    assert first.message == "어떤 물품인가요?"
-    find_places.assert_not_called()
-
-    second = respond_to_message(first.state, "검은 지갑이요", model=model, find_places=find_places)
-    assert second.status == "awaiting_place_selection"
-    assert second.pending is None
+    assert first.status == "awaiting_place_selection"
+    assert first.state.item_query is None
+    assert first.state.candidates == (place,)
     with pytest.raises(ValueError):
-        confirm_place(second.state, "stale")
-    confirmed, _ = confirm_place(second.state, "p1")
+        confirm_place(first.state, "stale")
+    confirmed, pending = confirm_place(first.state, "p1")
+    assert pending is None
+    assert confirmed.awaiting_answer == "item"
 
-    edited = respond_to_message(confirmed, "갈색 카드지갑이었어요", model=model, find_places=find_places)
+    second = respond_to_message(confirmed, "검은 지갑이요", model=model, find_places=find_places)
+    assert second.status == "ready_to_search"
+    assert second.pending.query == "검은 지갑"
+    assert model.call_args.args[1]["awaiting_answer"] == "item"
+
+    edited = respond_to_message(second.state, "갈색 카드지갑이었어요", model=model, find_places=find_places)
     assert edited.status == "ready_to_search"
     context = model.call_args.args[1]
     assert context["confirmed_place"] == "강남역"
@@ -97,7 +103,7 @@ def test_provider_requests_structured_output_and_rejects_truncated_response():
             model("instructions", {}, {})
 
 
-def test_model_can_rewrite_after_zero_and_ask_about_actual_results():
+def test_model_can_rewrite_after_zero_and_success_invites_optional_details():
     from retriever_lost_found.web.agent_conversation import search_conversation
 
     place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
@@ -107,19 +113,19 @@ def test_model_can_rewrite_after_zero_and_ask_about_actual_results():
         for item_id, name in enumerate(("갈색 반지갑", "갈색 장지갑", "갈색 카드지갑", "갈색 동전지갑"), 1)
     )
     search = Mock(side_effect=[SearchPage((), 0), SearchPage(rows, 4)])
-    model = Mock(side_effect=[{"query": "브라운 지갑"}, {"question": "카드지갑처럼 얇았나요?"}])
+    model = Mock(return_value={"query": "브라운 지갑"})
     result = list(search_conversation(
         state, model=model, get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
     ))[-1]
     assert [call.args for call in search.call_args_list] == [((42,), "갈색 지갑"), ((42,), "브라운 지갑")]
     assert model.call_args_list[0].args[1]["match_count"] == 0
-    assert model.call_args.args[1]["top_items"] == [{"item_name": row["item_name"]} for row in rows[:3]]
+    assert model.call_count == 1
     assert result["recommended_item_ids"] == [1, 2, 3]
-    assert result["message"].endswith("카드지갑처럼 얇았나요?")
+    assert result["message"].endswith("기억나는 특징이 더 있다면 편하게 덧붙여 주세요.")
     assert result["state"].last_search_message == result["message"]
 
 
-def test_successful_search_survives_failed_follow_up_without_retry():
+def test_successful_first_search_needs_no_follow_up_model_call():
     from retriever_lost_found.web.agent_conversation import search_conversation
 
     place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
@@ -130,7 +136,7 @@ def test_successful_search_survives_failed_follow_up_without_retry():
         state, model=model, get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
     ))[-1]
     search.assert_called_once_with((42,), "갈색 지갑")
-    assert model.call_count == 1
+    model.assert_not_called()
     assert result["status"] == "results"
     assert result["recommended_item_ids"] == [7]
 
@@ -148,3 +154,20 @@ def test_invalid_rewrite_keeps_zero_match_response():
     search.assert_called_once_with((42,), "갈색 지갑")
     assert result["status"] == "no_matches"
     assert result["matches"]["total_count"] == 0
+
+
+def test_short_reply_to_place_question_remains_a_place_clue():
+    model = Mock(return_value=decision(
+        "clarify", place="강남 나이키 매장", message="어떤 물품을 잃어버렸어요?", asks_for="item",
+    ))
+    candidate = PlaceCandidate("p1", "나이키 강남", "", 37.5, 127.03)
+    find_places = Mock(return_value=[candidate])
+    state = Conversation(place_query="강남", awaiting_answer="place")
+    turn = respond_to_message(state, "나이키", model=model, find_places=find_places)
+    assert model.call_args.args[1]["awaiting_answer"] == "place"
+    assert turn.state.place_query == "강남 나이키 매장"
+    assert turn.state.item_query is None
+    assert turn.status == "awaiting_place_selection"
+    assert turn.state.candidates == (candidate,)
+    assert turn.pending is None
+    find_places.assert_called_once_with("강남 나이키 매장")

@@ -115,8 +115,8 @@ def search_confirmed_place(
             break
         query = _validated_query(rewritten)
 
-    # The second attempt only runs after zero matches, so its cursor also
-    # serves the combined list. Check the adapter's page before exposing it.
+    # Only the final attempt supplies the results and cursor. Earlier attempts
+    # are recorded for progress and never contribute items to the list.
     if any(item["institution_id"] not in scope for item in page.items):
         raise RuntimeError("검색 결과의 보관기관 범위가 올바르지 않습니다.")
     items = list({item["item_id"]: item for item in page.items}.values())

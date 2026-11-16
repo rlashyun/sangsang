@@ -14,14 +14,13 @@ import { NewItemAlert } from "./NewItemAlert";
 
 const ITEM_PAGE_SIZE = 4;
 const PLACE_PAGE_SIZE = 5;
-const EXAMPLE = "강남역 근처에서 검은색 지갑을 잃어버렸어요.";
 const TOOL_LABELS: Record<string, string> = {
   places: "장소 후보를 찾고 있어요.",
   institutions: "반경 안의 보관기관을 확인하고 있어요.",
   found_items: "습득물을 찾고 있어요.",
 };
 
-type ChatMessage = { author: "user" | "agent"; text: string };
+type ChatMessage = { author: "user" | "agent"; text: string } | { confirmedPlace: AgentPlace };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
 
@@ -32,7 +31,10 @@ function mapPlace(place: AgentPlace): Place {
 export function AgentSearchApp() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // PRD 4.3-A — 대화는 분실 장소를 묻는 메시지로 시작한다.
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { author: "agent", text: "어디서 잃어버렸어요?" },
+  ]);
   const [draft, setDraft] = useState("");
   const [response, setResponse] = useState<AgentResponse | null>(null);
   const [items, setItems] = useState<AgentItem[]>([]);
@@ -138,6 +140,14 @@ export function AgentSearchApp() {
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
     setTab("chat");
+    // PRD 4.3-B — Only the newest search supplies recommendations and result pages.
+    setResponse(current => current && {
+      ...current, matches: null, recommended_item_ids: [], search_attempts: [],
+    });
+    setItems([]);
+    setCursor(null);
+    setItemPage(0);
+    setSelectedInstitution([]);
     if (turn.type === "message" && !retry) {
       setMessages(current => [...current, { author: "user", text: turn.text }]);
       setDraft("");
@@ -162,7 +172,13 @@ export function AgentSearchApp() {
         setError(result.error?.message || result.message || "검색 중 문제가 생겼어요.");
         return;
       }
-      if (result.message) setMessages(current => [...current, { author: "agent", text: result.message }]);
+      const replies: ChatMessage[] = [];
+      if (turn.type === "select_place" && result.status !== "cancelled" && result.conditions.place) {
+        // PRD 4.3-A — Show the confirmed location before asking for item details.
+        replies.push({ confirmedPlace: result.conditions.place });
+      }
+      if (result.message) replies.push({ author: "agent", text: result.message });
+      if (replies.length) setMessages(current => [...current, ...replies]);
       if (result.status !== "cancelled") {
         setResponse(result.status === "ended" ? null : result);
         setItems(result.matches?.items ?? []);
@@ -263,10 +279,17 @@ export function AgentSearchApp() {
     void navigate(location.pathname + location.search, { state: { agentAlert: true } });
   }
 
-  const rows = tab === "chat" && picks.length && !showHistory ? messages.slice(-1) : messages;
+  const previousMessage = messages.at(-2);
+  const recentCount = previousMessage && "confirmedPlace" in previousMessage ? 3 : 1;
+  const hiddenCount = Math.max(0, messages.length - recentCount);
+  const rows = picks.length && !showHistory ? messages.slice(-recentCount) : messages;
   const groupNames = selectedInstitution.map(institution => institution.name).join(", ");
   const groupIds = selectedInstitution.map(institution => institution.storage_location_id).join(",");
   const submittedQuery = response?.search_attempts.at(-1)?.query ?? conditions?.item_query ?? "";
+  // PRD 4.3-A — 외부 검색어에도 사용자가 확정한 분실 장소를 사용한다.
+  const daangnSearch = response?.matches && conditions?.place && conditions.item_query
+    ? `https://www.daangn.com/kr/search/community/?${new URLSearchParams({ q: `${conditions.place.name} ${conditions.item_query}` })}`
+    : null;
   return <>
     <header className="app-header">
       <a className="app-wordmark" href="/" aria-label="RETRIEVER 홈">RETRIEVER</a>
@@ -296,16 +319,16 @@ export function AgentSearchApp() {
         </nav>}
         <div ref={feed} className="agent-feed">
           {tab === "chat" ? <>
-            {messages.length === 0 && <>
-              <div className="agent-bubble agent-intro"><strong>잃어버린 장소와 물건을 알려주세요.</strong><br />예) {EXAMPLE}<br />지갑, 휴대폰, 가방, 카드, 무선이어폰, 모자를 찾을 수 있어요.</div>
-              <div className="agent-examples">
-                <button type="button" onClick={() => fill(EXAMPLE)}>강남역에서 검은 지갑</button>
-                <button type="button" onClick={() => fill("어제 지하철에서 휴대폰을 잃어버렸어요.")}>어제 지하철에서 휴대폰</button>
+            {picks.length > 0 && hiddenCount > 0 && <button type="button" className="agent-history" onClick={() => setShowHistory(!showHistory)}>
+              {showHistory ? "이전 대화 접기" : `이전 대화 보기 (${hiddenCount})`}
+            </button>}
+            {rows.map((message, index) => "confirmedPlace" in message
+              ? <div className="agent-confirmed-card" key={index}>
+                <small>확정된 장소</small>
+                <strong>{message.confirmedPlace.name}</strong>
+                {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
               </div>
-            </>}
-            {!showHistory && picks.length > 0 && messages.length > 1 && <button type="button" className="agent-history" onClick={() => setShowHistory(true)}>이전 대화 보기 ({messages.length - 1})</button>}
-            {showHistory && picks.length > 0 && <button type="button" className="agent-history" onClick={() => setShowHistory(false)}>이전 대화 접기</button>}
-            {rows.map((message, index) => <p key={index} className={`agent-bubble agent-bubble-${message.author}`}>{message.text}</p>)}
+              : <p key={index} className={`agent-bubble agent-bubble-${message.author}`}>{message.text}</p>)}
             {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates">
               {pagePlaces.map(({ id, place, number }) => <li key={id} id={`agent-place-${id}`}>
                 <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
@@ -342,6 +365,9 @@ export function AgentSearchApp() {
               </nav>}
             </>}
           </>}
+          {daangnSearch && <a className="agent-daangn-link" href={daangnSearch} target="_blank" rel="noopener noreferrer">
+            당근에서 찾아보기 <span aria-hidden="true">↗</span>
+          </a>}
         </div>
         {(progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
           <span>{error || (cancelling ? "검색을 취소하고 있어요." : progress) || "다음 결과를 불러오고 있어요."}</span>
@@ -351,7 +377,7 @@ export function AgentSearchApp() {
         <form className="agent-compose" onSubmit={send}>
           <label className="sr-only" htmlFor="agent-input">메시지</label>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
-            maxLength={1000} placeholder="잃어버린 장소와 물건을 입력하세요" />
+            maxLength={1000} placeholder="메시지를 입력하세요" />
           <button type="submit" disabled={busy || !draft.trim()}>보내기</button>
         </form>
       </section>
