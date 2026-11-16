@@ -125,7 +125,7 @@ FastAPI `app`을 진입점으로 사용합니다.
 검색 의미 확장에는 서버 전용 `OPENROUTER_API_KEY`를 선택적으로 설정합니다.
 키가 없으면 키워드 검색만 실행하며, 테스트·CI에서는 빈 값으로 둡니다.
 Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이블을 준비하고
-`supabase/migrations/20261111042228_scoped_bge_m3_semantic_search.sql`을 적용합니다.
+`supabase/migrations/20261111042456_scoped_bge_m3_semantic_search.sql`을 적용합니다.
 운영 DB를 Preview에 연결하지 않습니다.
 
 단, 2026-11-11 김성현이 명시적으로 승인한 `seonghyun_search` 검색 실험 Preview는
