@@ -2,10 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
-import { nextSearchRadiusMeters, previousSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
+import { DEFAULT_SEARCH_RADIUS_METERS, nextSearchRadiusMeters, previousSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
-import { applyPreviewTheme } from "../lib/theme";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
@@ -56,6 +55,7 @@ export function AgentSearchApp() {
   const [institutions, setInstitutions] = useState<Institution[]>([]);
   const [institutionsLoaded, setInstitutionsLoaded] = useState(false);
   const [institutionError, setInstitutionError] = useState("");
+  const [countsAvailable, setCountsAvailable] = useState(false);
   const [selectedInstitution, setSelectedInstitution] = useState<Institution[]>([]);
   const selectedInstitutionRef = useRef(selectedInstitution);
   selectedInstitutionRef.current = selectedInstitution;
@@ -71,11 +71,27 @@ export function AgentSearchApp() {
   const feed = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    applyPreviewTheme("retriever-blue");
     const load = new AbortController();
-    fetchInstitutions(load.signal, false).then(payload => {
-      setInstitutions(payload.institutions ?? []);
+    void fetchInstitutions(load.signal, false).then(payload => {
+      if (load.signal.aborted) return;
+      const locations = payload.institutions ?? [];
+      setInstitutions(locations);
       setInstitutionsLoaded(true);
+      setCountsAvailable(payload.counts_available === true);
+      if (payload.counts_available || !locations.length) return;
+
+      // PRD 3.1-4 — 기존 지도처럼 위치를 먼저 띄우고 기관별 물품 수를 나중에 채운다.
+      void fetchInstitutions(load.signal).then(counts => {
+        if (load.signal.aborted || !counts.counts_available) return;
+        const byId = new Map(counts.institutions?.map(row => [row.storage_location_id, row.item_count]));
+        setInstitutions(locations.map(row => {
+          const itemCount = row.storage_location_id === undefined ? undefined : byId.get(row.storage_location_id);
+          return itemCount === undefined ? row : { ...row, item_count: itemCount };
+        }));
+        setCountsAvailable(true);
+      }).catch(() => {
+        // 집계를 못 불러와도 이미 표시한 기관은 유지한다.
+      });
     }).catch(() => {
       if (!load.signal.aborted) setInstitutionError("기관 위치를 불러오지 못했어요.");
     });
@@ -86,8 +102,18 @@ export function AgentSearchApp() {
   }, []);
 
   const conditions = response?.conditions;
-  const currentPlace = placeChanging ? null : confirmingPlace ?? conditions?.place ?? null;
-  const selectedPlace = useMemo(() => currentPlace ? mapPlace(currentPlace) : null, [currentPlace]);
+  const currentPlace = confirmingPlace ?? (placeChanging ? null : conditions?.place ?? null);
+  const placeName = currentPlace?.name;
+  const placeAddress = currentPlace?.address;
+  const placeLatitude = currentPlace?.latitude;
+  const placeLongitude = currentPlace?.longitude;
+  // PRD 4.4 — 같은 장소에서 물건 단서만 갱신하면 지도의 확대·이동 상태를 유지한다.
+  const selectedPlace = useMemo<Place | null>(() => (
+    placeLatitude === undefined || placeLongitude === undefined ? null : {
+      name: placeName ?? "", address: placeAddress ?? "", latitude: placeLatitude, longitude: placeLongitude,
+      phone: "", category: "", url: "",
+    }
+  ), [placeName, placeAddress, placeLatitude, placeLongitude]);
   const searchCenters = useMemo(() => selectedPlace ? [selectedPlace] : [], [selectedPlace]);
   const candidates = response?.place_candidates;
   const numberedPlaces = useMemo(() => (candidates ?? []).map((candidate, index) => ({
@@ -98,8 +124,9 @@ export function AgentSearchApp() {
   const mapPlaces = useMemo(() => selectedPlace ? [] : pagePlaces.map(entry => entry.place), [pagePlaces, selectedPlace]);
   const placeNumbers = useMemo(() => pagePlaces.map(entry => entry.number), [pagePlaces]);
   const previewPlace = pagePlaces.find(entry => entry.id === selectedCandidate)?.place ?? null;
-  const mappedRadius = pendingScope?.radius_m ?? (confirmingPlace ? null : conditions?.radius_m) ?? 1000;
-  const institutionIds = pendingScope?.institution_ids ?? conditions?.institution_ids;
+  const mappedRadius = pendingScope?.radius_m ?? (confirmingPlace ? null : conditions?.radius_m) ?? DEFAULT_SEARCH_RADIUS_METERS;
+  const institutionIds = pendingScope?.institution_ids ?? (confirmingPlace ? undefined : conditions?.institution_ids);
+  const scopeReady = !confirmingPlace || pendingScope !== null;
   const visibleInstitutions = useMemo(() => {
     if (!selectedPlace) return institutions;
     const scope = new Set(institutionIds);
@@ -121,7 +148,7 @@ export function AgentSearchApp() {
   }
 
   const onMapInstitutionSelect = useCallback((group: Institution[]) => {
-    if (!response?.matches || !currentPlace || !conditions?.place) return;
+    if (controller.current || !response?.matches || !currentPlace || !conditions?.place) return;
     const allowed = new Set(conditions.institution_ids);
     const groupInScope = group.filter(row => row.storage_location_id !== undefined && allowed.has(row.storage_location_id));
     if (groupInScope.length) {
@@ -342,11 +369,36 @@ export function AgentSearchApp() {
     : conditions?.item_query ? "메시지를 입력하세요" : "잃어버린 물건을 입력하세요";
   const groupNames = selectedInstitution.map(institution => institution.name).join(", ");
   const groupIds = selectedInstitution.map(institution => institution.storage_location_id).join(",");
+  const mapInstitutionSummary = visibleInstitutions.length
+    ? `보관기관 ${visibleInstitutions.length.toLocaleString("ko-KR")}곳`
+    : "등록된 기관 없음";
+  const mapBadge = currentPlace
+    ? `${currentPlace.name} 기준 ${radiusKilometersLabel(mappedRadius)}`
+      + (scopeReady && institutionsLoaded ? ` · ${mapInstitutionSummary}` : "")
+    : institutionsLoaded ? "숫자를 누르면 확대 · 핀을 누르면 기관 정보" : "확대하면 개별 기관을 볼 수 있어요";
   const submittedQuery = response?.search_attempts.at(-1)?.query ?? conditions?.item_query ?? "";
   // PRD 4.3-A — 외부 검색어에도 사용자가 확정한 분실 장소를 사용한다.
   const daangnSearch = response?.matches && conditions?.place && conditions.item_query
     ? `https://www.daangn.com/kr/search/community/?${new URLSearchParams({ q: `${conditions.place.name} ${conditions.item_query}` })}`
     : null;
+  // PRD 4.2 — 검색 뒤 반경을 바꾸는 버튼은 보고 있는 결과 하단에 둔다.
+  const radiusActions = currentPlace && response?.matches && (previousRadius !== null || nextRadius !== null) && (
+    <div className="item-search-followup agent-radius-footer" aria-label="검색 범위 다시 살펴보기">
+      <div className="item-radius-actions">
+        {previousRadius !== null && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: previousRadius })}>
+          {radiusKilometersLabel(previousRadius)}로 돌아가기
+        </button>}
+        {nextRadius !== null && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>
+          {radiusKilometersLabel(nextRadius)}로 넓혀보기
+        </button>}
+      </div>
+    </div>
+  );
+  const requestStatus = (progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
+    <span>{error || (cancelling ? "검색을 취소하고 있어요." : progress) || "다음 결과를 불러오고 있어요."}</span>
+    {progress && <button type="button" onClick={() => void cancel()} disabled={!activeRun || cancelling}>취소</button>}
+    {error && lastTurn && !busy && <button type="button" onClick={() => void submit(lastTurn, true)}>다시 시도</button>}
+  </div>;
   return <>
     <header className="app-header">
       <a className="app-wordmark" href={`/${location.search}`} aria-label="RETRIEVER 홈">RETRIEVER</a>
@@ -366,11 +418,7 @@ export function AgentSearchApp() {
             {placeChanging && <button type="button" disabled={busy} onClick={() => setPlaceChanging(false)}>취소</button>}</div>
           <div><dt>물건</dt><dd>{conditions?.item_query || "입력 대기 중"}</dd>
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
-          <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd>
-            {currentPlace && response?.matches && <span className="agent-radius-actions">
-              {previousRadius && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: previousRadius })}>{radiusKilometersLabel(previousRadius)}로 줄이기</button>}
-              {nextRadius && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>{radiusKilometersLabel(nextRadius)}로 넓히기</button>}
-            </span>}</div>
+          <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
         <div ref={feed} className="agent-feed">
           {messages.length === 0 && <>
@@ -412,11 +460,8 @@ export function AgentSearchApp() {
             </a>}
           </div>}
         </div>
-        {(progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
-          <span>{error || (cancelling ? "검색을 취소하고 있어요." : progress) || "다음 결과를 불러오고 있어요."}</span>
-          {progress && <button type="button" onClick={() => void cancel()} disabled={!activeRun || cancelling}>취소</button>}
-          {error && lastTurn && !busy && <button type="button" onClick={() => void submit(lastTurn, true)}>다시 시도</button>}
-        </div>}
+        {!drawerOpen && radiusActions}
+        {!drawerOpen && requestStatus}
         <form className="agent-compose" onSubmit={send}>
           <label className="sr-only" htmlFor="agent-input">메시지</label>
           <button type="button" className="agent-photo" aria-label="사진 추가" title="사진 검색은 준비 중이에요">
@@ -447,6 +492,8 @@ export function AgentSearchApp() {
               </nav>}
             </>}
         </div>
+        {requestStatus}
+        {radiusActions}
       </aside>}
 
       {response?.matches && matchCount > 0 && !placeChanging && <button type="button" className="agent-handle" aria-expanded={drawerOpen}
@@ -456,10 +503,11 @@ export function AgentSearchApp() {
       </button>}
 
       <KakaoMap themeKey="retriever-blue" institutions={institutions} institutionsLoaded={institutionsLoaded}
-        institutionError={institutionError} countsAvailable={false} places={mapPlaces} placeNumbers={placeNumbers}
+        institutionError={institutionError} countsAvailable={countsAvailable} places={mapPlaces} placeNumbers={placeNumbers}
         selectedPlace={selectedPlace} searchCenters={searchCenters} previewPlace={previewPlace} radiusMeters={mappedRadius}
-        leftInset={mapInset} onPointSelect={onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={selectedPlace ? `잃어버린 곳 · ${selectedPlace.name}` : "잃어버린 곳을 먼저 찾아보세요."}
-        onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect} onResetRadius={showFullScope} />
+        leftInset={mapInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={mapBadge}
+        showInstitutionCounts={scopeReady} onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect}
+        onResetRadius={selectedInstitution.length ? showFullScope : undefined} />
     </main>
     {detail && <FoundItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)} onClose={() => void navigate(-1)} />}
     {guideIsOpen && <UsageGuide variant="chat" searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {

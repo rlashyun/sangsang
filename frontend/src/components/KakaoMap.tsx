@@ -50,13 +50,14 @@ interface KakaoMapProps {
   radiusMeters: number;
   visibleInstitutions: Institution[];
   mapBadge: string;
+  showInstitutionCounts?: boolean;
   /** 지도 왼쪽을 가린 패널의 폭(px). 선택한 지점을 가려지지 않은 영역의 가운데에 둔다. */
   leftInset?: number;
   /** 보관기관 핀을 더블클릭해 고른 위치. 없으면 더블클릭 선택과 안내를 쓰지 않는다. */
   onPointSelect?: (point: { latitude: number; longitude: number; name: string; address: string }) => void;
   onPlaceSelect: (place: Place) => void;
   onInstitutionSelect: (institutions: Institution[]) => void;
-  onResetRadius: () => void;
+  onResetRadius?: () => void;
 }
 
 function coordinateKey(institution: Institution) {
@@ -183,6 +184,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   radiusMeters,
   visibleInstitutions,
   mapBadge,
+  showInstitutionCounts = true,
   leftInset = 0,
   onPointSelect,
   onPlaceSelect,
@@ -197,16 +199,16 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const searchMarkersRef = useRef<Array<{ marker: any; place: Place; number: number }>>([]);
   const countMarkerImagesRef = useRef(new Map<string, any>());
   const selectedPlaceRef = useRef<Place | null>(selectedPlace);
-  // PRD 4.4 — 지도 분포는 유지하며 표시 밀도만 비교한다. 전환 시 지도 위치는 유지한다.
+  // PRD 4.4 — 승인된 지도 핀 및 클러스터 스타일.
   const softenedMarkers = true;
-  const preserveViewportRef = useRef(false);
-  const appliedInsetRef = useRef(0);
   const [mapReady, setMapReady] = useState(false);
   const mapColors = useMemo(() => readMapColorTokens(), [themeKey]);
 
   selectedPlaceRef.current = selectedPlace;
   const onPointSelectRef = useRef(onPointSelect);
   onPointSelectRef.current = onPointSelect;
+  const onInstitutionSelectRef = useRef(onInstitutionSelect);
+  onInstitutionSelectRef.current = onInstitutionSelect;
 
   useImperativeHandle(forwardedRef, () => ({
     getCenter() {
@@ -357,7 +359,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         ) + (onPointSelectRef.current
           ? '<div class="info-hint">더블클릭하면 이 위치를 장소로 선택해요</div>' : ""));
         infoWindowRef.current.open(map, marker);
-        onInstitutionSelect(group);
+        onInstitutionSelectRef.current(group);
       });
       return marker;
     });
@@ -378,7 +380,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       clustererRef.current?.clear();
       markers.forEach((marker) => marker.setMap(null));
     };
-  }, [countsAvailable, institutions, mapColors, mapReady, onInstitutionSelect, softenedMarkers]);
+  }, [countsAvailable, institutions, mapColors, mapReady, softenedMarkers]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
@@ -399,12 +401,6 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     });
     searchMarkersRef.current = nextMarkers;
 
-    if (places.length) {
-      const bounds = new kakao.maps.LatLngBounds();
-      places.forEach((place) => bounds.extend(new kakao.maps.LatLng(place.latitude, place.longitude)));
-      mapRef.current.setBounds(bounds, 48, 48, 48, 48 + leftInset);
-    }
-
     return () => nextMarkers.forEach(({ marker }) => marker.setMap(null));
   }, [mapColors, mapReady, onPlaceSelect, places, placeNumbers]);
 
@@ -419,8 +415,6 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         clustererRef.current.addMarkers(institutionMarkersRef.current);
       }
       searchMarkersRef.current.forEach(({ marker }) => marker.setMap(map));
-      infoWindowRef.current?.close();
-      preserveViewportRef.current = false;
       return;
     }
 
@@ -438,46 +432,50 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         : compactMarkerImage(kakao, mapColors, "partner", false, number));
     });
 
-    const selectedMarker = searchMarkersRef.current.find(({ place }) => place === selectedPlace)?.marker;
-    if (selectedMarker && searchCenters.length === 1) {
-      infoWindowRef.current.setContent(
-        `<div class="info-window"><strong>${escapeHtml(selectedPlace.name)}</strong>`
-        + `<span>${escapeHtml([selectedPlace.address, selectedPlace.phone].filter(Boolean).join(" · "))}</span></div>`,
-      );
-      infoWindowRef.current.open(map, selectedMarker);
-    } else {
-      infoWindowRef.current?.close();
-    }
-    if (!preserveViewportRef.current) {
-      map.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48 + leftInset);
-    }
-    preserveViewportRef.current = false;
-  }, [institutions, mapColors, mapReady, radiusMeters, searchCenters, selectedPlace, visibleInstitutions, softenedMarkers]);
+  }, [countsAvailable, institutions, mapColors, mapReady, onPlaceSelect, places, placeNumbers, selectedPlace, visibleInstitutions]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map || !searchCenters.length) return;
     const kakao = window.kakao;
     const halos = searchCenters.map(place => createRadiusHalo(kakao, map, place, radiusMeters, mapColors.radiusFill));
-    const markers = searchCenters.filter(place => place !== selectedPlace || !places.includes(place)).map(place => (
-      new kakao.maps.Marker({ map, position: new kakao.maps.LatLng(place.latitude, place.longitude), image: placePreviewMarkerImage(kakao, mapColors), title: place.name, zIndex: 5 })
-    ));
-    return () => {
-      halos.forEach(halo => halo.setMap(null));
-      markers.forEach(marker => marker.setMap(null));
-    };
-  }, [mapColors, mapReady, places, radiusMeters, searchCenters, selectedPlace]);
-
-  // 패널 폭이 바뀌면 보이는 지점이 남은 영역의 가운데에 머물도록 지도만 그만큼 민다.
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return;
-    const delta = leftInset - appliedInsetRef.current;
-    appliedInsetRef.current = leftInset;
-    if (delta) mapRef.current.panBy(-delta / 2, 0);
-  }, [mapReady, leftInset]);
+    return () => halos.forEach(halo => halo.setMap(null));
+  }, [mapColors, mapReady, radiusMeters, searchCenters]);
 
   useEffect(() => {
-    if (!mapReady || !mapRef.current || selectedPlace || !previewPlace) return;
+    const map = mapRef.current;
+    if (!mapReady || !map || !searchCenters.length) return;
+    const kakao = window.kakao;
+    const markers = searchCenters.filter(place => place !== selectedPlace || !places.includes(place)).map(place => ({
+      place,
+      marker: new kakao.maps.Marker({
+        map,
+        position: new kakao.maps.LatLng(place.latitude, place.longitude),
+        image: placePreviewMarkerImage(kakao, mapColors),
+        title: place.name,
+        zIndex: 5,
+      }),
+    }));
+    const selectedMarker = [...searchMarkersRef.current, ...markers].find(({ place }) => place === selectedPlace)?.marker;
+    if (selectedMarker && selectedPlace && searchCenters.length === 1) {
+      infoWindowRef.current.setContent(
+        `<div class="info-window"><strong>${escapeHtml(selectedPlace.name)}</strong>`
+        + `<span>${escapeHtml([selectedPlace.address, selectedPlace.phone].filter(Boolean).join(" · "))}</span></div>`,
+      );
+      infoWindowRef.current.open(map, selectedMarker);
+    }
+    return () => markers.forEach(({ marker }) => marker.setMap(null));
+  }, [mapColors, mapReady, onPlaceSelect, places, placeNumbers, searchCenters, selectedPlace]);
+
+  // PRD 4.4 — 여백은 한 번만 계산해 반경과 후보를 패널 오른쪽의 지도 안에 맞춘다.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !selectedPlace) return;
+    const kakao = window.kakao;
+    mapRef.current.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48 + leftInset);
+  }, [leftInset, mapReady, radiusMeters, searchCenters, selectedPlace]);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || selectedPlace || !places.length) return;
     const kakao = window.kakao;
     const map = mapRef.current;
     // PRD 4.3-A — 미리보기는 지도만 이동하고 반경·물품 조회를 시작하지 않는다.
@@ -487,11 +485,21 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         : compactMarkerImage(kakao, mapColors, "partner", false, number));
       marker.setZIndex(place === previewPlace ? 6 : 4);
     });
+    if (!previewPlace) {
+      const bounds = new kakao.maps.LatLngBounds();
+      places.forEach(place => bounds.extend(new kakao.maps.LatLng(place.latitude, place.longitude)));
+      map.setBounds(bounds, 48, 48, 48, 48 + leftInset);
+      return;
+    }
     map.setLevel(3, { animate: false });
     const target = new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude);
-    const projection = map.getProjection();
-    const point = projection.containerPointFromCoords(target);
-    map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+    if (leftInset) {
+      const projection = map.getProjection();
+      const point = projection.containerPointFromCoords(target);
+      map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+    } else {
+      map.setCenter(target);
+    }
     const marker = searchMarkersRef.current.find(({ place }) => place === previewPlace)?.marker;
     if (marker) {
       infoWindowRef.current.setContent(
@@ -500,7 +508,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       );
       infoWindowRef.current.open(map, marker);
     }
-  }, [mapColors, mapReady, previewPlace, selectedPlace, visibleInstitutions, softenedMarkers]);
+  }, [leftInset, mapColors, mapReady, onPlaceSelect, places, placeNumbers, previewPlace, selectedPlace]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;
@@ -519,14 +527,16 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         {institutionsLoaded && !institutionError && (
           <>
             {selectedPlace && <b>반경 {radiusKilometersLabel(radiusMeters)}</b>}
-            <span className="source-count"><span className="source-dot partner" />연계기관 <strong>{sourceCounts.partner.toLocaleString("ko-KR")}곳</strong></span>
-            <span className="source-count"><span className="source-dot police" />경찰청 <strong>{sourceCounts.police.toLocaleString("ko-KR")}곳</strong></span>
+            {showInstitutionCounts && <>
+              <span className="source-count"><span className="source-dot partner" />연계기관 <strong>{sourceCounts.partner.toLocaleString("ko-KR")}곳</strong></span>
+              <span className="source-count"><span className="source-dot police" />경찰청 <strong>{sourceCounts.police.toLocaleString("ko-KR")}곳</strong></span>
+            </>}
           </>
         )}
       </div>}
       <div className="map-toolbar">
         <div className="map-badge">{mapBadge}</div>
-        {selectedPlace && (
+        {selectedPlace && onResetRadius && (
           <button className="reset-radius" type="button" onClick={onResetRadius}>
             전체 기관 보기
           </button>

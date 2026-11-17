@@ -50,6 +50,7 @@ async (page) => {
     class FakeObject {
       constructor(_, options) { this.center = options?.center || new LatLng(37.55, 126.97); }
       getCenter() { return this.center; }
+      setCenter(value) { this.center = value; }
       getLevel() { return this.level ?? 8; }
       setMapTypeId(value) { this.mapTypeId = value; }
       addControl() {} setBounds() {} extend() {} setMap() {} clear() {}
