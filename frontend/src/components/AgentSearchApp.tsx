@@ -374,11 +374,13 @@ export function AgentSearchApp() {
         </dl>}
         <div ref={feed} className="agent-feed">
           {messages.length === 0 && <>
+            <h2 className="agent-welcome-title">이용 방법</h2>
             <ol className="agent-welcome-steps" aria-label="이용 순서">
               <li><span aria-hidden="true">1</span>잃어버린 장소를 적거나, 지도에서 보관기관 핀을 더블클릭하세요</li>
               <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
+            <hr className="agent-welcome-divider" />
             <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>
           </>}
           {messages.map((message, index) => "confirmedPlace" in message

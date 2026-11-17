@@ -2257,7 +2257,9 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   font-weight: 700;
 }
 
-/* 대화 시작 전 첫 화면 안내: 인사 말풍선 아래 이용 순서 */
+/* 대화 시작 전 첫 화면 안내: 이용 방법 제목, 단계, 구분선, 첫 질문 말풍선 */
+.agent-welcome-title { margin: 2px 2px 0; font-size: 14px; font-weight: 700; color: var(--color-text); }
+.agent-welcome-divider { width: 100%; margin: 4px 0; border: 0; border-top: 1px dashed var(--color-border-control); }
 .agent-welcome-steps { display: grid; gap: 10px; margin: 4px 0 0; padding: 0 2px; list-style: none; }
 .agent-welcome-steps li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.5; color: var(--color-text); }
 .agent-welcome-steps li span {
