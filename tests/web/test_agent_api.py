@@ -77,6 +77,8 @@ def test_chat_api_confirms_map_point_before_and_after_item():
     assert first["status"] == "awaiting_clarification"
     assert first["conditions"]["place"]["latitude"] == 37.5
     assert first["conditions"]["place"]["name"] == "강남역 분실물센터"
+    assert first["conditions"]["radius_m"] == 1000
+    assert first["conditions"]["institution_ids"] == [42]
     search.assert_not_called()
 
     reply = {"type": "message", "request_id": "item", "text": "갈색 지갑",
@@ -88,6 +90,38 @@ def test_chat_api_confirms_map_point_before_and_after_item():
 
     outside = {**point, "request_id": "far", "latitude": 10.0}
     assert client.post("/api/search-chat/turns", json=outside).status_code == 400
+
+
+def test_chat_api_resolves_scope_before_item_when_confirming_candidate():
+    model = Mock(return_value={
+        "action": "search", "message": "", "place_query": "강남역", "item_query": None,
+        "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None,
+    })
+    search = Mock()
+    institutions = Mock(return_value=[Institution(42, 37.511, 127.03), Institution(99, 37.53, 127.03)])
+    router = create_agent_router(
+        model=model, find_places=lambda _: [PlaceCandidate("p1", "강남역", "", 37.5, 127.03)],
+        get_institutions=institutions, search_items=search,
+    )
+    client = TestClient(create_app(Mock(), "dummy", agent_router=router))
+    response = client.post("/api/search-chat/turns", json={"type": "message", "request_id": "first", "text": "강남역"})
+    candidate = json.loads(response.text.splitlines()[-1])["response"]
+    institutions.assert_not_called()
+
+    response = client.post("/api/search-chat/turns", json={
+        "type": "select_place", "request_id": "confirm", "candidate_id": "p1",
+        "session_id": candidate["session_id"], "revision": candidate["revision"],
+    })
+    events = [json.loads(line) for line in response.text.splitlines()]
+    scopes = [(event["radius_m"], event["institution_ids"]) for event in events if event["type"] == "scope.updated"]
+    assert scopes == [(1000, []), (1500, [42])]
+    result = events[-1]["response"]
+    assert result["status"] == "awaiting_clarification"
+    assert result["conditions"]["radius_m"] == 1500
+    assert result["conditions"]["institution_ids"] == [42]
+    assert result["matches"] is None
+    search.assert_not_called()
+    model.assert_called_once()
 
 
 def test_luna_openrouter_request():
@@ -230,12 +264,14 @@ def test_place_only_message_can_confirm_before_the_item_question():
     assert first["status"] == "awaiting_place_selection"
     assert first["place_candidates"][0]["candidate_id"] == "p1"
     assert first["conditions"]["item_query"] is None
+    locations.assert_not_called()
     confirmed = turn("2", first, type="select_place", candidate_id="p1")
     assert confirmed["status"] == "awaiting_clarification"
     assert confirmed["message"] == "어떤 물품을 잃어버렸어요?"
     assert confirmed["conditions"]["place"]["name"] == "강남역"
     assert confirmed["place_candidates"] == []
-    locations.assert_not_called()
+    locations.assert_called_once_with()
+    assert confirmed["conditions"]["institution_ids"] == [42]
     search.assert_not_called()
     result = turn("3", confirmed, type="message", text="검은 지갑")
     assert result["status"] == "results"

@@ -16,7 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from ..integrations.agent_model import OpenRouterAgentModel
 
 from .agent_conversation import ITEM_QUESTION, Conversation, Model, confirm_place, respond_to_message, search_conversation
-from .agent_search import Institution, PlaceCandidate, SearchPage
+from .agent_search import Institution, PlaceCandidate, SearchPage, resolve_institution_scope
 
 
 class RunCancelled(Exception):
@@ -320,11 +320,16 @@ def create_agent_router(
                         manual_radius = turn.radius_m
                         result = {"status": "ready_to_search"}
 
+                    actions = None
                     if result["status"] == "ready_to_search":
                         actions = search_conversation(
                             state, model=model, get_institutions=get_institutions,
                             search_items=lambda ids, query: search_items(ids, query, None), radius_m=manual_radius,
                         )
+                    elif turn.type in ("select_place", "select_point") and state.confirmed is not None:
+                        # PRD 4.3-A — 장소 확정 직후 물품 입력 전에도 기관과 반경을 표시한다.
+                        actions = resolve_institution_scope(state.confirmed, get_institutions=get_institutions)
+                    if actions is not None:
                         while not session.cancelled.is_set():
                             event = next(actions, None)
                             if event is None:

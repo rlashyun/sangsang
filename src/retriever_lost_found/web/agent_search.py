@@ -65,6 +65,31 @@ def prepare_search(
     return PendingSearch(tuple(find_places(place_text)), _validated_query(item_query))
 
 
+def resolve_institution_scope(
+    place: PlaceCandidate,
+    *,
+    get_institutions: Callable[[], Sequence[Institution]],
+    radius_m: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    yield {"type": "tool.started", "tool": "institutions"}
+    try:
+        institutions = get_institutions()
+    except RuntimeError:
+        yield {"type": "tool.failed", "tool": "institutions"}
+        raise
+    yield {"type": "tool.completed", "tool": "institutions"}
+
+    # PRD 4.1·4.5 — Establish a scope before searching. Only zero institutions
+    # can trigger radius expansion.
+    distances = [(row.institution_id, _distance_meters(place, row)) for row in institutions]
+    radii = (radius_m,) if radius_m is not None else (1000, 1500, 2000)
+    for radius in radii:
+        scope = tuple(sorted({institution_id for institution_id, distance in distances if distance <= radius}))
+        yield {"type": "scope.updated", "radius_m": radius, "institution_ids": list(scope)}
+        if scope:
+            return
+
+
 def search_confirmed_place(
     pending: PendingSearch,
     candidate_id: str,
@@ -79,23 +104,11 @@ def search_confirmed_place(
     if selected is None:
         raise ValueError("현재 장소 후보에서 선택해 주세요.")
 
-    yield {"type": "tool.started", "tool": "institutions"}
-    try:
-        institutions = get_institutions()
-    except RuntimeError:
-        yield {"type": "tool.failed", "tool": "institutions"}
-        raise
-    yield {"type": "tool.completed", "tool": "institutions"}
-
-    # PRD 4.1·4.5 — Establish a scope before searching. Only zero institutions
-    # can trigger radius expansion.
-    distances = [(row.institution_id, _distance_meters(selected, row)) for row in institutions]
-    radii = (radius_m,) if radius_m is not None else (1000, 1500, 2000)
-    for radius in radii:
-        scope = tuple(sorted({institution_id for institution_id, distance in distances if distance <= radius}))
-        yield {"type": "scope.updated", "radius_m": radius, "institution_ids": list(scope)}
-        if scope:
-            break
+    scope: tuple[int, ...] = ()
+    for event in resolve_institution_scope(selected, get_institutions=get_institutions, radius_m=radius_m):
+        if event["type"] == "scope.updated":
+            scope = tuple(event["institution_ids"])
+        yield event
     if not scope:
         yield {"status": "no_institutions", "matches": None, "recommended_item_ids": [], "search_attempts": []}
         return
