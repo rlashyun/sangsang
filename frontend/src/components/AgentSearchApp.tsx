@@ -14,6 +14,7 @@ import { FoundItemDetail } from "./FoundItemDetail";
 import { KakaoMap } from "./KakaoMap";
 import { NewItemAlert } from "./NewItemAlert";
 import { UsageGuide } from "./UsageGuide";
+import { BellIcon, SearchIcon } from "./ActionIcons";
 
 const ITEM_PAGE_SIZE = AGENT_ITEM_PAGE_SIZE;
 const PLACE_PAGE_SIZE = 5;
@@ -373,12 +374,12 @@ export function AgentSearchApp() {
         </dl>}
         <div ref={feed} className="agent-feed">
           {messages.length === 0 && <>
-            <p className="agent-bubble agent-bubble-agent">안녕하세요. 잃어버린 물건을 함께 찾아볼게요.</p>
             <ol className="agent-welcome-steps" aria-label="이용 순서">
               <li><span aria-hidden="true">1</span>잃어버린 장소를 적거나, 지도에서 보관기관 핀을 더블클릭하세요</li>
               <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
+            <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>
           </>}
           {messages.map((message, index) => "confirmedPlace" in message
             ? <div className="agent-confirmed-card" key={index}>
@@ -402,10 +403,12 @@ export function AgentSearchApp() {
               <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
                 onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
           </nav>}
-          {response?.matches && currentPlace && <button type="button" className="agent-alert-link" onClick={openAlerts}>비슷한 물건 알림 받기</button>}
-          {daangnSearch && <a className="agent-daangn-link" href={daangnSearch} target="_blank" rel="noopener noreferrer">
-            당근에서 찾아보기 <span aria-hidden="true">↗</span>
-          </a>}
+          {response?.matches && currentPlace && <div className="agent-result-actions">
+            <button type="button" className="agent-action-chip" onClick={openAlerts}><BellIcon />비슷한 물건 알림 받기</button>
+            {daangnSearch && <a className="agent-action-chip" href={daangnSearch} target="_blank" rel="noopener noreferrer">
+              <SearchIcon />당근에서 찾아보기
+            </a>}
+          </div>}
         </div>
         {(progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
           <span>{error || (cancelling ? "검색을 취소하고 있어요." : progress) || "다음 결과를 불러오고 있어요."}</span>
