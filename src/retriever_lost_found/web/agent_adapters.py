@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from ..integrations.kakao import KakaoLocalClient
+from ..privacy.masking import mask_item_row
 from .agent_search import Institution, PlaceCandidate, SearchPage
 
 
@@ -38,6 +39,8 @@ def adapt_institutions(rows: list[dict[str, Any]]) -> list[Institution]:
 
 
 def adapt_search_item(row: dict[str, Any]) -> dict[str, Any]:
+    # PRD 3.3 · Q5 — 대화 검색 물품은 브라우저와 LLM(물품 번호 지목) 양쪽으로 나가므로 여기서 가린다.
+    row = mask_item_row(row)
     return {
         **{key: value for key, value in row.items() if key != "match_score"},
         "item_id": row["id"],

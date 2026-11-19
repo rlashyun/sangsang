@@ -5,6 +5,7 @@ from datetime import date
 from html import escape
 from typing import Any
 
+from ..privacy.masking import mask_item_row
 from .links import MAX_EXTENSIONS, MailLinks, first_alert_day, last_alert_day
 from .sender import OutgoingEmail
 
@@ -69,6 +70,8 @@ def _registered_label(value: Any) -> str | None:
 
 
 def _item_line(item: dict[str, Any], *, show_place: bool) -> str:
+    # PRD 3.3 · Q5 — 보낸 메일은 회수할 수 없으므로 물품명·설명은 가린 사본으로 쓴다.
+    item = mask_item_row(item)
     details = ", ".join(value for value in (item.get("raw_category_name"), item.get("color_name")) if value)
     location = " ".join(
         value for value in (item.get("storage_location_name"), item.get("storage_location_phone")) if value
