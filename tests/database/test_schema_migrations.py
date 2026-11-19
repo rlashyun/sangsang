@@ -362,6 +362,22 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("and status = 'pending' returning created_at into v_created_at", migration)
         self.assertIn("request.created_at = v_created_at limit 1", migration)
 
+    def test_item_categories_cover_every_ingestion_parent_category(self) -> None:
+        # PRD 2.2, 4.5 — 수집 코드의 상위분류 21개가 DB에 모두 있어야 기타물품 대체가 오분류를 만들지 않는다.
+        from retriever_lost_found.ingestion.categories import SERVICE_CATEGORIES
+
+        core = (MIGRATIONS / "20260826133434_create_lost_found_core_schema.sql").read_text(encoding="utf-8")
+        expansion = (MIGRATIONS / "20261120090000_all_item_categories.sql").read_text(encoding="utf-8")
+        for category in SERVICE_CATEGORIES:
+            with self.subTest(code=category.code):
+                pair = f"'{category.code}', '{category.name}'"
+                self.assertTrue(pair in core or pair in expansion)
+        lowered = expansion.lower()
+        # 기존 6개 행·id와 물품은 건드리지 않고 새 분류만 더한다.
+        self.assertIn("on conflict (code) do nothing", lowered)
+        for statement in ("delete from", "update public.item_categories", "drop "):
+            self.assertNotIn(statement, lowered)
+
 
 if __name__ == "__main__":
     unittest.main()

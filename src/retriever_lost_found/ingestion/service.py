@@ -25,6 +25,7 @@ from .collector import (
     retention_start,
 )
 from ..errors import safe_error as _safe_error
+from .categories import FALLBACK_CATEGORY, category_key, category_parent
 from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 from .overseas import is_overseas_custody
 
@@ -117,6 +118,14 @@ def _resolve_location(
     return _LocationResolver(aliases, locations).resolve(raw_storage_name)
 
 
+def _resolve_category_id(raw_category_name: str, category_ids: dict[str, int]) -> tuple[int | None, bool]:
+    """PRD 2.2, 4.5 — 정확 매핑 → 상위분류 정확 일치 → 기타물품. (id, 기타물품 대체 여부)"""
+    for key in (category_key(raw_category_name), category_key(category_parent(raw_category_name))):
+        if key in category_ids:
+            return category_ids[key], False
+    return category_ids.get(category_key(FALLBACK_CATEGORY.name)), True
+
+
 def _build_database_rows(
     selected_rows: list[dict[str, str]],
     *,
@@ -124,16 +133,19 @@ def _build_database_rows(
     category_ids: dict[str, int],
     aliases: dict[str, int],
     locations: list[LocationReference],
+    statistics: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     database_rows: list[dict[str, Any]] = []
     resolver = _LocationResolver(aliases, locations)
+    category_fallback = 0
     for row in selected_rows:
-        normalized_category = _normalize_key(row["raw_category_name"])
-        category_id = category_ids.get(normalized_category)
+        category_id, used_fallback = _resolve_category_id(row["raw_category_name"], category_ids)
         if category_id is None:
+            # 기타물품 행이 없는 DB(20261120090000 마이그레이션 전)에서는 실패시켜 만료 삭제를 막는다.
             raise RuntimeError(
                 f"DB 카테고리 매핑이 없습니다: {source_code}/{row['raw_category_name']}"
             )
+        category_fallback += used_fallback
         if is_overseas_custody(source_code, row["raw_storage_name"]):
             location_id, match_status = None, "excluded_overseas"
         else:
@@ -169,6 +181,8 @@ def _build_database_rows(
                 "detail_status": None,
             }
         )
+    if statistics is not None:
+        statistics["category_fallback"] = category_fallback
     return database_rows
 
 
@@ -390,13 +404,16 @@ def _sync_source(
         result["selected"] = fetch_summary["selected_count"]
         result["invalid"] = fetch_summary["invalid_count"]
 
+        category_statistics: dict[str, int] = {}
         database_rows = _build_database_rows(
             selected_rows,
             source_code=source_code,
             category_ids=category_ids,
             aliases=aliases,
             locations=locations,
+            statistics=category_statistics,
         )
+        result["category_fallback"] = category_statistics["category_fallback"]
         if any(row["location_match_status"] == "ambiguous" for row in database_rows):
             mappings = store.load_detail_mappings(source_code, active_ids={location.id for location in locations})
             result["detail_lookup"] = _enrich_ambiguous_rows(
@@ -469,6 +486,9 @@ def _audit_values(
         "cleanup_enabled": result["cleanup_enabled"],
         "excluded_overseas_count": result.get("excluded_overseas", 0),
     }
+    if "category_fallback" in result:
+        # PRD 4.5 — 상위분류가 목록에 없어 기타물품으로 저장한 건수. 0이 아니면 분류 목록을 늘린다.
+        metadata["category_fallback_count"] = result["category_fallback"]
     if fetch_summary is not None:
         metadata.update(
             {
@@ -562,7 +582,7 @@ def run_daily_sync(today: date | None = None) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="두 경찰청 습득물 API의 6개 카테고리를 Supabase에 동기화합니다."
+        description="두 경찰청 습득물 API의 습득물 전체를 Supabase에 동기화합니다."
     )
     parser.add_argument("--today", help="동기화 기준일 YYYY-MM-DD")
     parser.add_argument(

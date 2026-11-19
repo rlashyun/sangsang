@@ -404,5 +404,74 @@ class DailyIngestionTests(unittest.TestCase):
         self.assertEqual(filters, {"START_YMD": "20260826", "END_YMD": "20260827"})
 
 
+def category_row(raw_category: str, atc_id: str) -> dict[str, str]:
+    row = selected_row(atc_id=atc_id)
+    row["raw_category_name"] = raw_category
+    return row
+
+
+class CategoryResolutionTests(unittest.TestCase):
+    # PRD 2.2, 4.5 — 2026-11-17 전체 물품 확대: 정확 매핑 → 상위분류 → 기타물품.
+    IDS = {"지갑남성용지갑": 4, "지갑": 99, "전자기기": 3, "기타물품": 8}
+
+    def build(self, raw_category: str, statistics: dict | None = None) -> dict:
+        return daily_ingestion._build_database_rows(
+            [category_row(raw_category, "C1")],
+            source_code="partner_api",
+            category_ids=self.IDS,
+            aliases={"테스트역": 123},
+            locations=[],
+            statistics=statistics,
+        )[0]
+
+    def test_exact_mapping_wins_over_parent(self) -> None:
+        self.assertEqual(self.build("지갑 > 남성용 지갑")["category_id"], 4)
+
+    def test_parent_is_used_when_pair_is_unmapped(self) -> None:
+        self.assertEqual(self.build("전자기기 > 스마트워치")["category_id"], 3)
+        self.assertEqual(self.build("지갑 > 새 지갑")["category_id"], 99)
+
+    def test_unknown_parent_falls_back_and_is_counted(self) -> None:
+        statistics: dict = {}
+        row = self.build("반려동물 > 강아지", statistics)
+        self.assertEqual(row["category_id"], 8)
+        self.assertEqual(row["raw_category_name"], "반려동물 > 강아지")
+        self.assertEqual(statistics["category_fallback"], 1)
+
+        statistics = {}
+        self.build("전자기기 > 스마트워치", statistics)
+        self.assertEqual(statistics["category_fallback"], 0)
+
+    def test_missing_fallback_category_fails_loudly(self) -> None:
+        # 마이그레이션 전 DB(6개 분류뿐)에 새 앱이 붙으면 수집을 실패시켜 만료 삭제를 막는다.
+        with self.assertRaisesRegex(RuntimeError, "카테고리"):
+            daily_ingestion._build_database_rows(
+                [category_row("현금 > 현금", "C1")],
+                source_code="partner_api",
+                category_ids={"지갑남성용지갑": 4},
+                aliases={},
+                locations=[],
+            )
+
+    @patch.object(daily_ingestion, "collect_selected_rows")
+    @patch.object(daily_ingestion, "create_source_client")
+    def test_fallback_count_is_audited(self, create_client, collect_rows) -> None:
+        store = FakeStore()
+        store.load_category_ids = lambda source_code: dict(self.IDS)
+        collect_rows.return_value = (
+            [category_row("반려동물 > 강아지", "C1"), selected_row(atc_id="C2")],
+            {
+                "fetched_count": 2, "selected_count": 2, "invalid_count": 0,
+                "outside_range_count": 0, "api_total_count": 2,
+            },
+        )
+
+        result = daily_ingestion._sync_source(store, source="partner", today=date(2026, 8, 27))
+
+        self.assertEqual(result["status"], "succeeded")
+        self.assertEqual({row["category_id"] for row in store.upserted}, {8, 4})
+        self.assertEqual(store.finished[0]["metadata"]["category_fallback_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

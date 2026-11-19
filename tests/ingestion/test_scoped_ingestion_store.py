@@ -24,6 +24,18 @@ class ScopedIngestionStoreTests(unittest.TestCase):
         self.assertEqual(metadata["window_end"], "2026-11-14")
         self.assertFalse(metadata["cleanup_enabled"])
 
+    def test_category_ids_include_exact_pairs_and_active_parent_names(self) -> None:
+        # PRD 4.5 — 정확 매핑 키(상위+하위)와 상위분류 이름 키를 함께 돌려준다.
+        with patch.object(self.store, "_fetch_all", side_effect=[
+            [{"normalized_raw_category": "지갑남성용지갑", "category_id": 4}],
+            [{"name": "지갑", "id": 4}, {"name": "기타물품", "id": 8}],
+        ]) as fetch:
+            ids = self.store.load_category_ids("partner_api")
+        self.assertEqual(ids, {"지갑남성용지갑": 4, "지갑": 4, "기타물품": 8})
+        tables = [call.args[0] for call in fetch.call_args_list]
+        self.assertEqual(tables, ["category_mappings", "item_categories"])
+        self.assertIn(("is_active", "eq.true"), fetch.call_args_list[1].kwargs["filters"])
+
     def test_existing_identities_uses_source_and_exact_sequence(self) -> None:
         with patch.object(self.store, "_request", return_value=[
             {"atc_id": "A", "found_sequence": "1"},
