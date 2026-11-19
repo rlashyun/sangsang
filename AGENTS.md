@@ -233,6 +233,7 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 | **`docs/PRD.md`** | 착수 전 1회, 그리고 작업 항목마다 — 범위·우선순위·예외 케이스 |
 | **`docs/team-roles.md`** | 작업 착수 전 — 이번 스프린트 담당·작업 정의·선행 관계 |
 | `docs/backlog.md` | 할 일을 고를 때 — 스프린트 밖의 미구현·확인 필요 항목 |
+| `docs/evaluation/` | 발표·심사 준비 때 — AI 상상그라운드 심사평가표(원본 PDF와 텍스트) |
 | **`docs/measurements.md`** | 무언가를 재기 전후 — 지금까지 잰 숫자와 측정 조건. 새로 잰 숫자는 여기에 추가한다 |
 | **`docs/ui-patterns.md`** | UI 작업 전 — 사용자 흐름, 지도·목록 관계, 상태별 동작 |
 | **`docs/design-system.md`** | UI 작업 전 — 시각 원칙, 색상·간격·radius·shadow 토큰, 접근성 |
