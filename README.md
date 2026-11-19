@@ -193,6 +193,26 @@ uv run sync-found-items
 uv run sync-found-items --today 2026-08-28
 ```
 
+### 과거 구간 백필 (전체 물품 확대 후 1회)
+
+증분 수집은 마지막 등록일부터만 받으므로, 2026-11-20 전체 물품 확대 이전 기간의 새 분류 물품은
+백필로 채웁니다. 마이그레이션 `20261120090000_all_item_categories.sql`을 운영에 적용한 뒤 실행합니다.
+
+```powershell
+uv run sync-found-items --backfill-from 2026-05-20 --backfill-to 2026-11-19
+uv run sync-found-items --backfill-from 2026-05-20 --source police --chunk-days 7
+uv run embed-found-items --until-complete
+```
+
+- 출처별로 7일씩(`--chunk-days`) 나눠 실행하고, 실행마다 `ingestion_runs`에 `trigger=manual_backfill`로 남깁니다.
+  `business_date`는 실행한 날이고 정리 허용 회차로 기록해 오늘의 임베딩 회차 판정을 바꾸지 않습니다.
+- DB에 이미 있는 물품은 다시 저장하지 않습니다(`metadata.skipped_existing_count`). 상세 조회도 새 물품에만 하며
+  실행마다 60초·400회 예산을 새로 씁니다.
+- 크론 시간대(KST 09·11·21·23시대)와 그 직전 20분에는 새 구간을 시작하지 않고 멈춥니다. 실패해도 멈춥니다.
+  출력의 `resume`(출처·시작일)부터 다시 실행하면 됩니다. 이미 넣은 물품은 건너뛰므로 다시 실행해도 안전합니다.
+- 보존기간 시작일 이전이나 오늘 이후 구간은 거부합니다. 백필이 끝나면 `embed-found-items --until-complete`로
+  새 물품의 임베딩을 채웁니다. 이 과정은 물품의 색상·물품명 입력을 기존과 같은 외부 임베딩 API로 보냅니다.
+
 동기화 중 상세 API를 자동 호출하거나 과거 물품의 상세정보를 전량 조회하지 않습니다.
 기존 물품의 상세정보 보존과 검증된 동명 기관 규칙 적용은 DB 트리거가 처리합니다.
 기관 코드가 없거나 규칙으로 해결되지 않는 물품은 `unmatched` 및 위치 NULL로 저장하고,

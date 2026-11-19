@@ -5,6 +5,7 @@ import json
 import re
 import socket
 import ssl
+import sys
 import time
 import unicodedata
 import urllib.error
@@ -45,6 +46,13 @@ DETAIL_STAGE_DEADLINE_SECONDS = 180.0
 COLLECTION_STAGE_DEADLINE_SECONDS = 150.0
 SYNC_WORK_DEADLINE_SECONDS = 270.0
 AUDIT_DEADLINE_SECONDS = 295.0
+# PRD 4.5 — 2026-11-20 전체 물품 확대 뒤 과거 구간을 채우는 수동 백필.
+BACKFILL_TRIGGER = "manual_backfill"
+BACKFILL_DEFAULT_CHUNK_DAYS = 7
+# Vercel Hobby 크론은 정시부터 그 시간 안에 실행된다: 09·21시대 수집, 11·23시대 임베딩·알림(KST).
+# 출처당 running 수집은 하나뿐이라 백필이 겹치면 크론이 건너뛰어지므로 이 시간과 직전 20분엔 새 구간을 시작하지 않는다.
+BACKFILL_BLOCKED_HOURS = (9, 11, 21, 23)
+BACKFILL_MARGIN_MINUTES = 20
 
 
 class DetailLookupError(RuntimeError):
@@ -344,8 +352,12 @@ def _sync_source(
     today: date,
     incremental_only: bool = False,
     cleanup_expired: bool = True,
+    backfill_window: tuple[date, date] | None = None,
 ) -> dict[str, Any]:
-    """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다."""
+    """보존기간 안의 누락분을 보완하고 Cron은 전날을 겹쳐 다시 수집합니다.
+
+    backfill_window가 있으면 그 과거 구간만 받아 DB에 없는 물품만 추가합니다(run_backfill).
+    """
     sync_started = time.monotonic()
     if incremental_only:
         store.deadline = sync_started + SYNC_WORK_DEADLINE_SECONDS
@@ -358,13 +370,19 @@ def _sync_source(
     trigger = "vercel_cron_incremental" if incremental_only else "manual_catchup"
     start_date = window_start
     lookup_error = None
-    try:
-        latest_registered_on = store.latest_registered_on(source_code)
-        start_candidate = min(latest_registered_on or window_start, today - timedelta(days=1))
-        start_date = max(window_start, start_candidate)
-    except Exception as error:
-        # Still create and close an audit, so the embedding barrier can recover.
-        lookup_error = error
+    if backfill_window is not None:
+        start_date, window_end = backfill_window
+        trigger = BACKFILL_TRIGGER
+        if start_date < window_start or window_end > today or start_date > window_end:
+            raise ValueError("백필 구간은 보존기간 시작일과 오늘 사이여야 합니다.")
+    else:
+        try:
+            latest_registered_on = store.latest_registered_on(source_code)
+            start_candidate = min(latest_registered_on or window_start, today - timedelta(days=1))
+            start_date = max(window_start, start_candidate)
+        except Exception as error:
+            # Still create and close an audit, so the embedding barrier can recover.
+            lookup_error = error
     result = _empty_result(source_code, "running")
     result["cleanup_enabled"] = cleanup_expired
 
@@ -375,6 +393,8 @@ def _sync_source(
             window_end,
             trigger=trigger,
             cleanup_expired=cleanup_expired,
+            # PRD 4.5 — 임베딩 회차(오전·오후)는 실행한 날로 판정한다. 일반 실행은 window_end와 같다.
+            business_date=today,
         )
     except RunAlreadyActive:
         return _empty_result(source_code, "already_running")
@@ -414,17 +434,32 @@ def _sync_source(
             statistics=category_statistics,
         )
         result["category_fallback"] = category_statistics["category_fallback"]
+        existing: set[tuple[str, str]] | None = None
+        if backfill_window is not None:
+            # 백필은 DB에 없는 물품만 추가한다. 기존 물품의 위치·상세정보는 일일 수집이 관리하므로
+            # 다시 쓰지 않고, 상세 조회 예산도 새 물품에만 쓴다.
+            existing_before = store.existing_identities(
+                source_code, {(row["atc_id"], row["found_sequence"]) for row in database_rows}
+            )
+            database_rows = [
+                row for row in database_rows
+                if (row["atc_id"], row["found_sequence"]) not in existing_before
+            ]
+            result["skipped_existing"] = len(existing_before)
+            existing = set()
         if any(row["location_match_status"] == "ambiguous" for row in database_rows):
             mappings = store.load_detail_mappings(source_code, active_ids={location.id for location in locations})
+            detail_deadline = time.monotonic() + DETAIL_BUDGET_SECONDS
+            if backfill_window is None:
+                # Vercel 함수 300초 안에 끝나도록 크론·수동 복구는 실행 시작 기준 마감도 지킨다.
+                detail_deadline = min(detail_deadline, sync_started + DETAIL_STAGE_DEADLINE_SECONDS)
             result["detail_lookup"] = _enrich_ambiguous_rows(
                 database_rows, source_code=source_code, service_key=client.service_key,
-                mappings=mappings, deadline=min(
-                    time.monotonic() + DETAIL_BUDGET_SECONDS,
-                    sync_started + DETAIL_STAGE_DEADLINE_SECONDS,
-                ),
+                mappings=mappings, deadline=detail_deadline,
             )
         incoming = {(row["atc_id"], row["found_sequence"]) for row in database_rows}
-        existing = store.existing_identities(source_code, incoming)
+        if existing is None:
+            existing = store.existing_identities(source_code, incoming)
         result["updated"] = len(incoming & existing)
         result["inserted"] = len(incoming - existing)
 
@@ -489,6 +524,9 @@ def _audit_values(
     if "category_fallback" in result:
         # PRD 4.5 — 상위분류가 목록에 없어 기타물품으로 저장한 건수. 0이 아니면 분류 목록을 늘린다.
         metadata["category_fallback_count"] = result["category_fallback"]
+    if "skipped_existing" in result:
+        # 백필에서 이미 DB에 있어 다시 쓰지 않은 물품 수.
+        metadata["skipped_existing_count"] = result["skipped_existing"]
     if fetch_summary is not None:
         metadata.update(
             {
@@ -580,6 +618,88 @@ def run_daily_sync(today: date | None = None) -> dict[str, Any]:
     }
 
 
+def _backfill_blocked(now: datetime) -> bool:
+    """크론 시간대(KST 09·11·21·23시대)와 그 직전 20분이면 새 백필 구간을 시작하지 않습니다."""
+    local = now.astimezone(KOREA_TIMEZONE)
+    if local.hour in BACKFILL_BLOCKED_HOURS:
+        return True
+    return (local.hour + 1) % 24 in BACKFILL_BLOCKED_HOURS and local.minute >= 60 - BACKFILL_MARGIN_MINUTES
+
+
+def _backfill_windows(
+    start: date, end: date, *, today: date, source: str, chunk_days: int = BACKFILL_DEFAULT_CHUNK_DAYS,
+) -> list[tuple[date, date]]:
+    """백필 구간을 chunk_days일씩 나눕니다. 보존기간 밖이나 오늘 이후는 거부합니다."""
+    if not 1 <= chunk_days <= 31:
+        raise ValueError("백필 구간 길이는 1~31일이어야 합니다.")
+    if start > end:
+        raise ValueError("백필 시작일은 종료일보다 늦을 수 없습니다.")
+    window_start = retention_start(today, SOURCE_RETENTION_MONTHS[source])
+    if start < window_start:
+        # 보존기간 밖 물품은 다음 오전 정리에서 지워지므로 넣지 않는다(PRD 3.1-2).
+        raise ValueError(f"백필 시작일은 보존기간 시작일({window_start.isoformat()}) 이후여야 합니다.")
+    if end > today:
+        raise ValueError("백필 종료일은 오늘 이후일 수 없습니다.")
+    windows: list[tuple[date, date]] = []
+    cursor = start
+    while cursor <= end:
+        chunk_end = min(end, cursor + timedelta(days=chunk_days - 1))
+        windows.append((cursor, chunk_end))
+        cursor = chunk_end + timedelta(days=1)
+    return windows
+
+
+def run_backfill(
+    store: SupabaseIngestionStore,
+    *,
+    sources: tuple[str, ...],
+    start: date,
+    end: date,
+    today: date,
+    chunk_days: int = BACKFILL_DEFAULT_CHUNK_DAYS,
+    now: Any = None,
+) -> dict[str, Any]:
+    """PRD 4.5 — 과거 구간을 출처·구간별 실행으로 나눠 DB에 없는 물품만 추가합니다.
+
+    실패하거나 크론 시간대에 들어가면 멈추고 다시 시작할 출처·시작일(`resume`)을 돌려줍니다.
+    """
+    clock = now or (lambda: datetime.now(KOREA_TIMEZONE))
+    plans = {
+        source: _backfill_windows(start, end, today=today, source=source, chunk_days=chunk_days)
+        for source in sources
+    }
+    chunks: list[dict[str, Any]] = []
+
+    def summary(status: str, resume: tuple[str, date] | None = None) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "status": status,
+            "today": today.isoformat(),
+            "inserted": sum(chunk.get("inserted", 0) for chunk in chunks),
+            "skipped_existing": sum(chunk.get("skipped_existing", 0) for chunk in chunks),
+            "unmatched": sum(chunk.get("unmatched", 0) for chunk in chunks),
+            "chunks": chunks,
+        }
+        if resume is not None:
+            result["resume"] = {"source": resume[0], "from": resume[1].isoformat()}
+        return result
+
+    for source in sources:
+        for window in plans[source]:
+            if _backfill_blocked(clock()):
+                return summary("stopped", (source, window[0]))
+            chunk = _sync_source(store, source=source, today=today, backfill_window=window)
+            chunks.append({**chunk, "window": [window[0].isoformat(), window[1].isoformat()]})
+            print(
+                f"{source} {window[0]}~{window[1]}: {chunk['status']}, "
+                f"추가 {chunk.get('inserted', 0):,}건, 기존 {chunk.get('skipped_existing', 0):,}건",
+                file=sys.stderr,
+                flush=True,
+            )
+            if chunk["status"] != "succeeded":
+                return summary("failed", (source, window[0]))
+    return summary("succeeded")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="두 경찰청 습득물 API의 습득물 전체를 Supabase에 동기화합니다."
@@ -588,10 +708,31 @@ def main() -> int:
     parser.add_argument(
         "--source",
         choices=SOURCE_ORDER,
-        help="한 출처만 당일 증분 동기화합니다.",
+        help="한 출처만 당일 증분 동기화합니다. 백필에서는 그 출처만 채웁니다.",
+    )
+    parser.add_argument(
+        "--backfill-from",
+        help="과거 구간 백필 시작일 YYYY-MM-DD. DB에 없는 물품만 추가합니다(크론 시간대엔 멈춤).",
+    )
+    parser.add_argument("--backfill-to", help="백필 종료일 YYYY-MM-DD (기본: 어제)")
+    parser.add_argument(
+        "--chunk-days", type=int, default=BACKFILL_DEFAULT_CHUNK_DAYS,
+        help="백필 실행 하나가 맡을 일수 (기본 7일)",
     )
     args = parser.parse_args()
     target_date = date.fromisoformat(args.today) if args.today else None
+    if args.backfill_from:
+        today = target_date or datetime.now(KOREA_TIMEZONE).date()
+        result = run_backfill(
+            SupabaseIngestionStore.from_environment(),
+            sources=(args.source,) if args.source else SOURCE_ORDER,
+            start=date.fromisoformat(args.backfill_from),
+            end=date.fromisoformat(args.backfill_to) if args.backfill_to else today - timedelta(days=1),
+            today=today,
+            chunk_days=args.chunk_days,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] == "succeeded" else 1
     result = (
         run_incremental_sync(args.source, target_date)
         if args.source

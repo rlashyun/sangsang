@@ -97,6 +97,7 @@ class SupabaseIngestionStore(SupabaseRestClient):
         *,
         trigger: str,
         cleanup_expired: bool = True,
+        business_date: date | None = None,
     ) -> int:
         stale_before = datetime.now(timezone.utc) - timedelta(hours=2)
         self._request(
@@ -119,7 +120,8 @@ class SupabaseIngestionStore(SupabaseRestClient):
             "status": "running",
             "metadata": {
                 # PRD 4.5 — the collection window now ends on the KST business date.
-                "business_date": end_date.isoformat(),
+                # A past-window backfill passes today so the embedding cycle stays on today.
+                "business_date": (business_date or end_date).isoformat(),
                 "upsert_completed": False,
                 "window_start": start_date.isoformat(),
                 "window_end": end_date.isoformat(),
