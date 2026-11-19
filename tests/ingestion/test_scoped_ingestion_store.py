@@ -24,6 +24,30 @@ class ScopedIngestionStoreTests(unittest.TestCase):
         self.assertEqual(metadata["window_end"], "2026-11-14")
         self.assertFalse(metadata["cleanup_enabled"])
 
+    def test_backfill_run_keeps_today_as_business_date(self) -> None:
+        # PRD 4.5 — 과거 구간 백필도 임베딩 회차는 실행한 날 기준으로 판정한다.
+        with patch.object(self.store, "_request", side_effect=[None, [{"id": 8}]]) as request:
+            self.store.create_run(
+                "police_api", date(2026, 6, 1), date(2026, 6, 7),
+                trigger="manual_backfill", business_date=date(2026, 11, 20),
+            )
+        metadata = request.call_args.kwargs["payload"]["metadata"]
+        self.assertEqual(metadata["business_date"], "2026-11-20")
+        self.assertEqual((metadata["window_start"], metadata["window_end"]), ("2026-06-01", "2026-06-07"))
+        self.assertEqual(metadata["trigger"], "manual_backfill")
+
+    def test_category_ids_include_exact_pairs_and_active_parent_names(self) -> None:
+        # PRD 4.5 — 정확 매핑 키(상위+하위)와 상위분류 이름 키를 함께 돌려준다.
+        with patch.object(self.store, "_fetch_all", side_effect=[
+            [{"normalized_raw_category": "지갑남성용지갑", "category_id": 4}],
+            [{"name": "지갑", "id": 4}, {"name": "기타물품", "id": 8}],
+        ]) as fetch:
+            ids = self.store.load_category_ids("partner_api")
+        self.assertEqual(ids, {"지갑남성용지갑": 4, "지갑": 4, "기타물품": 8})
+        tables = [call.args[0] for call in fetch.call_args_list]
+        self.assertEqual(tables, ["category_mappings", "item_categories"])
+        self.assertIn(("is_active", "eq.true"), fetch.call_args_list[1].kwargs["filters"])
+
     def test_existing_identities_uses_source_and_exact_sequence(self) -> None:
         with patch.object(self.store, "_request", return_value=[
             {"atc_id": "A", "found_sequence": "1"},

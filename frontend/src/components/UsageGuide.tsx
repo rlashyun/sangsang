@@ -1,7 +1,8 @@
 import { useEffect, useRef, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-const categories = ["가방", "모자", "무선이어폰", "지갑", "휴대폰", "카드"];
+// PRD 2.2, 4.4 — 2026-11-17 전체 물품 확대. 경찰청 분류 전체를 다루며, 아래는 자주 찾는 예시다.
+const categories = ["지갑", "카드", "휴대폰", "가방", "의류", "전자기기", "현금", "신분증·면허증", "귀금속", "안경"];
 
 type UsageGuideProps = {
   searchPath: string;
@@ -95,7 +96,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
 
         <section className="usage-guide-card usage-guide-categories" aria-labelledby="usage-categories-title">
           <h2 id="usage-categories-title">찾을 수 있는 물품</h2>
-          <p>현재 MVP에서는 자주 잃어버리는 6개 물품군을 검색할 수 있어요. 업데이트를 통해 지원 범위를 넓혀갈게요.</p>
+          <p>경찰청에 등록되는 습득물은 종류와 상관없이 모두 찾을 수 있어요. 자주 찾는 물품은 이런 것들이에요.</p>
           <ul>
             {categories.map(category => <li key={category}>{category}</li>)}
           </ul>

@@ -9,6 +9,7 @@ from typing import Any
 
 from ..config import read_env_value, read_optional_env_value
 from ..integrations.supabase_rest import SupabaseRequestError, SupabaseRestClient
+from .categories import category_key
 
 
 SOURCE_LOCATION_CODES = {
@@ -96,6 +97,7 @@ class SupabaseIngestionStore(SupabaseRestClient):
         *,
         trigger: str,
         cleanup_expired: bool = True,
+        business_date: date | None = None,
     ) -> int:
         stale_before = datetime.now(timezone.utc) - timedelta(hours=2)
         self._request(
@@ -118,7 +120,8 @@ class SupabaseIngestionStore(SupabaseRestClient):
             "status": "running",
             "metadata": {
                 # PRD 4.5 — the collection window now ends on the KST business date.
-                "business_date": end_date.isoformat(),
+                # A past-window backfill passes today so the embedding cycle stays on today.
+                "business_date": (business_date or end_date).isoformat(),
                 "upsert_completed": False,
                 "window_start": start_date.isoformat(),
                 "window_end": end_date.isoformat(),
@@ -157,6 +160,7 @@ class SupabaseIngestionStore(SupabaseRestClient):
             raise SupabaseRequestError("ingestion_runs 종료 기록을 갱신하지 못했습니다.")
 
     def load_category_ids(self, source_code: str) -> dict[str, int]:
+        """PRD 4.5 — 정확 매핑(상위+하위) 키와 활성 상위분류 이름 키를 함께 돌려줍니다."""
         rows = self._fetch_all(
             "category_mappings",
             "normalized_raw_category,category_id",
@@ -165,10 +169,17 @@ class SupabaseIngestionStore(SupabaseRestClient):
                 ("is_active", "eq.true"),
             ],
         )
-        return {
+        category_ids = {
             str(row["normalized_raw_category"]): int(row["category_id"])
             for row in rows
         }
+        # 2026-11-17 전체 물품 확대 — 매핑에 없는 하위분류는 상위분류 이름으로 찾는다.
+        # 상위+하위 키와 상위분류 이름 키가 우연히 같으면 정확 매핑을 우선한다(setdefault).
+        for row in self._fetch_all(
+            "item_categories", "id,name", filters=[("is_active", "eq.true")]
+        ):
+            category_ids.setdefault(category_key(row["name"]), int(row["id"]))
+        return category_ids
 
     def load_aliases(self, source_code: str) -> dict[str, int]:
         rows = self._fetch_all(

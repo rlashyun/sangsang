@@ -666,7 +666,9 @@ async (page) => {
   });
   await guideLink.click();
   await guide.waitFor();
-  check(await page.locator(".usage-guide-categories li").count() === 6, "MVP 물품군 6개를 안내해야 한다");
+  // PRD 2.2, 4.4 — 2026-11-17 전체 물품 확대: 6개 한정 문구 대신 전체 물품과 자주 찾는 예시를 안내한다.
+  check(await page.locator(".usage-guide-categories li").count() === 10, "자주 찾는 물품 예시 10개를 안내해야 한다");
+  check(!(await page.locator(".usage-guide-categories").innerText()).includes("6개"), "6개 물품군 한정 문구를 남기지 않아야 한다");
   const survey = page.getByRole("link", { name: "설문조사 참여하기" });
   const feedback = page.locator(".app-header-actions a[target='_blank']");
   const searchFromGuide = page.getByRole("link", { name: "물건 찾으러 가기" });

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .categories import (
+    FALLBACK_CATEGORY,
     ServiceCategory,
     classify_product_category,
     normalize_text,
@@ -194,16 +195,16 @@ def collect_selected_rows(
             atc_id = normalize_text(item.get("atcId"))
             found_sequence = normalize_text(item.get("fdSn")) or "1"
             registered_on = parse_api_date(item.get("fdYmd", ""))
-            if not atc_id or registered_on is None:
+            # DB found_items_raw_category_not_blank — 분류가 빈 행은 저장할 수 없다.
+            if not atc_id or registered_on is None or not normalize_text(item.get("prdtClNm")):
                 invalid_count += 1
                 continue
             if not start_date <= registered_on <= end_date:
                 outside_range_count += 1
                 continue
 
-            category = classify_product_category(item.get("prdtClNm"))
-            if category is None:
-                continue
+            # PRD 2.2, 4.5 — 2026-11-17부터 전체 물품을 수집한다. 모르는 상위분류는 기타물품.
+            category = classify_product_category(item.get("prdtClNm")) or FALLBACK_CATEGORY
 
             key = (atc_id, found_sequence)
             unique_rows[key] = to_csv_row(
@@ -255,7 +256,7 @@ def write_csv(rows: list[dict[str, str]], output_path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="경찰청 API에서 지정 기간의 6개 서비스 카테고리만 CSV로 저장합니다."
+        description="경찰청 API에서 지정 기간의 습득물 전체를 서비스 분류와 함께 CSV로 저장합니다."
     )
     parser.add_argument("--source", choices=sorted(SOURCE_CODES), required=True)
     parser.add_argument("--start", help="조회 시작일 YYYY-MM-DD")
