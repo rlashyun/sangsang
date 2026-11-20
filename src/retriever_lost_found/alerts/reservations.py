@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from ..privacy.masking import IDENTIFIER_QUERY_ERROR, contains_identifier
 from .errors import AlertLimitError
 from .links import (
     KOREA_TIMEZONE,
@@ -67,6 +68,9 @@ def _query(value: Any) -> str:
     query = value.strip()
     if len(query) > MAX_QUERY_LENGTH:
         raise ValueError("습득물 검색어는 30자 이하여야 합니다.")
+    # PRD 3.3 · Q5 — 번호 형태 검색어는 알림 조건으로도 저장하지 않는다(통계용 보존 대상이기도 하다).
+    if contains_identifier(query):
+        raise ValueError(IDENTIFIER_QUERY_ERROR)
     return query
 
 

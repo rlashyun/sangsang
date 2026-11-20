@@ -7,10 +7,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator, model_validator
 
 from ..agent_diagnostics import record
+from ..privacy.masking import contains_identifier, mask_numbers
 from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, search_confirmed_place
 
 Model = Callable[[str, dict[str, Any], dict[str, Any]], Any]
 ITEM_QUESTION = "어떤 물품을 잃어버렸어요?"
+# PRD 3.3 · Q5 — 번호가 담긴 대화는 LLM에 보내지 않고 이 안내로 답한다.
+IDENTIFIER_MESSAGE = (
+    "카드번호·주민등록번호·전화번호로는 찾을 수 없어요. 개인정보 보호를 위해 번호는 검색에 쓰지 않아요. "
+    "카드사·색상·물품 종류처럼 겉모습으로 알려주세요."
+)
 
 INSTRUCTIONS = """리트리버 습득물 검색을 위한 한국어 대화다.
 이전 대화와 현재 조건을 참고해 사용자가 정정하거나 새로 말한 장소와 물품 조건을 반영한다.
@@ -192,10 +198,15 @@ def respond_to_message(
     message = message.strip()
     if not 1 <= len(message) <= 1000:
         raise ValueError("대화 입력은 1자 이상 1,000자 이하여야 합니다.")
+    # PRD 3.3 · Q5 — 카드·주민·전화번호가 든 발화는 외부 LLM에 보내지 않는다.
+    # 대화 기록(recent)에도 번호를 가린 문장만 남겨 이후 LLM 호출로 새어 나가지 않게 한다.
+    if contains_identifier(message):
+        recent = (*state.recent, (mask_numbers(message), IDENTIFIER_MESSAGE))[-4:]
+        return ConversationTurn(replace(state, recent=recent), "answered", IDENTIFIER_MESSAGE)
     try:
         decision = TurnDecision.model_validate(model(INSTRUCTIONS, {
             "recent": state.recent,
-            "message": message,
+            "message": mask_numbers(message),
             "place_query": state.place_query,
             "confirmed_place": state.confirmed.name if state.confirmed else None,
             "item_query": state.item_query,

@@ -4,6 +4,7 @@ import json
 import time
 
 from ..integrations.embeddings import EmbeddingRequestError
+from ..privacy.masking import mask_text
 
 
 def _generate(client, rows, deadline):
@@ -12,7 +13,10 @@ def _generate(client, rows, deadline):
         if remaining <= 2:
             raise EmbeddingRequestError("deadline", retryable=True)
         try:
-            vectors = client.embed_many([r["embedded_input"] for r in rows],
+            # PRD 3.3 · Q5 — 해외 임베딩 API로는 번호·명의 이름을 가린 사본만 보낸다. DB에 남기는
+            # embedded_input(내용 해시 검증용)은 원문 그대로 두어 기존 저장·재사용 규칙을 바꾸지 않는다.
+            # 배치 행에 분류가 없어 괄호 이름 규칙(고위험 분류 전용)은 적용하지 않는다 — docs/backlog.md.
+            vectors = client.embed_many([mask_text(r["embedded_input"]) for r in rows],
                                        timeout=min(30, remaining - 1))
             return [{**row, "embedding": json.dumps(vector, separators=(",", ":")),
                      "vector_source": "openrouter_half_v2"} for row, vector in zip(rows, vectors, strict=True)]
