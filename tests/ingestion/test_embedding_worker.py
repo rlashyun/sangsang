@@ -16,6 +16,9 @@ class Store:
         return [dict(item_id=i, embedded_input=t, content_hash=sha256(t.encode()).hexdigest())
                 for i, t in self.source.items() if i > after and i not in self.saved][:64]
 
+    def categories(self, item_ids):
+        return {i: "지갑 > 남성용 지갑" for i in item_ids}
+
     def save(self, run, records):
         for r in records:
             self.saved.setdefault(r["item_id"], r["embedded_input"])
