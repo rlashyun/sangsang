@@ -168,4 +168,4 @@ uv run --with 'pytest>=8,<9' pytest -q
 
 개발용 전체 화면 비교(2026-11-08): `frontend/`에서 `npm run compare:prepare`로 8f701b0의 정적 파일을 무시 경로 `.tmp/ui-baseline/`에 준비한다. Vite 개발 서버만 기존 화면을 제공하며 운영 빌드에는 비교 UI와 스냅샷을 포함하지 않는다. 오른쪽 아래에서 기존/수정안을 전환하고 두 화면의 검색 상태는 독립적으로 유지한다. 두 화면 모두 현재 로컬 API를 사용하므로 과거 데이터 시점 복원은 아니다. 카카오 JS 키는 기존 방식으로 실행 시 주입하고 별도 파일에 저장하지 않는다.
 
-이미지 상세의 10초 지연 안내(요청 계속 유지)와 실패 때만 제공하는 수동 재시도는 `tests/web/item_image_retry.browser.cjs`로 검증한다(Vite 127.0.0.1:5178, `playwright-cli run-code --filename tests/web/item_image_retry.browser.cjs`). 실제 상세 컴포넌트와 가짜 사진만 사용하며 API·외부 SDK를 호출하지 않는다. 가상 시계로 경계 시간·재시도 후 대기 초기화·늦은 성공·닫기 정리를 확인하고 모바일/데스크톱의 고정 영역·키보드 복귀를 확인한다. 목록 지연 로딩은 기존 `item_detail.browser.cjs`가 검증한다.
+이미지 상세의 기본 로딩 안내(시간 경과와 무관하게 요청 계속 유지)와 실패 때만 제공하는 수동 재시도는 `tests/web/item_image_retry.browser.cjs`로 검증한다(Vite 127.0.0.1:5178, `playwright-cli run-code --filename tests/web/item_image_retry.browser.cjs`). 실제 상세 컴포넌트와 가짜 사진만 사용하며 API·외부 SDK를 호출하지 않는다. 가상 시계로 장기 대기 중 기본 안내 유지·실패 후 재시도·늦은 성공·닫기 정리를 확인하고 모바일/데스크톱의 고정 영역·키보드 복귀를 확인한다. 목록 지연 로딩은 기존 `item_detail.browser.cjs`가 검증한다.

@@ -18,7 +18,7 @@ async (page) => {
       return route.fulfill({ contentType: 'image/svg+xml', headers: { 'Cache-Control': 'no-store' }, body: svg });
     }
     if (url.hostname !== '127.0.0.1') return route.abort();
-    if (url.pathname === '/__image-test') return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html lang="ko" data-theme="retriever-modern"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/src/styles.css"></head><body><button id="opener">상세 열기</button><div id="fixture"></div><script type="module">
+    if (url.pathname === '/__image-test') return route.fulfill({ contentType: 'text/html', body: `<!doctype html><html lang="ko" data-theme="retriever-blue"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/src/styles.css"></head><body><button id="opener">상세 열기</button><div id="fixture"></div><script type="module">
       import RefreshRuntime from '/@react-refresh';
       RefreshRuntime.injectIntoGlobalHook(window);
       window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type;
@@ -82,14 +82,13 @@ async (page) => {
     await dialog.getByText(loadingText).waitFor();
     await page.waitForFunction(() => !!document.querySelector('.item-detail-photo img'));
     const height = await photo.evaluate(el => el.getBoundingClientRect().height);
-    await page.clock.runFor(9999);
-    check(await retry.count() === 0 && await dialog.getByText(slowText).count() === 0, '10초 전에는 지연 안내를 표시하지 않는다');
-    await page.clock.runFor(1);
-    await dialog.getByText(slowText).waitFor();
+    await page.clock.runFor(10000);
+    await dialog.getByText(loadingText).waitFor();
+    check(await dialog.getByText(slowText).count() === 0, '10초가 지나도 별도 지연 안내로 바꾸지 않는다');
     check(await retry.count() === 0 && await photo.locator('.item-detail-image').getAttribute('aria-busy') === 'true', '10초 이후 안내만 하며 지연을 실패로 처리하지 않는다');
-    check(await photo.evaluate(el => el.getBoundingClientRect().height) === height, '지연 중에도 고정 높이를 유지한다');
-    check(await dialog.getByRole('heading', { name: '물품 설명', exact: true }).isVisible(), '사진 지연 중에도 원문을 확인할 수 있다');
-    await page.screenshot({ path: `/private/tmp/retriever-image-20261120/slow-${width}.png` });
+    check(await photo.evaluate(el => el.getBoundingClientRect().height) === height, '로딩 중에도 고정 높이를 유지한다');
+    check(await dialog.getByRole('heading', { name: '물품 설명', exact: true }).isVisible(), '사진 로딩 중에도 원문을 확인할 수 있다');
+    await page.screenshot({ path: `/private/tmp/retriever-image-20261120/basic-loading-${width}.png` });
     const pendingCount = requests.length;
     await page.clock.runFor(20000);
     check(requests.length === pendingCount && await retry.count() === 0, '장기 로딩도 자동/수동 재시도 없이 기존 요청을 계속 기다린다');
@@ -101,10 +100,9 @@ async (page) => {
     await nextRequest;
     await dialog.getByText(loadingText).waitFor();
     check(await photo.evaluate(el => document.activeElement === el), '실패 재시도 후 사진 영역에 초점을 유지한다');
-    await page.clock.runFor(9999);
-    check(await dialog.getByText(slowText).count() === 0 && await retry.count() === 0, '재시도마다 10초 대기를 다시 시작한다');
-    await page.clock.runFor(1);
-    await dialog.getByText(slowText).waitFor();
+    await page.clock.runFor(30000);
+    await dialog.getByText(loadingText).waitFor();
+    check(await dialog.getByText(slowText).count() === 0, '실패 재시도 후에도 기본 로딩 문구를 유지한다');
     check(await retry.count() === 0, '실패 재시도 이후에도 지연 중에는 버튼을 표시하지 않는다');
     while (held.length) held.shift()('success');
     await dialog.locator('img:not([hidden])').waitFor();
@@ -124,5 +122,5 @@ async (page) => {
   }
   await page.clock.resume();
   check(errors.length === 0, errors.join('\n'));
-  return 'PASS: desktop/mobile 10s boundary, missing/default/failure, failure-only retry and uninterrupted pending load, late success, original URL, fixed layout, keyboard and cleanup';
+  return 'PASS: desktop/mobile unchanged loading after 10s/30s, missing/default/failure, failure-only retry and uninterrupted pending load, late success, original URL, fixed layout, keyboard and cleanup';
 }
