@@ -397,6 +397,26 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
         self.assertIn(f"grant execute on function {signature} to service_role", migration)
 
+    def test_keyword_candidates_compare_one_letter_words_as_standalone_words(self) -> None:
+        # PRD 4.5 — 1글자 단어는 BM25처럼 독립 단어로만 통과시키고, 나머지 strpos 조건과 범위 필터는 그대로 둔다.
+        migration = self._squashed("20261121120000_keyword_candidates_word_terms.sql")
+        self.assertIn("drop function public.keyword_found_item_candidates(bigint[],text[]);", migration)
+        body = migration.split("create function public.keyword_found_item_candidates", 1)[1]
+        # 기본값이 있어야 2인자로 부르는 이전 앱도 동작한다.
+        self.assertIn("(p_location_ids bigint[],p_terms text[],p_word_terms text[] default '{}') returns json", body)
+        self.assertIn("d.storage_location_id=any($1) and cardinality($1) between 1 and 300", body)
+        self.assertIn("strpos(d.search_text,lower(t.term))>0", body)
+        self.assertIn("'(^|[^[:alnum:]])'||regexp_replace(lower(w.word),'([^[:alnum:]])','\\\\\\1','g')"
+                      "||'($|[^[:alnum:]])'", body)
+        self.assertIn("security invoker", body)
+        self.assertNotIn("kind_mask", body)
+        signature = "public.keyword_found_item_candidates(bigint[],text[],text[])"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+        rollback = self._squashed("../rollbacks/20261121120000_keyword_candidates_word_terms.sql")
+        self.assertIn(f"drop function if exists {signature};", rollback)
+        self.assertIn("(p_location_ids bigint[],p_terms text[]) returns json", rollback)
+
     @staticmethod
     def _squashed(name: str) -> str:
         """SQL 주석(`--` 이후)을 빼고 공백을 정규화한다. 주석 속 설명이 검사에 걸리지 않게 한다."""

@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from retriever_lost_found.search.hybrid import keyword_scores, query_kinds, query_text, search_found_items, search_text
+from retriever_lost_found.search.hybrid import candidate_matches, keyword_scores, query_kinds, query_text, search_found_items, search_text
 
 
 @pytest.mark.parametrize(("source", "expected"), [
@@ -117,14 +117,14 @@ class ScopedLiteralCandidates:
         ]
         self.requests = []
 
-    def fetch_candidate_bundle(self, locations, terms, *, timeout):
+    def fetch_candidate_bundle(self, locations, terms, *, timeout, word_terms=()):
         assert locations == [7]
         self.requests.append(terms)
         # These fixtures deliberately have no legacy kind_mask. New synonyms
         # must not disappear before Python can normalize or score them.
         items = [
             item for item in self.items if item["storage_location_id"] in locations
-            and any(term.lower() in item["search_text"].lower() for term in terms)
+            and candidate_matches(item["search_text"].lower(), {term.lower() for term in terms}, set(word_terms))
         ]
         return {"items": items, "candidate_count": None}
 

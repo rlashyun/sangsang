@@ -109,6 +109,43 @@ def _tokens(normalized_text: str) -> list[str]:
     )]
 
 
+def candidate_terms(query: str) -> tuple[set[str], set[str]]:
+    """PRD 4.5 — 포함 검사(키워드 후보 조회)에 보낼 (포함 단어, 독립 1글자 단어).
+
+    `query`는 query_text()를 거친 검색어다. 포함 검사는 BM25가 점수를 줄 물품을 먼저 버리지 않는다.
+    """
+    kinds = query_kinds(query)
+    if kinds:
+        names = {name for name, group in zip(synonyms.KIND_NAMES, KINDS) if group in kinds}
+        # 종류어가 있으면 종류 표현만 쓴다. 색 같은 속성만 맞는 물품은 supports_kind가 어차피 0점을 준다.
+        terms, words = synonyms.kind_candidate_terms(names), set()
+    else:
+        terms = {term[2:] for term in tokenize(query)} | synonyms.expanded_terms(query)
+        # BM25는 1글자 검색어를 조각 없이 독립 단어(w:키)로만 비교한다. 사전 단어나 대표어가 아니면
+        # 정규화로 새로 생기지 않으므로, 원문에서 앞뒤가 글자·숫자가 아닐 때만 통과시켜도 결과가 같다.
+        canonical = {name for _, name in synonyms.ALIASES}
+        words = {word for word in search_text(query).split() if len(word) == 1
+                 and not synonyms.is_known_word(word) and word not in canonical}
+    terms = {term.lower() for term in terms if term.strip()} - words
+    # 짧은 단어가 이미 들어 있는 긴 단어(지갑 ⊂ 장지갑)는 결과를 바꾸지 않으므로 빼서 비교 횟수를 줄인다.
+    return {term for term in terms if not any(other != term and other in term for other in terms)}, words
+
+
+def _standalone(text: str, word: str) -> bool:
+    start = text.find(word)
+    while start >= 0:
+        end = start + len(word)
+        if (start == 0 or not text[start - 1].isalnum()) and (end == len(text) or not text[end].isalnum()):
+            return True
+        start = text.find(word, start + 1)
+    return False
+
+
+def candidate_matches(text: str, terms: set[str], words: set[str]) -> bool:
+    """keyword_found_item_candidates(20261121120000)와 같은 포함 판정. text는 DB search_text(소문자 원문)다."""
+    return any(term in text for term in terms) or any(_standalone(text, word) for word in words)
+
+
 class SearchDeadlineExceeded(RuntimeError):
     failure_reason = "timeout"
 
@@ -176,15 +213,12 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         vector_future = _semantic_pool.submit(embedding_client.embed,query,timeout=min(semantic_budget,4.0))
         vector_future.add_done_callback(lambda _: _semantic_slots.release())
     kinds = query_kinds(query)
-    names = {name for name, group in zip(synonyms.KIND_NAMES, KINDS) if group in kinds}
     # PRD 4.1/4.5: one scoped RPC without the DB kind_mask filter. Literal type
     # expressions from synonyms.json do the kind gate, including aliases the
     # mask never knew. Attribute-only hits cannot widen it.
-    terms = synonyms.kind_candidate_terms(names) if kinds else (
-        {term[2:] for term in tokenize(query)} | synonyms.expanded_terms(query)
-    )
+    terms, words = candidate_terms(query)
     if hasattr(client,"fetch_candidate_bundle"):
-        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),timeout=1.8)
+        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
         items,count = bundle["items"],bundle.get("candidate_count")
     else:
         items = client.fetch_items(location_ids)

@@ -151,10 +151,15 @@ class SupabaseFoundItemClient:
         """PRD 4.5 — 상세/사진/중복 정규화 텍스트를 순위 계산 전에 전송하지 않는다."""
         return self.fetch_items(location_ids, search_only=True)
 
-    def fetch_candidate_bundle(self, location_ids: list[int], terms: list[str], *, timeout: float) -> dict:
+    def fetch_candidate_bundle(self, location_ids: list[int], terms: list[str], *, timeout: float,
+                               word_terms: list[str] = ()) -> dict:
         # PRD 4.1, 4.5 — DB kind_mask 필터는 쓰지 않는다. 종류 표현은 서버 동의어 사전이 terms로 넘긴다.
-        payload = self._search_rpc("keyword_found_item_candidates", {
-            "p_location_ids": _unique_location_ids(location_ids), "p_terms": terms}, timeout)
+        params = {"p_location_ids": _unique_location_ids(location_ids), "p_terms": terms}
+        if word_terms:
+            # PRD 4.5 — 1글자 단어는 독립 단어로만 비교한다. 마이그레이션 20261121120000이 필요하다.
+            # 없을 때는 보내지 않아 이전 2인자 함수에서도 나머지 검색이 그대로 동작한다.
+            params["p_word_terms"] = list(word_terms)
+        payload = self._search_rpc("keyword_found_item_candidates", params, timeout)
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
             raise RuntimeError("검색 후보 응답 형식이 올바르지 않습니다.")
         return payload

@@ -200,6 +200,7 @@
     {"canonical": "접이식우산", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["접이식우산", "접이식 우산", "접이우산", "접는우산", "접는 우산", "단우산"]},
     {"canonical": "자동차키", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["자동차키", "자동차 키", "차키", "차 키", "자동차열쇠", "자동차 열쇠", "차열쇠", "차량키", "차량 키"]},
     {"canonical": "유선이어폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["유선이어폰", "유선 이어폰", "줄이어폰", "줄 이어폰"]},
+    {"canonical": "헤드폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["헤드폰", "해드폰"]},
     {"canonical": "목베개", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["목베개", "목 베개", "목베게"]},
     {"canonical": "비닐봉지", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["비닐봉지", "비닐 봉지", "비닐봉투", "비닐 봉투"]},
     {"canonical": "종이쇼핑백", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["종이쇼핑백", "종이 쇼핑백", "종이가방", "종이 가방", "종이백"]},
