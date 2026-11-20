@@ -27,6 +27,11 @@ for _kind, _terms in KIND_TERMS.items():
     for _term in _terms:
         _KINDS_BY_TERM.setdefault(_term, set()).add(_kind)
 _KIND_PATTERN = re.compile("|".join(re.escape(term) for term in sorted(_KINDS_BY_TERM, key=len, reverse=True)))
+# PRD 4.5 (2026-11-21 전체 물품) — 6개 종류어가 없어도 사전에 등록한 물품 단어(우산·안경 등)가
+# 있으면 색 단어를 대표어로 맞춘다. 미등록 문맥(브라운 면도기 등)은 그대로 둔다.
+_ITEM_PATTERN = re.compile("|".join(re.escape(term.replace(" ", "")) for term in sorted(
+    {term for group in _CONCEPTS if group["domain"] == "item" for term in group["terms"]},
+    key=len, reverse=True)))
 _EARPHONE_PATTERN = re.compile("이어폰|에어팟|버즈|유닛")
 _COLOR_WORDS = {term for group in _CONCEPTS if group["domain"] == "color" for term in group["terms"]}
 _EARPHONE_TERMS = {term for group in _CONCEPTS
@@ -47,6 +52,11 @@ for _word in _WORDS:
         for _char in _word:
             _node = _node.setdefault(_char, {})
         _node[None] = _word
+
+
+def is_known_word(word: str) -> bool:
+    """PRD 4.5 — 사전에 등록한 단어는 오타가 아니므로 질의 보정 대상에서 뺀다."""
+    return word in _WORDS
 
 
 @lru_cache(maxsize=8192)
@@ -85,7 +95,7 @@ def normalize_text(text: str, *, query: bool = False) -> str:
     text = normalize_base_text(text, keep_spaces=True)
     earphone = bool(_EARPHONE_PATTERN.search(text))
     # Color words in recognized item/brand descriptions or a color-only query.
-    color = query or bool(_KIND_PATTERN.search(text)) or all(
+    color = query or bool(_KIND_PATTERN.search(text)) or bool(_ITEM_PATTERN.search(text.replace(" ", ""))) or all(
         word in _LOOKUP for word in text.split()
     )
 

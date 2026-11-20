@@ -40,7 +40,8 @@ def query_text(text: str) -> str:
     vocabulary = {word for group in KINDS for word in group}
     words = synonyms.normalize_text(text, query=True).split()
     for index, word in enumerate(words):
-        if len(word)<3 or any(term in word for term in vocabulary):
+        # PRD 4.5 (2026-11-21) — '휴대용'처럼 사전에 있는 단어를 '휴대폰'으로 바꾸지 않는다.
+        if len(word)<3 or synonyms.is_known_word(word) or any(term in word for term in vocabulary):
             continue
         candidates = [term for term in vocabulary if abs(len(term)-len(word))<=1
                       and levenshtein_ratio(word, term)>=1-1/max(len(word),len(term))-1e-9]

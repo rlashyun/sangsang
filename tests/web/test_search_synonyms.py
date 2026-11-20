@@ -146,6 +146,44 @@ def test_synonyms_survive_the_real_candidate_gate_and_keep_location_scope(query,
         assert "검정" not in terms  # Color alone must not broaden kind retrieval.
 
 
+class AllCategoryCandidates(ScopedLiteralCandidates):
+    """PRD 4.5 (2026-11-21) — 기존 6개 분류 밖 물품도 같은 후보 조회 경로를 탄다."""
+    def __init__(self):
+        super().__init__()
+        self.items = [
+            {"id": 11, "storage_location_id": 7, "item_name": "썬글라스", "search_text": "썬글라스"},
+            {"id": 12, "storage_location_id": 7, "item_name": "보조베터리", "search_text": "보조베터리"},
+            {"id": 13, "storage_location_id": 7, "item_name": "검정 휴대폰", "search_text": "검정 휴대폰"},
+            {"id": 14, "storage_location_id": 7, "item_name": "수모", "search_text": "수모"},
+            {"id": 15, "storage_location_id": 7, "item_name": "블랙장우산", "search_text": "블랙장우산"},
+            {"id": 16, "storage_location_id": 7, "item_name": "흰색 장우산", "search_text": "흰색 장우산"},
+        ]
+
+
+@pytest.mark.parametrize(("query", "expected"), [
+    ("선글라스", 11), ("휴대용 보조배터리", 12), ("휴대폰", 13), ("수영모자", 14),
+])
+def test_new_category_spellings_survive_the_candidate_gate(query, expected):
+    # BM25 bigram(휴대 등)으로 다른 물품이 함께 후보에 들 수는 있지만, 표기가 다른 정답이 1위여야 한다.
+    results, _, _ = search_found_items(AllCategoryCandidates(), query, [7])
+    assert results and results[0]["id"] == expected
+
+
+def test_dictionary_words_are_not_typo_corrected_but_unknown_typos_still_are():
+    # '휴대용'은 '휴대폰'과 한 글자 차이지만 사전 단어라 휴대폰 종류로 좁혀지면 안 된다.
+    assert query_text("휴대용 보조배터리") == "휴대용 보조배터리"
+    assert query_kinds(query_text("휴대용 보조배터리")) == []
+    assert query_text("휴대푠") == "휴대폰"
+
+
+def test_colors_unify_beside_registered_new_category_items_only():
+    assert search_text("블랙장우산") == "검정 장우산"
+    assert search_text("붉은 우산") == "빨강 우산"
+    assert search_text("브라운 면도기") == "브라운 면도기"
+    scores = keyword_scores(AllCategoryCandidates().items, "검정 장우산")
+    assert scores[15] > scores.get(16, 0)
+
+
 def test_embedding_receives_the_canonical_query_not_the_expanded_dictionary():
     class Embedding:
         def embed(self, query, **kwargs):
