@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
+import { AgentRequestError, AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
 import { DEFAULT_SEARCH_RADIUS_METERS, nextSearchRadiusMeters, previousSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
@@ -67,6 +67,11 @@ export function AgentSearchApp() {
   const searchPath = `${location.pathname}${location.search}`;
   const guideIsOpen = location.hash === GUIDE_HASH;
   const controller = useRef<AbortController | null>(null);
+  // PRD 4.3-A, 5 — Retry the original request, including its original revision.
+  const retryRequest = useRef<{ id: string; session: { session_id: string; revision: number } | null } | null>(null);
+  const sessionIdentity = useRef<{ session_id: string; revision: number } | null>(null);
+  const cancellationPending = useRef(false);
+  const recoveryRequired = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const feed = useRef<HTMLDivElement>(null);
 
@@ -189,8 +194,17 @@ export function AgentSearchApp() {
 
   async function submit(turn: AgentTurn, retry = false) {
     if (controller.current) return;
+    if (!retry && recoveryRequired.current) {
+      setError("이전 검색의 처리 결과를 먼저 확인해 주세요. ‘다시 시도’를 누르면 이어서 복구해요.");
+      return;
+    }
     const request = new AbortController();
     controller.current = request;
+    if (!retry || !retryRequest.current) {
+      retryRequest.current = { id: crypto.randomUUID(), session: sessionIdentity.current };
+    }
+    const identity = retryRequest.current;
+    cancellationPending.current = false;
     setLastTurn(turn);
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
@@ -210,7 +224,8 @@ export function AgentSearchApp() {
       if (!retry) setMessages(current => [...current, { author: "user", text: turn.name ? `지도에서 ${turn.name}을(를) 골랐어요.` : "지도에서 위치를 골랐어요." }]);
     }
     try {
-      const result = await runAgentTurn(turn, response, event => {
+      const result = await runAgentTurn(turn, identity.session, event => {
+        if (cancellationPending.current) return;
         if (event.type === "run.started") setActiveRun(event);
         if (event.type === "scope.updated") {
           setPendingScope(event);
@@ -221,8 +236,11 @@ export function AgentSearchApp() {
         if (event.type === "tool.started") {
           setProgress(event.attempt === 2 ? "다른 표현으로 한 번 더 찾고 있어요." : TOOL_LABELS[event.tool] || "검색 중이에요.");
         }
-      }, request.signal);
+      }, request.signal, identity.id);
+      sessionIdentity.current = result;
+      recoveryRequired.current = false;
       if (result.status === "error") {
+        recoveryRequired.current = ["state_unavailable", "state_conflict"].includes(result.error?.code ?? "");
         setError(result.error?.message || result.message || "검색 중 문제가 생겼어요.");
         return;
       }
@@ -252,10 +270,15 @@ export function AgentSearchApp() {
         setSelectedInstitution([]);
         setTab((result.matches?.total_count ?? 0) > 0 ? "results" : "chat");
       }
+      sessionIdentity.current = result.status === "ended" ? null : result;
+      retryRequest.current = null;
       setLastTurn(null);
     } catch (err) {
       if (request.signal.aborted) return;
+      recoveryRequired.current = err instanceof AgentRequestError && err.requiresRecovery;
       if (err instanceof AgentSessionExpired) {
+        sessionIdentity.current = null;
+        retryRequest.current = null;
         setResponse(null);
         setItems([]);
         setCursor(null);
@@ -278,10 +301,15 @@ export function AgentSearchApp() {
   async function cancel() {
     if (!activeRun) return;
     setCancelling(true);
+    cancellationPending.current = true;
     try {
-      if (!await cancelAgentTurn(activeRun.session_id, activeRun.run_id)) setCancelling(false);
+      if (!await cancelAgentTurn(activeRun.session_id, activeRun.run_id)) {
+        cancellationPending.current = false;
+        setCancelling(false);
+      }
     } catch {
       setCancelling(false);
+      cancellationPending.current = false;
       setError("검색을 취소하지 못했어요. 다시 시도해 주세요.");
     }
   }

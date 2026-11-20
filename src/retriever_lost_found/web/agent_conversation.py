@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator, model_validator
 
+from ..agent_diagnostics import record
 from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, search_confirmed_place
 
 Model = Callable[[str, dict[str, Any], dict[str, Any]], Any]
@@ -213,8 +214,8 @@ def respond_to_message(
                 for i, item in enumerate(visible_items, 1) if item is not None
             ],
         }, TurnDecision.model_json_schema()))
-    except ValidationError:
-        raise RuntimeError("대화 응답을 해석하지 못했습니다. 다시 시도해 주세요.") from None
+    except ValidationError as error:
+        raise RuntimeError("대화 응답을 해석하지 못했습니다. 다시 시도해 주세요.") from error
 
     if decision.action == "end":
         return ConversationTurn(state, "ended", decision.message)
@@ -314,7 +315,8 @@ def search_conversation(
                 **context, "query": query, "match_count": 0,
             }, QueryRewrite.model_json_schema())
             return QueryRewrite.model_validate(proposal).query
-        except (RuntimeError, ValidationError):
+        except (RuntimeError, TimeoutError, ValidationError) as error:
+            record("model.optional_failed", error=error, stage="query_rewrite", final_status="fallback")
             return None
 
     for event in search_confirmed_place(
@@ -344,7 +346,8 @@ def search_conversation(
                 question = ResultFollowUp.model_validate(output).question
                 if question:
                     message = f"{message} {question}"
-            except (RuntimeError, ValidationError):
+            except (RuntimeError, TimeoutError, ValidationError) as error:
+                record("model.optional_failed", error=error, stage="follow_up", final_status="fallback")
                 pass  # Keep the completed search result when optional narration fails.
         yield {
             **event, "message": message,

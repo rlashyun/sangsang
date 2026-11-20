@@ -113,7 +113,8 @@ export interface AgentResponse {
   search_attempts: { query: string }[];
   recommended_item_ids: number[];
   matches: AgentMatches | null;
-  error: { message: string } | null;
+  trace_id?: string;
+  error: { message: string; code?: string; retryable?: boolean } | null;
 }
 
 export type AgentTurn =

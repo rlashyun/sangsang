@@ -1,5 +1,28 @@
 # 실측 기록
 
+## 대화형 검색 공용 세션 운영 적용 — 2026-11-20 KST
+
+- 사용자 승인으로 운영 Supabase `retriever`(`bjbqcntoqpubybrjhrge`, PostgreSQL 17.11)에 `20261120150000_agent_search_sessions.sql`을 적용했다. `supabase db query --linked --project-ref ... -f`로 이 파일만 한 트랜잭션에서 실행하고(`lock_timeout` 5초, `statement_timeout` 60초), 같은 트랜잭션에서 버전·이름·SQL 본문을 `supabase_migrations.schema_migrations`에 기록했다. 저장된 본문 배열과 저장소 파일이 정확히 같음을 확인했다. 기존 물품·검색·수집 객체와 과거 적용 이력은 수정하지 않았다.
+- 적용 전 읽기 전용 확인: 수집 running 0건, 유효 임베딩 lease 0건, 다른 활성 쿼리 0건, 세션 테이블 없음, 최신 운영 버전 `20261120090000`. 최신 `origin/main`은 작업 기준 `67794bc`와 같았다.
+- 적용 후: 세션 0건, RLS 켜짐, anon/authenticated 테이블·RPC 접근 불가, service_role RPC 실행 가능. `pg_cron` 1.6.4의 `agent-search-session-expiry` 작업이 postgres 사용자로 매분 활성화됐다. 서비스 역할로 합성 세션의 claim·중복 busy·cancel·완료 반영 차단·취소 결과 replay를 확인한 트랜잭션은 롤백했다. 실제 사용자 대화는 조회하지 않았다.
+- 실제 예약 삭제 확인을 위해 민감정보 없는 만료 표식 `codex-release-expiry-check-20261120` 1건을 2026-11-20 15:57:05 KST에 넣었다. 15:58:00 KST의 실제 pg_cron 실행이 succeeded였고 표식은 0건으로 삭제됐다. 로컬 대역에서 확인하지 못했던 실제 예약 엔진의 실행·삭제를 확인했다. 이 시점에는 앱 병합·배포 전이다.
+- 병합 전 재검증: 전체 Python **437 passed, 1 warning, 0.83초**, 프런트 빌드 **72ms**(JS **402.69kB / gzip 125.40kB**, 50모듈), 관련 Node 웹 테스트 **10 passed**. 테스트는 더미 설정이며 실제 API를 호출하지 않았다.
+- 이 기능 브랜치와 배포 기록용 브랜치의 Preview 자동 배포는 `vercel.json`에서 끈다. 이번 승인은 main 운영 배포에 적용하고 Preview에 운영 DB가 연결되는 경로는 만들지 않는다. 설정 근거는 [Vercel Git configuration](https://vercel.com/docs/project-configuration/git-configuration)이며 main의 자동 배포는 유지한다.
+
+
+## 대화형 검색 실패 복구·공용 세션 검증 — 2026-11-20 KST
+
+- 조건: 새 워크트리 `/Users/taeksookim/.codex/worktrees/0888/retriever`, 기준 `67794bcee64034c3cd2af6777ad5df23c725e1f5`, 브랜치 `codex/agent-search-recovery`. 기존 워크트리의 미커밋 자료는 사용하지 않았다. Python 3.12.14·외부 서비스 더미 설정, 모델·카카오·기관·검색·저장소는 테스트 대역이다. 운영 API·DB·부하 테스트·배포·병합은 수행하지 않았다. 당시 신고의 직접 원인이나 특정 공급자의 장애를 확인한 결과가 아니다.
+- Python 최종 검증: `uv run --with 'pytest>=8,<9' pytest -q`와 같은 테스트·의존성 범위를 캐시 경로만 TEMP로 바꾸고 `--offline`으로 실행했다. **437 passed, 1 warning, 0.71초**. 경고는 기존 Starlette/httpx 폐기 예고다. 새 복구 테스트는 **17개**이며 시간 초과·잘못된 응답·초기/완료 응답 유실·중복·다른 입력으로 ID 재사용·취소/완료 순서·다른 라우터 인스턴스 이어가기·lease 복구·스트림 종료·만료·로그 비노출·임베딩 fallback 추적을 포함한다.
+- 개발 중 검증 이력: 초기 관련 테스트는 **19 passed / 1 failed**(물품 안내용 캐시를 직렬화하지 않아 다음 페이지 물품 설명을 잃음)였다. 최소 필드 캐시와 페이지 반영을 고친 뒤 **20 passed**, 복구 테스트 추가 후 관련 **21 passed**였다. 첫 전체 수집은 더미 `KAKAO_REST_API_KEY` 누락으로 중단해 더미 환경을 보완했고 **434 passed**를 확인했다. 추가 회귀와 최종 수정 뒤 전체 **437 passed**를 반복 확인했다(앞선 실행 **0.80초·0.81초**, 최종 위 값). 테스트 기준을 느슨하게 바꾸지 않았다. 기존 ‘동일 요청은 409’ 단언은 승인된 결과 재사용 계약에 맞춰 응답 동일성과 다른 입력 409를 함께 검증하도록 변경했다.
+- 프런트: `npm run build`의 타입 검사·Vite 빌드 통과. 첫 빌드는 app.js **401.73kB / gzip 125.08kB**, 최종은 **402.69kB / gzip 125.40kB**이며 변환 모듈 **50개**, 최종 빌드 **69ms**였다. 중간 타입 검사에서 새 오류 코드 필드 누락을 발견해 `types.ts`의 API 계약을 갱신했다. `node --test tests/web/*.js`는 **10 passed, 0 failed**였다. 빌드 크기·시간은 이 로컬 환경의 산출값이며 실사용 지연 측정이 아니다.
+- 브라우저: 가짜 API·지도 SDK를 사용한 Chromium에서 **1440×1000 / 390×844**를 검증했다. 중단된 첫 응답 뒤 재시도의 요청 본문·ID·버전 동일, 복구 전 새 요청 전송 **0회**, 시간 초과·busy 재시도, 빈 결과·성공·loading·disabled를 통과했다. 초기 실행은 지도 대역의 `getProjection` 누락으로 실패했고 대역만 보완했다. 이후 두 화면에서 통과하고 재실행했다. 실제 카카오·운영 API는 호출하지 않았다. 외부 상태 코드는 로그에 남지만 사용자 대화·비밀 문자열은 남지 않는 것을 Python 대역 테스트로 확인했다.
+- SQL: 임시 **PGlite 0.5.17**에서 새 SQL의 테이블·RPC와 `tests/database/verify_agent_sessions.sql`을 적용·실행했다. 취소 전후 반영, 완료 재사용, stale revision·다른 fingerprint 거절, 페이지 커서·캐시, lease 교체 후 이전 작업자 차단, 만료 접근 차단·삭제, RLS·anon/authenticated 접근 불가 및 service_role 실행을 통과했다. 예약 정리 SQL도 실행했다. PGlite에는 `pg_cron`이 없어 확장 설치 문장만 제외하고 스케줄 등록 함수를 대역으로 사용했다. 따라서 실제 pg_cron 엔진·운영 PostgreSQL 버전·다중 DB 연결의 실제 잠금 경합은 검증하지 않았다. HTTP 다중 라우터·취소 경합은 공용 메모리 대역에서 검증했다. 운영 적용 후 예약 작업 실행과 권한·삭제 확인이 필요하다.
+- 정책값(성능 실측 아님): 사용자 승인 Supabase·유휴 **30분**, 기존 최대 세션 **128개**·요청 이력 **100개**, 실행 lease **120초**, 저장소 HTTP **3초**, 최근 문답 **4개**, 안내용 최소 물품 캐시 **100개**, 최신 완료 응답 **1개**. 논리 만료는 즉시 차단하고 정상 스케줄러가 다음 분에 물리 삭제한다. 스케줄러 장애와 DB 백업은 별도 한계다. 기존 물품·임베딩·수집 테이블은 변경하지 않는다.
+- 이 로컬 검증 당시 새 마이그레이션 `20261120150000_agent_search_sessions.sql`은 **미적용**이었다. 이후 사용자 승인에 따른 적용은 위 운영 기록을 따른다. SQL → 권한/RPC/만료 작업 확인 → 앱 배포 순서와 앱만 되돌리는 절차는 `docs/agent-search.md`·`supabase/README.md`에 기록했다. 운영 DB 적용·배포·PR 병합은 별도 승인 대상이다.
+- 원자료와 검토 화면: `/Users/taeksookim/.codex/worktrees/0888/retriever-work-docs/agent-search-recovery-20261120/`의 `pytest-final.log`, `sql-final.log`, `web-final.log`, `build-final.log`, `browser-final.log`, `recovery-1440.png`, `recovery-390.png`, `verify.mjs`. 저장소에는 재현에 필요한 테스트·SQL·공식 문서만 둔다. TEMP 도구·중간 파일과 이번 브라우저 스냅샷은 정리하고 검토 원자료는 보존한다.
+
+
 ## 전체 물품 확대 전 원본 분류·규모·매칭 — 2026-11-20 KST
 
 - 조건: 브랜치 `feat-all-item-categories`, 로컬 Windows PC → 두 경찰청 목록 API(실제 키) 직접 호출, 1회. DB에는 쓰지 않았다. 매칭 확인만 운영 Supabase의 별칭·기관 목록을 읽기 전용으로 읽었다. 원자료(JSON·스크립트)는 저장소 밖 세션 임시 폴더에 두었다.
