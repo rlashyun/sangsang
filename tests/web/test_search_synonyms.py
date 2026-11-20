@@ -87,13 +87,12 @@ def test_kind_retrieval_does_not_expand_into_generic_phrase_components():
 
 
 def test_new_subtypes_and_ambiguous_pouches_have_the_right_kinds():
-    from retriever_lost_found.search.hybrid import KINDS
-    assert query_kinds("비니") == [KINDS[3]]
-    assert query_kinds("버킷햇") == [KINDS[3]]
-    assert query_kinds("카드홀더") == [KINDS[0]]
-    assert query_kinds("카드지갑") == [KINDS[0]]
-    assert query_kinds("갤럭시 버즈") == [KINDS[2]]
-    assert set(query_kinds("파우치")) == {KINDS[0], KINDS[4]}
+    assert query_kinds("비니") == ["모자"]
+    assert query_kinds("버킷햇") == ["모자"]
+    assert query_kinds("카드홀더") == ["지갑"]
+    assert query_kinds("카드지갑") == ["지갑"]
+    assert query_kinds("갤럭시 버즈") == ["이어폰"]
+    assert set(query_kinds("파우치")) == {"지갑", "가방"}
 
 
 def test_bm25_uses_the_same_brand_dictionary_without_mutating_source():
@@ -169,11 +168,13 @@ def test_new_category_spellings_survive_the_candidate_gate(query, expected):
     assert results and results[0]["id"] == expected
 
 
-def test_dictionary_words_are_not_typo_corrected_but_unknown_typos_still_are():
-    # '휴대용'은 '휴대폰'과 한 글자 차이지만 사전 단어라 휴대폰 종류로 좁혀지면 안 된다.
+def test_holder_word_is_not_a_phone_and_listed_typos_come_from_the_dictionary():
+    # '휴대용'은 '휴대폰'과 한 글자 차이지만 휴대폰 종류로 좁혀지면 안 된다(보조배터리 종류다).
     assert query_text("휴대용 보조배터리") == "휴대용 보조배터리"
-    assert query_kinds(query_text("휴대용 보조배터리")) == []
+    assert query_kinds(query_text("휴대용 보조배터리")) == ["보조배터리"]
+    # PRD 4.5 (2026-11-21) — 자동 오타 보정은 없다. 사전에 넣은 표기만 대표어로 바뀐다.
     assert query_text("휴대푠") == "휴대폰"
+    assert query_text("휴대퐁") == "휴대퐁"
 
 
 def test_colors_unify_beside_registered_new_category_items_only():

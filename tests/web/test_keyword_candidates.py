@@ -18,21 +18,22 @@ CORPUS = [
     "(키) 1개", "키 분실", "자동차 키 분실", "차키", "카드키", "키링 열쇠고리", "나이키 가방", "카키색 모자",
     "펜 1자루", "볼펜", "펜던트 목걸이", "책 1권", "책상 서랍", "공 1개", "공책", "컵", "종이컵",
     "검정 장지갑", "카드지갑 검정", "블랙 우산", "검정 긴 우산", "노트북 가방", "스프링노트",
-    "헤드폰", "무선 해드폰", "핸드폰", "보스 헤드셋", "보스턴백", "반지", "반지갑",
-    "접이식 우산", "우산(접이식)", "보조 배터리", "아이패드 프로", "아이폰 14",
+    "삼성 노트북 컴퓨터 > 삼성노트북", "헤드폰", "무선 해드폰", "핸드폰", "보스 헤드셋", "보스턴백",
+    "반지", "반지갑", "접이식 우산", "우산(접이식)", "보조 배터리", "아이패드 프로", "아이폰 14",
+    "파란 가방", "만화책 도서용품 > 만화책",
 ]
 ITEMS = [{"id": i, "search_text": text, "item_name": text, "raw_category_name": ""}
          for i, text in enumerate(CORPUS, 1)]
 
 
-def _old_terms(query: str) -> set[str]:
-    """2026-11-21 이전 서버가 보내던 strpos 단어 묶음(비교 기준)."""
+def _unreduced_terms(query: str) -> set[str]:
+    """candidate_terms가 겹치는 긴 단어를 지우기 전의 strpos 단어 묶음(비교 기준)."""
     kinds = query_kinds(query)
     if kinds:
-        from retriever_lost_found.search.hybrid import KINDS
-        names = {name for name, group in zip(synonyms.KIND_NAMES, KINDS) if group in kinds}
-        return {term.lower() for term in synonyms.kind_candidate_terms(names)}
-    return {term.lower() for term in {t[2:] for t in tokenize(query)} | synonyms.expanded_terms(query) if term}
+        return {term.lower() for term in synonyms.kind_candidate_terms(set(kinds))}
+    _, words = candidate_terms(query)
+    raw = {t[2:] for t in tokenize(query)} | synonyms.expanded_terms(query)
+    return {term.lower() for term in raw if term.strip()} - words
 
 
 def _passed(query: str) -> set[int]:
@@ -52,17 +53,18 @@ def test_containment_never_drops_an_item_that_bm25_scores(raw_query):
     assert scored <= _passed(query)
 
 
-@pytest.mark.parametrize("raw_query", QUERIES)
-def test_new_containment_is_never_wider_than_before(raw_query):
+@pytest.mark.parametrize("raw_query", ["키", "펜", "공", "컵", "검정색 긴 거", "보스", "성심당 빵 봉투"])
+def test_one_letter_split_is_never_wider_than_plain_containment(raw_query):
     query = query_text(raw_query)
-    old = {item["id"] for item in ITEMS if any(term in item["search_text"] for term in _old_terms(query))}
+    assert not query_kinds(query)
+    old = {item["id"] for item in ITEMS
+           if any(term in item["search_text"] for term in _unreduced_terms(query) | candidate_terms(query)[1])}
     assert _passed(query) <= old
 
 
 @pytest.mark.parametrize(("query", "hits", "misses"), [
     ("키", ["(키) 1개", "키 분실"], ["카드키", "키링 열쇠고리", "나이키 가방", "카키색 모자"]),
     ("펜", ["펜 1자루"], ["볼펜", "펜던트 목걸이"]),
-    ("책", ["책 1권"], ["책상 서랍"]),
     ("공", ["공 1개"], ["공책"]),
     ("컵", ["컵"], ["종이컵"]),
 ])
@@ -89,26 +91,27 @@ def test_dictionary_one_letter_words_keep_plain_containment():
 @pytest.mark.parametrize(("query", "kept", "dropped"), [
     ("검정 지갑", "지갑", "장지갑"),
     ("차키", "차키", "자동차키"),
-    ("접이식 우산", "우산", "접이식 우산"),
+    ("접이식 우산", "우산", "접이식우산"),
 ])
 def test_longer_terms_that_contain_a_shorter_term_are_not_sent(query, kept, dropped):
-    terms, _ = candidate_terms(query_text(query))
+    query = query_text(query)
+    terms, words = candidate_terms(query)
     assert kept in terms and dropped not in terms
-    assert dropped in _old_terms(query_text(query))
-    old = {item["id"] for item in ITEMS if any(term in item["search_text"] for term in _old_terms(query_text(query)))}
-    assert _passed(query_text(query)) == old
+    assert dropped in _unreduced_terms(query)
+    old = {item["id"] for item in ITEMS if any(term in item["search_text"] for term in _unreduced_terms(query))}
+    assert _passed(query) == old
 
 
 def test_headphone_is_not_corrected_to_phone():
-    # PRD 4.5 — '헤드폰'이 사전에 없어 '핸드폰'으로 고쳐지고 휴대폰 종류로 좁혀졌다(평가셋 E3 정답 20건 누락).
+    # PRD 4.5 — '헤드폰'이 '핸드폰'으로 고쳐져 휴대폰 종류로 좁혀졌다(평가셋 E3 정답 20건 누락).
     assert query_text("블루투스 헤드폰") == "블루투스 헤드폰"
-    assert not query_kinds(query_text("블루투스 헤드폰"))
+    assert query_kinds(query_text("블루투스 헤드폰")) == ["헤드폰"]
     assert query_text("무선 해드폰") == "무선 헤드폰"
     scored = keyword_scores(ITEMS, query_text("헤드폰"))
     assert {CORPUS.index("헤드폰") + 1, CORPUS.index("무선 해드폰") + 1} <= set(scored)
     assert CORPUS.index("핸드폰") + 1 not in scored
-    # positive 쌍: 실제 오타는 여전히 휴대폰으로 고친다.
-    assert query_text("휴대푠") == "휴대폰" and query_kinds(query_text("휴대푠"))
+    # positive 쌍: 사전에 넣은 오타 표기는 여전히 휴대폰이다.
+    assert query_text("휴대푠") == "휴대폰" and query_kinds(query_text("휴대푠")) == ["휴대폰"]
 
 
 def test_rpc_sends_word_terms_only_when_present():

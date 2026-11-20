@@ -156,7 +156,8 @@ def test_query_correction_keeps_phone_candidate():
     assert keyword_scores([{"id":1,"item_name":"아이폰"}],"아이퐁")
 
 
-def test_query_only_correction_and_explicit_kind_take_priority():
+def test_listed_typos_and_explicit_kind_take_priority():
+    # PRD 4.3 P0 '아이퐁' — 자동 오타 보정 대신 동의어 사전의 표기로 찾는다(2026-11-21).
     assert query_text("아이퐁") == "아이폰"
     assert query_text("휴대푠") == "휴대폰"
     assert len(query_kinds(query_text("블루투스 휴대폰"))) == 1

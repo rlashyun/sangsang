@@ -103,8 +103,8 @@
     {"canonical": "에이케이지", "domain": "brand", "scope": ["query", "item_name", "description"], "terms": ["에이케이지", "akg"]},
     {"canonical": "케이스티파이", "domain": "brand", "scope": ["query", "item_name", "description"], "terms": ["케이스티파이", "casetify"]},
     {"canonical": "타미힐피거", "domain": "brand", "scope": ["query", "item_name", "description"], "terms": ["타미힐피거", "tommy hilfiger"]},
-    {"canonical": "휴대폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["휴대폰", "휴대전화", "핸드폰", "헨드폰", "핸드폼"]},
-    {"canonical": "아이폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["아이폰", "iphone"]},
+    {"canonical": "휴대폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["휴대폰", "휴대전화", "핸드폰", "헨드폰", "핸드폼", "휴대푠"]},
+    {"canonical": "아이폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["아이폰", "iphone", "아이퐁"]},
     {"canonical": "갤럭시", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["갤럭시", "겔럭시", "galaxy"]},
     {"canonical": "버즈", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["버즈", "buds"]},
     {"canonical": "무선이어폰", "domain": "item", "scope": ["query", "item_name", "description"], "terms": ["무선이어폰", "무선 이어폰", "블루투스이어폰", "블루투스 이어폰"]},
@@ -242,6 +242,5 @@
     {"canonical": "르노", "domain": "brand", "scope": ["query", "item_name", "description"], "terms": ["르노", "르노삼성"]},
     {"canonical": "파리바게뜨", "domain": "brand", "scope": ["query", "item_name", "description"], "terms": ["파리바게뜨", "파리바게트"]}
   ],
-  "kinds": {"지갑": ["지갑", "카드지갑", "장지갑", "반지갑", "동전지갑", "머니클립", "명함지갑", "손지갑", "천지갑", "지퍼지갑", "파우치지갑", "맥세이프카드지갑", "카드홀더", "파우치"], "휴대폰": ["휴대폰", "핸드폰", "휴대전화", "스마트폰", "아이폰", "갤럭시", "폴더폰", "키즈폰", "공기계", "삼성폰", "엘지폰"], "이어폰": ["이어폰", "무선이어폰", "에어팟", "버즈", "블루투스이어폰", "무선이어폰케이스", "에어팟케이스", "버즈케이스", "충전케이스"], "모자": ["모자", "캡모자", "볼캡", "야구모자", "벙거지", "벙거지모자", "버킷햇", "썬캡", "선캡", "비니", "군모", "군모자", "밀짚모자", "등산모자", "골프모자", "털모자", "베레모", "중절모", "챙모자"], "가방": ["가방", "백팩", "배낭", "핸드백", "손가방", "크로스백", "숄더백", "토트백", "에코백", "클러치백", "힙색", "캐리어", "파우치", "보냉가방", "보냉백", "도시락가방", "노트북가방", "서류가방", "쇼핑백", "장바구니", "천가방", "책가방", "메신저백", "슬링백", "신발주머니", "타포린백"], "카드": ["카드", "신용카드", "체크카드", "교통카드", "기프트카드", "멤버십카드", "출입카드", "카드키", "학생증", "사원증", "복지카드", "주민등록증", "운전면허증", "외국인등록증", "회원카드", "회원증", "보안카드", "종량제카드", "배출카드", "티머니", "이즐", "캐시비", "기후동행카드", "k패스", "지패스", "팝카드", "와우패스", "레일플러스"]},
   "protected": ["블랙야크", "오프화이트", "아이팟", "카카오카드", "토스카드", "기업카드"]
 }
