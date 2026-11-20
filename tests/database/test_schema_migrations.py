@@ -378,6 +378,25 @@ class SchemaMigrationTests(unittest.TestCase):
         for statement in ("delete from", "update public.item_categories", "drop "):
             self.assertNotIn(statement, lowered)
 
+    def test_keyword_candidates_drop_the_kind_mask_filter_and_stay_service_role_only(self) -> None:
+        # PRD 4.1, 4.5 — 종류 판단은 서버 동의어 사전이 p_terms로 넘긴다. DB kind_mask는 별칭을 빠뜨린다.
+        migration = " ".join(
+            (MIGRATIONS / "20261120120000_keyword_candidates_without_kind_mask.sql")
+            .read_text(encoding="utf-8").lower().split()
+        )
+        body = migration.split("create function public.keyword_found_item_candidates", 1)[1]
+        self.assertIn("drop function public.keyword_found_item_candidates(bigint[],text[],text[]);", migration)
+        self.assertIn("(p_location_ids bigint[],p_terms text[]) returns json", body)
+        self.assertNotIn("kind_mask", body)
+        self.assertNotIn("p_kinds", body)
+        # 범위 필터와 단어 포함 조건은 그대로 남아야 한다.
+        self.assertIn("d.storage_location_id=any($1) and cardinality($1) between 1 and 300", body)
+        self.assertIn("strpos(d.search_text,lower(t.term))>0", body)
+        self.assertIn("security invoker", body)
+        signature = "public.keyword_found_item_candidates(bigint[],text[])"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
 
 if __name__ == "__main__":
     unittest.main()
