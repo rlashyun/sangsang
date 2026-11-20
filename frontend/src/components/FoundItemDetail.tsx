@@ -19,14 +19,6 @@ function DetailPhoto({ imageUrl, name, category }: { imageUrl: string | null; na
   const photoRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [slow, setSlow] = useState(false);
-
-  useEffect(() => {
-    if (!imageUrl || loaded || failed) return;
-    // PRD 4.3-C · 5 — 2026-11-21 승인: 10초 뒤에도 안내만 하며, 실제 실패 때만 재시도한다.
-    const timer = window.setTimeout(() => setSlow(true), 10_000);
-    return () => window.clearTimeout(timer);
-  }, [imageUrl, attempt, loaded, failed]);
 
   function retry() {
     // PRD 3.1-9 · 4.3-C — 원본 URL을 보존하고 사용자가 요청한 경우에만 다시 시도한다.
@@ -34,14 +26,14 @@ function DetailPhoto({ imageUrl, name, category }: { imageUrl: string | null; na
     setAttempt(currentAttempt.current);
     setLoaded(false);
     setFailed(false);
-    setSlow(false);
     photoRef.current?.focus({ preventScroll: true });
   }
 
   return <div ref={photoRef} tabIndex={-1} className="item-detail-photo" aria-label="물품 사진">
     {imageUrl && !failed ? <>
       {!loaded && <div className="item-detail-photo-status">
-        <p role="status">{slow ? "사진을 불러오는 데 시간이 걸리고 있어요." : "사진을 불러오고 있습니다…"}</p>
+        {/* PRD 4.3-C · 5 — 시간 경과와 무관하게 기본 로딩을 유지하고 실제 실패 때만 재시도한다. */}
+        <p role="status">사진을 불러오고 있습니다…</p>
       </div>}
       <div className="item-detail-image" aria-busy={!loaded}>
         <img key={attempt} src={imageUrl} alt={`${name} 사진`} width={320} height={340}
