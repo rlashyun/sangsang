@@ -191,12 +191,69 @@ def test_context_words_without_a_personal_name_are_left_unchanged(raw):
     [
         ("신용카드(홍길동)", "신용카드(홍*동)"),
         ("주민등록증 (김영수)", "주민등록증 (김*수)"),
-        ("학생증[이민]", "학생증[이*]"),
         ("운전면허증(황보영철)", "운전면허증(황**철)"),
+        ("카드(남궁민수)", "카드(남**수)"),  # 두 글자 성의 4자 이름
+        ("지갑(이영희)", "지갑(이*희)"),
+        ("카드(박지성)", "카드(박*성)"),
     ],
 )
 def test_bracketed_names_are_masked_in_high_risk_categories(raw, expected):
     assert mask_text(raw, high_risk=True) == expected
+
+
+# 2026-11-20 운영 dry-run(docs/measurements.md) — 괄호 규칙의 매치 약 59%가 색상·상태·물품 단어였다.
+# 괄호 속 이름은 3자 이름과 두 글자 성의 4자 이름으로만 본다. 2자 단어(현금·서류·선녹·라임…)는 대상 밖이다.
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "학생증[이민]",  # 2자 — 외자 이름은 괄호 규칙 밖(문맥 규칙만 적용)
+        "지갑(선녹)",
+        "카드(라임)",
+        "지갑(현금)",
+        "서류(서류)",
+        "지갑(동전)",
+        "지갑(명함)",
+        "지갑(사진)",
+        "카드(빈폴)",
+        "카드(인문)",
+        "지갑(지퍼)",
+    ],
+)
+def test_two_character_bracket_words_are_not_masked_as_names(raw):
+    assert mask_text(raw, high_risk=True) == raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "카드(금고보관)",  # 4자 — 두 글자 성이 아니다
+        "지갑(현금포함)",
+        "카드(연락완료)",
+        "카드(인도예정)",
+        "지갑(호피무늬)",
+        "지갑(목걸이형)",
+        "카드(신분증등)",
+        "카드(나라사랑)",
+        "지갑(김영수철)",  # 한 글자 성 + 3자는 4자 이름으로 보지 않는다
+    ],
+)
+def test_four_character_bracket_words_need_a_two_character_surname(raw):
+    assert mask_text(raw, high_risk=True) == raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "카드(연락됨)",  # 상태 안내 — 3자지만 이름이 아니다
+        "지갑(경인선)",  # 지하철 노선
+        "카드(동백전)",  # 지역화폐 카드명
+        "지갑(지퍼형)",
+        "지갑(어린이)",
+        "카드(인계됨)",  # 접미사 '됨'
+    ],
+)
+def test_three_character_status_and_product_words_are_not_masked_as_names(raw):
+    assert mask_text(raw, high_risk=True) == raw
 
 
 def test_bracketed_names_are_not_masked_outside_high_risk_categories():
