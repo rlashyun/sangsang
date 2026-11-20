@@ -44,27 +44,36 @@ async function postAgent(path: string, body: object, signal?: AbortSignal) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
+  }).catch(error => {
+    if (signal?.aborted) throw error;
+    throw new AgentRequestError("검색 연결이 끊겼어요. 같은 요청을 다시 시도해 주세요.", "connection_lost");
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     if (response.status === 410) throw new AgentSessionExpired(payload?.error?.message);
-    throw new Error(payload?.error?.message || "대화형 검색에 연결하지 못했어요.");
+    throw new AgentRequestError(payload?.error?.message || "대화형 검색에 연결하지 못했어요.", payload?.error?.code ?? (response.status >= 500 ? "state_unavailable" : undefined));
   }
   return response;
 }
 
 export class AgentSessionExpired extends Error {}
 
+export class AgentRequestError extends Error {
+  constructor(message: string, readonly code?: string) { super(message); }
+  get requiresRecovery() { return ["connection_lost", "busy", "state_unavailable"].includes(this.code ?? ""); }
+}
+
 export async function runAgentTurn(
   turn: AgentTurn,
   session: { session_id: string; revision: number } | null,
   onEvent: (event: AgentEvent) => void,
   signal: AbortSignal,
+  requestId: string = crypto.randomUUID(),
 ): Promise<AgentResponse> {
   const identity = session ? { session_id: session.session_id, revision: session.revision } : {};
-  const response = await postAgent("turns", { ...turn, ...identity, request_id: crypto.randomUUID() }, signal);
+  const response = await postAgent("turns", { ...turn, ...identity, request_id: requestId }, signal);
   const reader = response.body?.pipeThrough(new TextDecoderStream()).getReader();
-  if (!reader) throw new Error("검색 응답을 받을 수 없어요.");
+  if (!reader) throw new AgentRequestError("검색 응답을 받을 수 없어요. 같은 요청을 다시 시도해 주세요.", "connection_lost");
 
   let pending = "";
   let result: AgentResponse | undefined;
@@ -83,8 +92,13 @@ export async function runAgentTurn(
       lines.forEach(consume);
     }
     consume(pending);
-    if (!result) throw new Error("검색 연결이 끊겼어요. 다시 시도해 주세요.");
+    if (!result) throw new AgentRequestError("검색 연결이 끊겼어요. 다시 시도해 주세요.", "connection_lost");
     return result;
+  } catch (error) {
+    if (!signal.aborted && (error instanceof TypeError || error instanceof SyntaxError)) {
+      throw new AgentRequestError("검색 응답을 확인하지 못했어요. 같은 요청을 다시 시도해 주세요.", "connection_lost");
+    }
+    throw error;
   } finally {
     reader.releaseLock();
   }

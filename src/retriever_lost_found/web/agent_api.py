@@ -1,9 +1,10 @@
-"""Single-process HTTP integration for the conversational search preview."""
+"""Recoverable HTTP turns backed by an atomic session store."""
 
 import json
+import hashlib
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field, replace
-from threading import Event, Lock
+from threading import Event
 from time import monotonic
 from typing import Any, Literal
 from uuid import uuid4
@@ -15,8 +16,10 @@ from starlette.concurrency import run_in_threadpool
 
 from ..integrations.agent_model import OpenRouterAgentModel
 
-from .agent_conversation import ITEM_QUESTION, Conversation, Model, confirm_place, respond_to_message, search_conversation
+from .agent_conversation import ITEM_QUESTION, Conversation, ItemDetails, Model, confirm_place, respond_to_message, search_conversation
 from .agent_search import Institution, PlaceCandidate, SearchPage
+from .agent_store import AgentStore, MemoryAgentStore
+from ..agent_diagnostics import trace_id, start_trace, record, failure_fields
 
 
 class RunCancelled(Exception):
@@ -69,8 +72,50 @@ class Session:
     items: dict[int, dict[str, Any]] = field(default_factory=dict)
     run_id: str | None = None
     cancelled: Event = field(default_factory=Event)
-    request_ids: set[str] = field(default_factory=set)
     touched: float = field(default_factory=monotonic)
+
+
+def _detail_cache(items) -> dict:
+    fields = ("item_id", "institution_id", "item_name", "color_name", "raw_storage_name")
+    return {str(item["item_id"]): {key: item[key] for key in fields if key in item} for item in list(items)[-100:]}
+
+
+def _snapshot(session: Session) -> dict:
+    return {
+        "state": asdict(session.state), "revision": session.revision, "status": session.status,
+        "scope": list(session.scope), "radius_m": session.radius_m, "manual_radius": session.manual_radius,
+        "last_search_query": session.last_search_query, "cursor": session.cursor, "match_count": session.match_count,
+        "items": _detail_cache(session.items.values()),
+    }
+
+
+def _restore(data: dict) -> Session:
+    data = dict(data)
+    state = dict(data.pop("state"))
+    state["candidates"] = tuple(PlaceCandidate(**place) for place in state["candidates"])
+    state["confirmed"] = PlaceCandidate(**state["confirmed"]) if state["confirmed"] else None
+    state["recent"] = tuple(tuple(pair) for pair in state["recent"])
+    state["item_details"] = ItemDetails(**state["item_details"])
+    data["scope"] = tuple(data["scope"])
+    data["items"] = {int(key): item for key, item in data.get("items", {}).items()}
+    return Session(state=Conversation(**state), **data)
+
+
+def _conditions(session: Session) -> dict:
+    return {"conditions": {
+        "place": asdict(session.state.confirmed) if session.state.confirmed else None,
+        "item_query": session.state.item_query, "radius_m": session.radius_m,
+        "institution_ids": list(session.scope),
+    }, "place_candidates": [asdict(place) for place in session.state.candidates]}
+
+
+class StoredCancellation:
+    def __init__(self, store, session_id, run_id):
+        self.store, self.session_id, self.run_id = store, session_id, run_id
+
+    def is_set(self):
+        result = self.store.command(self.session_id, "check", {"run_id": self.run_id})
+        return result.get("cancelled", True)
 
 
 def _error(code: str, message: str, retryable: bool = False) -> dict:
@@ -78,7 +123,7 @@ def _error(code: str, message: str, retryable: bool = False) -> dict:
 
 
 def _json(content: dict, status: int = 200) -> JSONResponse:
-    return JSONResponse(content, status_code=status, headers={"Cache-Control": "no-store"})
+    return JSONResponse({**content, **({"trace_id": trace_id.get()} if status >= 400 else {})}, status_code=status, headers={"Cache-Control": "no-store"})
 
 
 def _item_details_message(item: dict[str, Any], institutions: Sequence[Institution]) -> str:
@@ -107,6 +152,7 @@ def _requested_radius(action: str, target: int | None, current: int | None) -> i
 
 def create_agent_router(
     *,
+    store: AgentStore | None = None,
     model: Model | None = None,
     openrouter_api_key: str | None = None,
     find_places: Callable[[str], Sequence[PlaceCandidate]],
@@ -119,19 +165,30 @@ def create_agent_router(
             raise ValueError("대화형 검색에 OpenRouter API 키가 필요합니다.")
         model = OpenRouterAgentModel(openrouter_api_key)
     router = APIRouter(prefix="/api/search-chat")
-    sessions: dict[str, Session] = {}
-    lock = Lock()
+    store = store if store is not None else MemoryAgentStore()
 
-    def get_session(session_id: str | None) -> Session | None:
-        now = monotonic()
-        for key in [key for key, session in sessions.items() if session.run_id is None and now - session.touched >= 1800]:
-            del sessions[key]
-        return sessions.get(session_id) if session_id else None
+    def store_error(error: Exception):
+        record("store.failed", error=error, stage="session_store", final_status="error")
+        return _json({"error": _error("state_unavailable", "대화 상태를 확인하지 못했어요. 같은 요청을 다시 시도해 주세요.", True)}, 503)
+
+    def get_session(session_id):
+        row = store.command(session_id, "get")
+        return (_restore(row["data"]), row) if row["outcome"] == "ok" else (None, row)
+
+    def replay(response):
+        events = [
+            {"type": "run.started", "session_id": response["session_id"], "run_id": response["run_id"], "seq": 1},
+            {"type": "run.finished", "response": response, "run_id": response["run_id"], "seq": 2},
+        ]
+        return StreamingResponse(iter(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+                                 media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
 
     def conflict() -> JSONResponse:
+        record("turn.rejected", stage="admission", reason="state_conflict", final_status="rejected")
         return _json({"error": _error("state_conflict", "검색 상태가 바뀌었어요. 현재 대화에서 다시 시도해 주세요.")}, 409)
 
     def expired() -> JSONResponse:
+        record("turn.rejected", stage="admission", reason="session_expired", final_status="rejected")
         return _json({"error": _error("session_expired", "대화가 만료됐어요. 새 대화를 시작해 주세요.")}, 410)
 
     async def parse(request: Request, schema: type[Payload]) -> Any:
@@ -142,6 +199,7 @@ def create_agent_router(
 
     @router.post("/turns")
     async def turns(request: Request):
+        start_trace()
         turn = await parse(request, Turn)
         if isinstance(turn, JSONResponse):
             return turn
@@ -151,60 +209,80 @@ def create_agent_router(
                 or turn.type == "select_point" and (turn.latitude is None or turn.longitude is None)
                 or turn.session_id is None and (turn.type not in ("message", "select_point") or turn.revision is not None)):
             return _json({"error": _error("invalid_turn", "대화 요청에 필요한 값이 없습니다.")}, 400)
-        with lock:
-            session = get_session(turn.session_id)
-            if turn.session_id is not None and session is None:
+        session_id = turn.session_id or store.session_id(turn.request_id)
+        run_id = uuid4().hex
+        fingerprint = hashlib.sha256(turn.model_dump_json().encode()).hexdigest()
+        try:
+            claim = await run_in_threadpool(store.command, session_id, "claim", {
+                "create": turn.session_id is None, "initial": _snapshot(Session()),
+                "request_id": turn.request_id, "fingerprint": fingerprint,
+                "revision": turn.revision or 0, "run_id": run_id,
+            })
+        except Exception as error:
+            return store_error(error)
+        outcome = claim["outcome"]
+        if outcome == "replay":
+            record("turn.replayed", final_status=claim["response"]["status"])
+            return replay(claim["response"])
+        if outcome != "claimed":
+            if outcome == "session_expired":
                 return expired()
-            if session is None:
-                if any(turn.request_id in existing.request_ids for existing in sessions.values()):
-                    return conflict()
-                if len(sessions) >= 128:
-                    return _json({"error": _error("session_capacity", "검색 요청이 많아요. 잠시 후 다시 시도해 주세요.", True)}, 503)
-                session_id, session = uuid4().hex, Session()
-                sessions[session_id] = session
-            else:
-                session_id = turn.session_id
-                if (turn.revision != session.revision or session.run_id or session.status == "ended"
-                        or turn.request_id in session.request_ids):
-                    return conflict()
-            if len(session.request_ids) >= 100:
-                return expired()
-            if turn.type == "select_place" and (
-                session.status != "awaiting_place_selection"
-                or not any(place.candidate_id == turn.candidate_id for place in session.state.candidates)
-            ):
-                return conflict()
-            if turn.type == "change_radius" and (session.state.confirmed is None or session.state.item_query is None):
-                return conflict()
-            session.request_ids.add(turn.request_id)
-            run_id = uuid4().hex
-            if turn.type == "end":
-                session.state = Conversation()
-                session.status = "ended"
-                session.scope = ()
-                session.cursor = session.last_search_query = None
-                session.items.clear()
-                session.match_count = None
-                session.touched = monotonic()
-                session.revision += 1
-                return _json({"session_id": session_id, "run_id": run_id, "revision": session.revision, "status": "ended"})
-            session.run_id = run_id
-            session.cancelled.clear()
+            if outcome == "session_capacity":
+                record("turn.rejected", stage="admission", reason=outcome, final_status="rejected")
+                return _json({"error": _error("session_capacity", "검색 요청이 많아요. 잠시 후 다시 시도해 주세요.", True)}, 503)
+            if outcome == "busy":
+                record("turn.rejected", stage="admission", reason=outcome, final_status="rejected")
+                return _json({"error": _error("busy", "이전 검색을 처리하고 있어요. 잠시 후 같은 요청을 다시 시도해 주세요.", True)}, 409)
+            return conflict()
+        session = _restore(claim["data"])
+        previous = _conditions(session)
+        session.cancelled = StoredCancellation(store, session_id, run_id)
+        original_revision = session.revision
+        server_trace_id = trace_id.get()
+        if (turn.type == "select_place" and (
+            session.status != "awaiting_place_selection"
+            or not any(place.candidate_id == turn.candidate_id for place in session.state.candidates)
+        ) or turn.type == "change_radius" and (session.state.confirmed is None or session.state.item_query is None)):
+            try:
+                await run_in_threadpool(store.command, session_id, "finish", {
+                    "run_id": run_id, "commit": False, "data": _snapshot(session),
+                    "response": {"status": "error", "revision": session.revision}, "previous": previous,
+                })
+            except Exception as error:
+                return store_error(error)
+            return conflict()
 
         def stream() -> Iterator[str]:
+            trace_id.set(server_trace_id)
+            started = monotonic()
+            stage = "admission"
+            completed_work = False
             seq = 0
             state, manual_radius = session.state, session.manual_radius
             scope, radius = session.scope, session.radius_m
             result: dict[str, Any] = {}
 
             def line(event: dict) -> str:
-                nonlocal seq
+                nonlocal seq, stage
+                if event.get("type") == "tool.started":
+                    stage = event["tool"]
                 seq += 1
                 return json.dumps({**event, "run_id": run_id, "seq": seq}, ensure_ascii=False) + "\n"
 
+            def call_model(instructions, context, schema):
+                nonlocal stage
+                if session.cancelled.is_set():
+                    raise RunCancelled
+                stage = {"QueryRewrite": "query_rewrite", "ResultFollowUp": "follow_up"}.get(schema.get("title"), "model")
+                return model(instructions, context, schema)
+
             try:
                 yield line({"type": "run.started", "session_id": session_id})
-                if not session.cancelled.is_set():
+                if turn.type == "end":
+                    state = Conversation()
+                    scope, radius, manual_radius = (), None, None
+                    result = {"status": "ended", "message": "대화를 마쳤어요."}
+                elif not session.cancelled.is_set():
                     if turn.type == "message":
                         def deferred_places(query: str) -> Sequence[PlaceCandidate]:
                             # Place lookup progress is streamed below, before doing real I/O.
@@ -221,12 +299,13 @@ def create_agent_router(
                                     (item["item_id"], item) for item in find_items_by_id(scope, missing_ids)
                                     if item["item_id"] in missing_ids and item["institution_id"] in scope
                                 )
-                            except (RuntimeError, ValueError):
-                                pass
+                            except (RuntimeError, TimeoutError, ValueError) as error:
+                                record("item_details.fallback", error=error, stage="item_details", final_status="fallback")
                         # Preserve positions when an item is no longer available.
                         visible_items = [visible_by_id.get(item_id) for item_id in turn.visible_item_ids]
+                        stage = "model"
                         reply = respond_to_message(
-                            state, turn.text, model=model, find_places=deferred_places,
+                            state, turn.text, model=call_model, find_places=deferred_places,
                             changing_place=turn.changing_place, radius_m=radius,
                             match_count=session.match_count, last_search_query=session.last_search_query,
                             visible_items=visible_items,
@@ -257,7 +336,8 @@ def create_agent_router(
                                 if 1 <= target <= len(visible_items) and (item := visible_items[target - 1]) is not None:
                                     try:
                                         institutions = get_institutions()
-                                    except RuntimeError:
+                                    except (RuntimeError, TimeoutError) as error:
+                                        record("item_details.fallback", error=error, stage="institutions", final_status="fallback")
                                         institutions = ()
                                     answer = _item_details_message(item, institutions)
                                 else:
@@ -322,7 +402,7 @@ def create_agent_router(
 
                     if result["status"] == "ready_to_search":
                         actions = search_conversation(
-                            state, model=model, get_institutions=get_institutions,
+                            state, model=call_model, get_institutions=get_institutions,
                             search_items=lambda ids, query: search_items(ids, query, None), radius_m=manual_radius,
                         )
                         while not session.cancelled.is_set():
@@ -339,40 +419,66 @@ def create_agent_router(
                             else:
                                 state = event.pop("state")
                                 result = event
+                completed_work = True
             except RunCancelled:
-                pass
-            except (RuntimeError, ValueError):
-                message = "검색 중 문제가 생겼어요. 다시 시도해 주세요."
-                result = {"status": "error", "message": message, "error": _error("lookup_failed", message, True)}
+                result = {"status": "cancelled", "message": "검색을 취소했어요."}
+            except Exception as error:
+                fields = failure_fields(error)
+                record("turn.failed", started=started, error=error, stage=stage, final_status="error")
+                reason = fields["reason"]
+                message = {
+                    "timeout": "검색 응답이 늦어 중단했어요. 같은 요청을 다시 시도해 주세요.",
+                    "busy": "검색 서비스의 요청이 많아요. 잠시 후 다시 시도해 주세요.",
+                }.get(reason, "검색 정보를 불러오지 못했어요. 같은 요청을 다시 시도해 주세요.")
+                result = {"status": "error", "message": message, "error": _error(reason, message, True)}
             finally:
-                with lock:
-                    if session.cancelled.is_set() or not result:
-                        result = {"status": "cancelled", "message": "검색을 취소했어요."}
-                    elif result["status"] != "error":
-                        session.state, session.scope, session.radius_m = state, scope, radius
-                        session.manual_radius = manual_radius
-                        if result["status"] != "answered":
-                            session.status = result["status"]
-                            matches = result.get("matches")
-                            session.items = {item["item_id"]: item for item in matches["items"]} if matches else {}
-                            session.match_count = matches["total_count"] if matches else None
-                            session.cursor = matches["next_cursor"] if matches else None
-                            attempts = result.get("search_attempts")
-                            session.last_search_query = attempts[-1]["query"] if attempts else None
-                        session.revision += 1
-                    session.run_id = None
-                    session.touched = monotonic()
-                    response = {
-                        "session_id": session_id, "run_id": run_id, "revision": session.revision,
-                        "message": "", "search_attempts": [], "recommended_item_ids": [], "matches": None, "error": None,
-                        "conditions": {
-                            "place": asdict(session.state.confirmed) if session.state.confirmed else None,
-                            "item_query": session.state.item_query, "radius_m": session.radius_m,
-                            "institution_ids": list(session.scope),
-                        },
-                        "place_candidates": [asdict(place) for place in session.state.candidates],
-                        **result,
-                    }
+                if not completed_work and result.get("status") not in ("error", "cancelled"):
+                    message = "검색 연결이 끊겼어요. 같은 요청을 다시 시도해 주세요."
+                    result = {"status": "error", "message": message, "error": _error("connection_lost", message, True)}
+                elif not result:
+                    result = {"status": "cancelled", "message": "검색을 취소했어요."}
+                elif result["status"] != "error":
+                    if result["status"] == "ended":
+                        state, scope, radius, manual_radius = Conversation(), (), None, None
+                    session.state, session.scope, session.radius_m = state, scope, radius
+                    session.manual_radius = manual_radius
+                    if result["status"] != "answered":
+                        session.status = result["status"]
+                        matches = result.get("matches")
+                        session.items = {item["item_id"]: item for item in matches["items"]} if matches else {}
+                        session.match_count = matches["total_count"] if matches else None
+                        session.cursor = matches["next_cursor"] if matches else None
+                        attempts = result.get("search_attempts")
+                        session.last_search_query = attempts[-1]["query"] if attempts else None
+                    session.revision += 1
+                session.run_id = None
+                session.touched = monotonic()
+                response = {
+                    "session_id": session_id, "run_id": run_id, "revision": session.revision,
+                    "trace_id": server_trace_id, "message": "", "search_attempts": [], "recommended_item_ids": [], "matches": None, "error": None,
+                    "conditions": {
+                        "place": asdict(session.state.confirmed) if session.state.confirmed else None,
+                        "item_query": session.state.item_query, "radius_m": session.radius_m,
+                        "institution_ids": list(session.scope),
+                    },
+                    "place_candidates": [asdict(place) for place in session.state.candidates],
+                    **result,
+                }
+                try:
+                    completed = store.command(session_id, "finish", {
+                        "run_id": run_id, "commit": result["status"] not in ("error", "cancelled"),
+                        "data": _snapshot(session), "response": response, "previous": previous,
+                    })
+                    if completed["outcome"] != "ok":
+                        response.update(revision=original_revision, **previous, status="error", error=_error("state_conflict", "검색 상태가 바뀌었어요. 같은 요청을 다시 시도해 주세요.", True))
+                    else:
+                        response = completed["response"]
+                except Exception as error:
+                    record("store.failed", error=error, stage="session_store", final_status="error")
+                    response.update(revision=original_revision, **previous, status="error", error=_error("state_unavailable", "결과 저장을 확인하지 못했어요. 같은 요청을 다시 시도해 주세요.", True))
+                response["trace_id"] = server_trace_id
+                record("turn.finished", started=started, stage=stage, final_status=response["status"],
+                       reason=(response.get("error") or {}).get("code", response["status"]))
             yield line({"type": "run.finished", "response": response})
 
         return StreamingResponse(stream(), media_type="application/x-ndjson",
@@ -380,42 +486,43 @@ def create_agent_router(
 
     @router.post("/cancel")
     async def cancel(request: Request):
+        start_trace()
         payload = await parse(request, Cancel)
         if isinstance(payload, JSONResponse):
             return payload
-        with lock:
-            session = get_session(payload.session_id)
-            if session is None:
-                return expired()
-            accepted = session.run_id == payload.run_id
-            if accepted:
-                session.cancelled.set()
-        return _json({"accepted": accepted})
+        try:
+            result = await run_in_threadpool(store.command, payload.session_id, "cancel", {"run_id": payload.run_id})
+        except Exception as error:
+            return store_error(error)
+        if result["outcome"] == "session_expired":
+            return expired()
+        record("turn.cancel_requested", final_status="cancelled" if result["accepted"] else "completed")
+        return _json({"accepted": result["accepted"]})
 
     @router.post("/pages")
     async def pages(request: Request):
+        start_trace()
         payload = await parse(request, NextPage)
         if isinstance(payload, JSONResponse):
             return payload
-        with lock:
-            session = get_session(payload.session_id)
+        try:
+            session, row = await run_in_threadpool(get_session, payload.session_id)
             if session is None:
                 return expired()
-            if session.run_id or session.revision != payload.revision or payload.cursor != session.cursor or session.last_search_query is None:
+            if row["run_id"] or session.revision != payload.revision or payload.cursor != session.cursor or session.last_search_query is None:
                 return conflict()
             scope, query = session.scope, session.last_search_query
-        try:
             page = await run_in_threadpool(search_items, scope, query, payload.cursor)
             if any(item["institution_id"] not in scope for item in page.items):
-                raise RuntimeError
-        except RuntimeError:
-            return _json({"error": _error("lookup_failed", "다음 페이지를 불러오지 못했어요.", True)}, 502)
-        with lock:
-            if session.revision != payload.revision or session.run_id or session.cursor != payload.cursor:
+                raise RuntimeError("Invalid scope")
+            result = await run_in_threadpool(store.command, payload.session_id, "page", {
+                "revision": payload.revision, "cursor": payload.cursor, "next_cursor": page.next_cursor, "items": _detail_cache(page.items),
+            })
+            if result["outcome"] != "ok":
                 return conflict()
-            session.items.update((item["item_id"], item) for item in page.items)
-            session.cursor = page.next_cursor
-            session.touched = monotonic()
+        except Exception as error:
+            record("page.failed", error=error, stage="found_items", final_status="error")
+            return _json({"error": _error("lookup_failed", "다음 페이지를 불러오지 못했어요. 다시 시도해 주세요.", True)}, 502)
         return _json({"matches": {"items": page.items, "total_count": page.total_count, "next_cursor": page.next_cursor}})
 
     return router

@@ -24,3 +24,9 @@ Vercel 앱 배포와 DB 적용은 별개다. 앱도 함께 바뀌면 기존 앱�
 
 `maintenance/`, `repairs/`, `rollbacks/`는 별도 수동 작업 자료다.
 자동 배포를 위해 이 디렉터리의 SQL을 통째로 실행하거나 `migrations/`로 옮기지 않는다.
+
+## 대화형 검색 공용 세션
+
+`20261120150000_agent_search_sessions.sql`은 `agent_search_sessions`와 `agent_session_command`를 추가하며 기존 검색·수집 객체를 바꾸지 않는다. 새 테이블은 RLS 및 `service_role` 전용이다. `pg_cron`을 활성화하고 매분 만료 세션과 이 작업 자신의 오래된 실행 기록만 삭제하는 `agent-search-session-expiry`를 등록한다. 예약 작업 설치 방식은 [공식 Cron 문서](https://supabase.com/docs/guides/cron/install)를 따른다.
+
+승인 후 SQL 적용 → 권한·RPC·만료 정리 작업 확인 → 앱 배포 순서다. 2026-11-20 사용자 승인으로 운영 SQL을 적용했다. 권한·이력 대조 및 앱 병합·배포·후속 검증 상태는 `../docs/measurements.md`의 운영 기록을 따른다. `tests/database/verify_agent_sessions.sql`은 격리 DB에서 실행한다. 로컬 검증에서 예약 작업 엔진을 실제 실행한 것으로 간주하지 않는다. 앱만 이전 버전으로 돌릴 때 새 객체는 남겨 만료 정리를 계속한다. DB 객체까지 제거하려면 별도 새 마이그레이션에서 `cron.unschedule('agent-search-session-expiry')`, 함수·테이블 삭제를 수행한다. 기존 SQL·운영 이력을 수정하거나 `pg_cron` 확장 전체를 삭제하지 않는다. 상세 계약과 기존 메모리 대화 이관 한계는 [대화형 검색 문서](../docs/agent-search.md)를 따른다.

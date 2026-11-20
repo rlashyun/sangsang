@@ -1,7 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "fluid": true,
-  "regions": ["icn1"],
+  "regions": [
+    "icn1"
+  ],
   "functions": {
     "api/index.py": {
       "maxDuration": 300,
@@ -37,5 +39,11 @@
       "path": "/api/cron/alert-send",
       "schedule": "0 2 * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "codex/agent-search-recovery": false,
+      "codex/agent-search-release-*": false
+    }
+  }
 }

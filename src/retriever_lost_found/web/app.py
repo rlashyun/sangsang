@@ -282,6 +282,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     if agent_search:
         from .agent_adapters import adapt_institutions, adapt_places, adapt_search_item, adapt_search_page
         from .agent_api import create_agent_router
+        from .agent_store import SupabaseAgentStore
 
         def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None):
             ids = validate_location_ids(",".join(map(str, location_ids)))
@@ -289,6 +290,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             return adapt_search_page(page)
 
         agent_router = create_agent_router(
+            store=SupabaseAgentStore(supabase_url, supabase_secret_key),
             openrouter_api_key=embedding_key,
             find_places=lambda query: adapt_places(kakao_client, query),
             get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),

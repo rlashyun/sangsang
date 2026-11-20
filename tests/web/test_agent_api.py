@@ -41,7 +41,9 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     result = json.loads(response.text.splitlines()[-1])["response"]
     assert result["recommended_item_ids"] == [1]
     assert result["matches"]["next_cursor"] == "next"
-    assert client.post("/api/search-chat/turns", json=select).status_code == 409
+    replayed = client.post("/api/search-chat/turns", json=select)
+    assert json.loads(replayed.text.splitlines()[-1])["response"] == result
+    assert client.post("/api/search-chat/turns", json={**select, "candidate_id": "other"}).status_code == 409
     page_params = {"session_id": result["session_id"], "revision": result["revision"], "cursor": "next"}
     response = client.post("/api/search-chat/pages", json=page_params)
     assert response.json()["matches"]["items"] == [second]
@@ -112,6 +114,8 @@ def test_runtime_agent_reuses_places_institutions_and_ranked_search(monkeypatch)
     monkeypatch.setenv("KAKAO_JAVASCRIPT_KEY", "dummy")
     monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "dummy")
+    from retriever_lost_found.web.agent_store import MemoryAgentStore
+    monkeypatch.setattr("retriever_lost_found.web.agent_store.SupabaseAgentStore", lambda *args: MemoryAgentStore())
     search = Mock(return_value=([
         {"id": 1, "storage_location_id": 42, "item_name": "갈색 지갑", "match_score": 0.8}
     ], 1, "ok"))
