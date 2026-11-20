@@ -397,6 +397,57 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
         self.assertIn(f"grant execute on function {signature} to service_role", migration)
 
+    @staticmethod
+    def _squashed(name: str) -> str:
+        """SQL 주석(`--` 이후)을 빼고 공백을 정규화한다. 주석 속 설명이 검사에 걸리지 않게 한다."""
+        lines = (MIGRATIONS / name).read_text(encoding="utf-8").lower().splitlines()
+        return " ".join(" ".join(line.split("--", 1)[0] for line in lines).split())
+
+    def test_embedding_cycle_checks_use_partial_indexes_instead_of_full_scans(self) -> None:
+        # PRD 4.5, 5 — 62만 건에서 전체 힙 스캔 누락 확인이 8.9초로 Data API 8초 제한(57014)을 넘었다.
+        migration = self._squashed("20261120143159_embedding_scan_indexes.sql")
+        self.assertIn("on public.found_items (id) where embedding_input <> ''", migration)
+        self.assertIn(
+            "on public.found_item_embeddings_bge_m3 (item_id) "
+            "where is_current and input_version = 'color_ko_item_name:v2'", migration)
+        body = migration.split("create or replace function public.ensure_embedding_cycle", 1)[1]
+        # 하루 단위 건수는 색인을 쓸 수 있는 범위 조건이어야 한다. 행마다 변환하는 식은 전체 스캔이다.
+        self.assertNotIn("(first_seen_at at time zone 'asia/seoul')::date=p_business_date", body)
+        self.assertIn("first_seen_at>=(p_business_date::timestamp at time zone 'asia/seoul')", body)
+        self.assertIn("first_seen_at<((p_business_date+1)::timestamp at time zone 'asia/seoul')", body)
+        signature = "public.ensure_embedding_cycle(date,text,boolean)"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
+    def test_backfill_runs_do_not_create_historical_embedding_cycles(self) -> None:
+        # PRD 4.5 — 과거 날짜 회차가 다음 날 정규 회차를 뒤로 밀지 않게 한다. 정규 실행은 그대로 회차를 만든다.
+        migration = self._squashed("20261120143345_skip_backfill_embedding_cycles.sql")
+        body = migration.split("create or replace function public.enqueue_embeddings_on_ingestion_finish", 1)[1]
+        skip = "if coalesce(new.metadata->>'trigger','')='manual_backfill' then return new; end if;"
+        self.assertIn(skip, body)
+        self.assertIn("perform public.ensure_embedding_run(", body)
+        self.assertLess(body.index(skip), body.index("perform public.ensure_embedding_run("))
+
+    def test_embedding_batches_pick_missing_ids_from_indexes_before_reading_rows(self) -> None:
+        # PRD 4.5, 5 — after_id=0인 새 회차의 첫 조회가 8~10초였다. ID를 먼저 고르고 고른 행만 읽는다.
+        migration = self._squashed("20261120143534_indexed_embedding_batches.sql")
+        batch = migration.split("create or replace function public.embedding_run_batch", 1)[1].split(
+            "create or replace function public.reuse_run_embeddings", 1)[0]
+        reuse = migration.split("create or replace function public.reuse_run_embeddings", 1)[1]
+        for body in (batch, reuse):
+            self.assertIn("with ids as materialized ( select f.id from public.found_items f", body)
+            self.assertIn("raise exception 'embedding lease unavailable'", body)
+        self.assertIn("raise exception 'ingestion still running'", batch)
+        self.assertIn("perform public.reuse_run_embeddings(p_run_id,p_token,p_after);", batch)
+        self.assertIn("e.input_version='color_ko_item_name:v2' and e.is_current", batch)
+        self.assertIn("limit least(greatest(p_limit,1),64)", batch)
+        self.assertIn("for share of f skip locked", reuse)
+        self.assertIn("on conflict(item_id) do nothing", reuse)
+        for signature in ("public.embedding_run_batch(bigint,uuid,bigint,integer)",
+                          "public.reuse_run_embeddings(bigint,uuid,bigint,integer)"):
+            self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+            self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
 
 if __name__ == "__main__":
     unittest.main()
