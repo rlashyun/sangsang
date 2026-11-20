@@ -17,23 +17,31 @@ from retriever_lost_found.privacy.masking import (
 )
 
 
-# --- 카드번호: 13~19자리, 공백·하이픈 허용, 뒤 4자리만 남긴다 ---
+# --- 카드번호: 13~19자리, 공백·하이픈 허용, 앞 4자리와 뒤 4자리만 남기고 가운데를 가린다 ---
+# 2026-11-20 사용자 결정 — 앞 4자리는 발급사 구분용이라 본인 확인에 쓰이고, PCI DSS 표시 범위(앞 6·뒤 4) 안이다.
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("신한카드 1234-5678-9012-3456", "신한카드 ****-****-****-3456"),
-        ("카드(1234 5678 9012 3456)", "카드(**** **** **** 3456)"),
-        ("1234567890123456", "************3456"),
-        ("아멕스 3782-822463-10005", "아멕스 ****-******-*0005"),  # 15자리
-        ("4000123412341234567", "***************4567"),  # 19자리
-        ("1234-5678-90123", "****-****-*0123"),  # 13자리
-        # 앞 4자리만 보이고 가운데가 가려진 형식도 뒤 4자리만 남긴다
-        ("1234-****-****-5678", "****-****-****-5678"),
+        ("신한카드 1234-5678-9012-3456", "신한카드 1234-****-****-3456"),
+        ("카드(1234 5678 9012 3456)", "카드(1234 **** **** 3456)"),
+        ("1234567890123456", "1234********3456"),
+        ("아멕스 3782-822463-10005", "아멕스 3782-******-*0005"),  # 15자리
+        ("4000123412341234567", "4000***********4567"),  # 19자리
+        ("1234-5678-90123", "1234-****-*0123"),  # 13자리
+        # 일부만 가려진 형식도 앞 4·뒤 4를 뺀 가운데를 모두 가린다
+        ("1234-56**-****-5678", "1234-****-****-5678"),
+        # 앞 4자리가 이미 가려진 형식은 그대로 둔다(덜 가려진 값을 새로 드러내지 않는다)
+        ("****-5678-9012-3456", "****-****-****-3456"),
     ],
 )
-def test_card_numbers_keep_only_last_four_digits(raw, expected):
+def test_card_numbers_keep_first_four_and_last_four_digits(raw, expected):
     assert mask_text(raw) == expected
+
+
+def test_card_masking_is_idempotent():
+    once = mask_text("신한카드 1234-5678-9012-3456")
+    assert mask_text(once) == once
 
 
 @pytest.mark.parametrize(
@@ -119,7 +127,7 @@ def test_contiguous_thirteen_digits_in_registration_shape_are_fully_masked():
 
 def test_six_seven_split_outside_registration_range_is_still_masked_as_a_number():
     # 뒷자리 첫 숫자가 9·0이면 등록번호 형식은 아니지만 13자리 번호이므로 카드 규칙으로 가린다(덜 가리기보다 더 가린다).
-    assert mask_text("900101-9234567") == "******-***4567"
+    assert mask_text("900101-9234567") == "9001**-***4567"
 
 
 @pytest.mark.parametrize(
@@ -135,7 +143,7 @@ def test_adjacent_mobile_numbers_are_masked_separately_not_as_card(raw, expected
 
 
 def test_mobile_number_followed_by_card_number_masks_both():
-    assert mask_text("010-1234-5678 1234-5678-9012-3456") == "010-****-5678 ****-****-****-3456"
+    assert mask_text("010-1234-5678 1234-5678-9012-3456") == "010-****-5678 1234-****-****-3456"
 
 
 # --- 이름: 문맥 규칙(모든 분류) ---
@@ -287,8 +295,8 @@ def test_mask_item_row_masks_text_fields_and_keeps_the_original_row():
     masked = mask_item_row(row)
     assert row == original  # 절대 규칙 3 — 입력(원문)은 바꾸지 않는다
     assert masked["item_name"] == "신한카드(홍*동)"
-    assert masked["description"] == "카드번호 ****-****-****-3456, 연락처 010-****-5678"
-    assert masked["normalized_search_text"] == "신한카드(홍*동) 카드번호 ****-****-****-3456"
+    assert masked["description"] == "카드번호 1234-****-****-3456, 연락처 010-****-5678"
+    assert masked["normalized_search_text"] == "신한카드(홍*동) 카드번호 1234-****-****-3456"
     for key in ("id", "storage_location_id", "raw_category_name", "color_name", "raw_storage_name", "image_url"):
         assert masked[key] == row[key]
 
@@ -320,7 +328,7 @@ def test_masking_is_idempotent(raw):
 
 def test_mask_numbers_masks_only_number_patterns():
     text = "홍길동 명의 카드 1234-5678-9012-3456 잃어버렸어요 010-1234-5678"
-    assert mask_numbers(text) == "홍길동 명의 카드 ****-****-****-3456 잃어버렸어요 010-****-5678"
+    assert mask_numbers(text) == "홍길동 명의 카드 1234-****-****-3456 잃어버렸어요 010-****-5678"
 
 
 # --- 검색어 거절 ---

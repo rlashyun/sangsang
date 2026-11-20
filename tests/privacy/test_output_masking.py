@@ -72,7 +72,7 @@ def _client(found_item_client: FakeFoundItemClient) -> TestClient:
 
 def _assert_card_row_masked(item: dict) -> None:
     assert item["item_name"] == "신한카드(홍*동)"
-    assert item["description"] == "카드번호 ****-****-****-3456 연락처 010-****-5678"
+    assert item["description"] == "카드번호 1234-****-****-3456 연락처 010-****-5678"
 
 
 # --- /api/found-items ---
@@ -133,7 +133,7 @@ def test_conversation_with_identifier_is_answered_without_calling_the_llm():
     assert turn.status == "answered"
     assert turn.message == IDENTIFIER_MESSAGE
     # 다음 LLM 호출에 실릴 대화 기록에도 번호는 가려져 있다.
-    assert turn.state.recent[-1][0] == "신한카드 ****-****-****-3456 잃어버렸어요"
+    assert turn.state.recent[-1][0] == "신한카드 1234-****-****-3456 잃어버렸어요"
 
 
 def test_conversation_without_identifier_still_reaches_the_llm_with_masked_visible_items():
@@ -156,7 +156,7 @@ def test_conversation_without_identifier_still_reaches_the_llm_with_masked_visib
 
 def test_alert_mail_item_line_masks_names_and_numbers():
     line = _item_line({**CARD_ROW, "item_name": "체크카드 김철수 명의 1234-5678-9012-3456"}, show_place=False)
-    assert "김*수" in line and "****-****-****-3456" in line
+    assert "김*수" in line and "1234-****-****-3456" in line
     assert "김철수" not in line and "1234-5678" not in line
 
 
@@ -187,7 +187,7 @@ API_ITEM = {
 def test_ingestion_masks_normalized_search_text_only():
     category = classify_product_category(API_ITEM["prdtClNm"]) or FALLBACK_CATEGORY
     row = to_csv_row(API_ITEM, category, "police_api", date(2026, 11, 19))
-    assert row["normalized_search_text"] == "신한카드(홍*동) 카드번호 ****-****-****-3456 검정 카드 > 신용(체크)카드"
+    assert row["normalized_search_text"] == "신한카드(홍*동) 카드번호 1234-****-****-3456 검정 카드 > 신용(체크)카드"
     # 절대 규칙 3 — 원문 칸과 raw_payload는 API 원문 그대로
     assert row["item_name"] == "신한카드(홍길동)"
     assert row["description"] == "카드번호 1234-5678-9012-3456"
@@ -302,7 +302,7 @@ def test_embedding_api_receives_masked_text_while_snapshot_keeps_the_original():
     plain = "검정 지갑"
     store = EmbeddingStore({1: original, 2: plain})
     run_slice(store, Provider(), {"id": 1, "after_id": 0}, budget=60)
-    assert sent == ["검정 신한카드 ****-****-****-3456 김*수 명의", plain]
+    assert sent == ["검정 신한카드 1234-****-****-3456 김*수 명의", plain]
     # DB 해시 검증용 스냅숏은 원문 — 기존 저장·재사용 규칙과 맞물린다.
     assert store.saved == {1: original, 2: plain}
     assert mask_text(original) == sent[0]

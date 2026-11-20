@@ -7,7 +7,7 @@
 정규화 전용 칸 `normalized_search_text`(임베딩 입력)에만 쓴다.
 
 규칙
-- 번호(모든 분류): 주민·외국인등록번호는 전부, 카드번호(13~19자리)는 뒤 4자리만 남기고,
+- 번호(모든 분류): 주민·외국인등록번호는 전부, 카드번호(13~19자리)는 앞 4자리와 뒤 4자리만 남기고,
   휴대폰(01X)은 가운데를 가린다.
 - 이름(모든 분류): `○○○ 명의`, `성명:`·`이름:`·`소유자:` 뒤의 2~4자 한글.
 - 이름(고위험 분류만): 괄호 속 2~4자 한글 중 흔한 성씨로 시작하고 제외 사전에 없는 것.
@@ -150,11 +150,12 @@ def _mask_name(name: str) -> str:
 
 
 def _mask_card(match: re.Match[str]) -> str:
+    # PRD 3.3 · Q5 (2026-11-20 사용자 결정) — 앞 4자리와 뒤 4자리만 남기고 가운데를 가린다.
+    # 앞 4자리는 발급사 구분용이라 본인 확인에 쓰이고, 카드 결제에는 CVC·유효기간이 더 필요하다.
+    # 숫자와 별표를 같은 칸으로 세므로 이미 가려진 앞자리(****-…)를 다시 드러내지 않고, 두 번 적용해도 같다.
     value = match.group(0)
-    digit_positions = [index for index, character in enumerate(value) if character.isdigit()]
-    hidden = set(digit_positions[:-4])
-    if not hidden:
-        return value  # 이미 뒤 4자리만 보이는 형식
+    cells = [index for index, character in enumerate(value) if character.isdigit() or character == "*"]
+    hidden = set(cells[4:-4])
     return "".join("*" if index in hidden else character for index, character in enumerate(value))
 
 
