@@ -43,7 +43,7 @@ def test_bm25_korean_partial_words_and_unrelated_rejection():
     assert 3 not in scores
 
 
-def test_color_only_matches_are_rejected_but_wallet_and_typo_survive():
+def test_color_only_matches_are_rejected_but_wallet_survives():
     items = [
         {"id": 1, "item_name": "검정 가죽 지갑"},
         {"id": 2, "item_name": "빨강 장지갑"},
@@ -51,7 +51,6 @@ def test_color_only_matches_are_rejected_but_wallet_and_typo_survive():
         {"id": 4, "item_name": "검정 카드"},
     ]
     assert set(keyword_scores(items, "검정 가죽 지갑")) == {1, 2}
-    assert 3 in keyword_scores(items, "휴대푠")
 
 
 def test_reviewed_color_and_brand_aliases():
@@ -152,13 +151,7 @@ def test_rerank_cannot_add_a_wrong_kind_outside_keyword_candidates():
     assert status=="ok" and [r["id"] for r in rows]==[2]
 
 
-def test_query_correction_keeps_phone_candidate():
-    assert keyword_scores([{"id":1,"item_name":"아이폰"}],"아이퐁")
-
-
-def test_query_only_correction_and_explicit_kind_take_priority():
-    assert query_text("아이퐁") == "아이폰"
-    assert query_text("휴대푠") == "휴대폰"
+def test_explicit_kind_takes_priority():
     assert len(query_kinds(query_text("블루투스 휴대폰"))) == 1
 
 

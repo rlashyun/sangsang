@@ -100,6 +100,7 @@ _INSTITUTION_PREFIXES = (
 _NON_NAME_SUFFIXES = ("색", "증", "폰", "권", "용", "카드", "은행", "지갑", "가방", "통장", "됨")
 
 _SYNONYMS_PATH = Path(__file__).resolve().parents[1] / "search" / "synonyms.json"
+_KINDS_PATH = Path(__file__).resolve().parents[1] / "search" / "item_kinds.json"
 
 
 @lru_cache(maxsize=1)
@@ -113,9 +114,14 @@ def _dictionary_words() -> frozenset[str]:
     for concept in data.get("concepts", []):
         if concept.get("domain") in {"color", "card_product", "brand", "item"}:
             words.update(str(term).replace(" ", "") for term in concept.get("terms", []))
-    for terms in (data.get("kinds") or {}).values():
-        words.update(str(term).replace(" ", "") for term in terms)
     words.update(str(term).replace(" ", "") for term in data.get("protected") or [])
+    # PRD 4.5 (2026-11-21) — 물건 종류 표현은 item_kinds.json으로 옮겼다. 이름으로 오인하지 않게 함께 쓴다.
+    try:
+        kinds = json.loads(_KINDS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        kinds = {}
+    for kind in kinds.get("kinds", []):
+        words.update(str(term).replace(" ", "") for term in kind.get("terms", []))
     return frozenset(words)
 
 
