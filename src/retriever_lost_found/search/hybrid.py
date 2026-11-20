@@ -176,14 +176,14 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         vector_future.add_done_callback(lambda _: _semantic_slots.release())
     kinds = query_kinds(query)
     names = {name for name, group in zip(synonyms.KIND_NAMES, KINDS) if group in kinds}
-    # PRD 4.1/4.5: one scoped RPC; literal type expressions also recover aliases
-    # absent from the legacy DB kind_mask. Attribute-only hits cannot widen it.
+    # PRD 4.1/4.5: one scoped RPC without the DB kind_mask filter. Literal type
+    # expressions from synonyms.json do the kind gate, including aliases the
+    # mask never knew. Attribute-only hits cannot widen it.
     terms = synonyms.kind_candidate_terms(names) if kinds else (
         {term[2:] for term in tokenize(query)} | synonyms.expanded_terms(query)
     )
     if hasattr(client,"fetch_candidate_bundle"):
-        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),kind_terms=None,
-                                               timeout=1.8)
+        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),timeout=1.8)
         items,count = bundle["items"],bundle.get("candidate_count")
     else:
         items = client.fetch_items(location_ids)

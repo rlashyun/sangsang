@@ -106,7 +106,7 @@ def test_bm25_uses_the_same_brand_dictionary_without_mutating_source():
 
 
 class ScopedLiteralCandidates:
-    """Mirror the existing RPC: kinds gate ignores terms; None uses literal OR."""
+    """Mirror the RPC: location scope + literal OR over terms, no DB kind_mask."""
     def __init__(self):
         self.items = [
             {"id": 1, "storage_location_id": 7, "item_name": "루이비똥", "search_text": "루이비똥"},
@@ -117,12 +117,12 @@ class ScopedLiteralCandidates:
         ]
         self.requests = []
 
-    def fetch_candidate_bundle(self, locations, terms, *, kind_terms, timeout):
+    def fetch_candidate_bundle(self, locations, terms, *, timeout):
         assert locations == [7]
-        self.requests.append((terms, kind_terms))
+        self.requests.append(terms)
         # These fixtures deliberately have no legacy kind_mask. New synonyms
         # must not disappear before Python can normalize or score them.
-        items = [] if kind_terms else [
+        items = [
             item for item in self.items if item["storage_location_id"] in locations
             and any(term.lower() in item["search_text"].lower() for term in terms)
         ]
@@ -141,7 +141,7 @@ def test_synonyms_survive_the_real_candidate_gate_and_keep_location_scope(query,
     results, _, _ = search_found_items(client, query, [7])
     assert {row["id"] for row in results} == set(expected)
     assert len(client.requests) == 1
-    terms, kinds = client.requests[0]
+    terms = client.requests[0]
     if "비니" in query:
         assert "검정" not in terms  # Color alone must not broaden kind retrieval.
 

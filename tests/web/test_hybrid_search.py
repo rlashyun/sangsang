@@ -132,6 +132,17 @@ def test_detail_query_filters_both_ids_and_locations():
     assert query["p_item_ids"] == [1, 2] and query["p_location_ids"] == [7]
 
 
+def test_keyword_candidate_rpc_sends_scope_and_terms_without_kind_mask_argument():
+    # PRD 4.1, 4.5 — 20261120120000 마이그레이션의 2인자 함수와 맞아야 한다(p_kinds 없음).
+    client = SupabaseFoundItemClient("https://test.supabase.co", "test-key")
+    bundle = {"candidate_count": None, "items": [{"id": 1}]}
+    with patch("retriever_lost_found.integrations.supabase._request_json", return_value=bundle) as call:
+        assert client.fetch_candidate_bundle([7, 7], ["가방", "백팩"], timeout=1) == bundle
+    request = call.call_args.args[0]
+    assert request.full_url.endswith("/rest/v1/rpc/keyword_found_item_candidates")
+    assert json.loads(request.data) == {"p_location_ids": [7], "p_terms": ["가방", "백팩"]}
+
+
 def test_rerank_cannot_add_a_wrong_kind_outside_keyword_candidates():
     class Items(FakeItems):
         def fetch_items(self,ids):
