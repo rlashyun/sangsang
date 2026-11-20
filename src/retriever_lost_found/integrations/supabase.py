@@ -357,8 +357,8 @@ def _request_json(request: urllib.request.Request, timeout: float, label: str) -
             return json.loads(raw.decode("utf-8"))
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{label} HTTP {error.code}: {body[:240]}") from None
+        raise RuntimeError(f"{label} HTTP {error.code}: {body[:240]}") from error
     except urllib.error.URLError as error:
-        raise RuntimeError(f"{label} 연결 실패: {error.reason}") from None
-    except json.JSONDecodeError:
-        raise RuntimeError(f"{label} 응답이 올바른 JSON이 아닙니다.") from None
+        raise RuntimeError(f"{label} 연결 실패: {error.reason}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"{label} 응답이 올바른 JSON이 아닙니다.") from error

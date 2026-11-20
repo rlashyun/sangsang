@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from threading import BoundedSemaphore
 import logging
 import math
@@ -108,7 +109,11 @@ def _tokens(normalized_text: str) -> list[str]:
 
 
 class SearchDeadlineExceeded(RuntimeError):
-    pass
+    failure_reason = "timeout"
+
+
+class SearchBusy(SearchDeadlineExceeded):
+    failure_reason = "busy"
 
 
 def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0):
@@ -117,8 +122,8 @@ def search_with_deadline(client, query, location_ids, embedding_client=None, *, 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
     """
     if not _search_slots.acquire(blocking=False):
-        raise SearchDeadlineExceeded("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
-    future = _search_pool.submit(search_found_items, client, query, location_ids, embedding_client, offset=offset)
+        raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
+    future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids, embedding_client, offset=offset)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -202,8 +207,14 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         try:
             vector = vector_future.result(timeout=max(0,min(started+semantic_budget,deadline-0.1)-monotonic()))
             status = "ok"
-        except (RuntimeError,TimeoutError):
+        except (RuntimeError,TimeoutError) as error:
+            # PRD 5 — Report fallback without logging the query or provider payload.
+            from ..agent_diagnostics import record
+            record("embedding.fallback", error=error, stage="embedding", final_status="fallback")
             vector_future.cancel()
+    if embedding_client is not None and vector_future is None:
+        from ..agent_diagnostics import record
+        record("embedding.fallback", stage="embedding", reason="busy", final_status="fallback")
     query_norm = math.sqrt(math.sumprod(vector,vector)) if vector is not None else 0
     by_id = {int(item["id"]):item for item in items if int(item["id"]) in lexical}
     scored = {}
