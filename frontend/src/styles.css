@@ -842,7 +842,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   object-fit: contain;
 }
 .item-detail-photo img[hidden] { display: none; }
-.item-detail-photo-empty, .item-detail-photo > p {
+.item-detail-photo-empty, .item-detail-photo-status {
   position: absolute; inset: 0; margin: 0; padding: 16px;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
@@ -2269,4 +2269,12 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; margin-top: 1px; border-radius: 50%;
   background: var(--color-bg-selected); color: var(--color-action-text); font-size: 12px; font-weight: 700;
+}
+
+/* PRD 4.3-C · 5 — 사진 지연/실패 안내도 고정 영역 안에서 키보드로 조작한다. */
+.item-detail-photo-status p { margin: 0; }
+.item-detail-photo :is(.item-detail-photo-status, .item-detail-photo-empty) button {
+  margin-top: 12px; min-height: 44px; padding: 8px 16px; border-radius: 8px;
+  border: 1px solid var(--color-action-text); color: var(--color-action-text);
+  background: var(--color-bg-page); cursor: pointer;
 }
