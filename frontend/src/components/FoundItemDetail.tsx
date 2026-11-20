@@ -13,18 +13,58 @@ interface FoundItemDetailProps {
   onClose: () => void;
 }
 
+function DetailPhoto({ imageUrl, name, category }: { imageUrl: string | null; name: string; category?: string }) {
+  const [attempt, setAttempt] = useState(0);
+  const currentAttempt = useRef(0);
+  const photoRef = useRef<HTMLDivElement>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    if (!imageUrl || loaded || failed) return;
+    // PRD 4.3-C · 5 — 2026-11-21 승인: 10초 뒤에도 안내만 하며, 실제 실패 때만 재시도한다.
+    const timer = window.setTimeout(() => setSlow(true), 10_000);
+    return () => window.clearTimeout(timer);
+  }, [imageUrl, attempt, loaded, failed]);
+
+  function retry() {
+    // PRD 3.1-9 · 4.3-C — 원본 URL을 보존하고 사용자가 요청한 경우에만 다시 시도한다.
+    currentAttempt.current += 1;
+    setAttempt(currentAttempt.current);
+    setLoaded(false);
+    setFailed(false);
+    setSlow(false);
+    photoRef.current?.focus({ preventScroll: true });
+  }
+
+  return <div ref={photoRef} tabIndex={-1} className="item-detail-photo" aria-label="물품 사진">
+    {imageUrl && !failed ? <>
+      {!loaded && <div className="item-detail-photo-status">
+        <p role="status">{slow ? "사진을 불러오는 데 시간이 걸리고 있어요." : "사진을 불러오고 있습니다…"}</p>
+      </div>}
+      <div className="item-detail-image" aria-busy={!loaded}>
+        <img key={attempt} src={imageUrl} alt={`${name} 사진`} width={320} height={340}
+        onLoad={() => { if (attempt === currentAttempt.current) setLoaded(true); }}
+        onError={() => { if (attempt === currentAttempt.current) setFailed(true); }} hidden={!loaded} />
+      </div>
+    </> : <div className="item-detail-photo-empty">
+      <CategoryIcon category={category} />
+      <p role="status">{failed ? "사진을 불러오지 못했습니다." : "등록된 사진이 없습니다."}</p>
+      {failed && <button type="button" onClick={retry}>사진 다시 불러오기</button>}
+    </div>}
+  </div>;
+}
+
 export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const pointerStartedOutside = useRef(false);
-  const [imageFailed, setImageFailed] = useState(false);
-  const [imageLoaded, setImageLoaded] = useState(false);
   const [showPickup, setShowPickup] = useState(false);
   const pickupTriggerRef = useRef<HTMLButtonElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef(0);
   const returningToDetail = useRef(false);
   const imageUrl = foundItemImageUrl(item.image_url);
-  const showImage = imageUrl && !imageFailed;
   const phone = institution?.phone?.trim();
   const dialNumber = phone?.replace(/[^\d+]/g, "");
 
@@ -102,27 +142,7 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
       <div ref={contentRef} className="item-detail-content" role="region" aria-label="물품 상세 내용" tabIndex={0}>
         {/* PRD 4.3-C · 4.4 — 넓은 화면에서는 요약과 본문을 병렬 배치한다. */}
         <div className="item-detail-overview">
-          <div className="item-detail-photo">
-            {showImage ? (
-              <>
-                {!imageLoaded && <p role="status">사진을 불러오고 있습니다…</p>}
-                <img
-                  src={imageUrl}
-                  alt={`${item.item_name || "습득물"} 사진`}
-                  width={320}
-                  height={340}
-                  onLoad={() => setImageLoaded(true)}
-                  onError={() => setImageFailed(true)}
-                  hidden={!imageLoaded}
-                />
-              </>
-            ) : (
-              <div className="item-detail-photo-empty">
-                <CategoryIcon category={item.raw_category_name} />
-                <p>{imageFailed ? "사진을 불러오지 못했습니다." : "등록된 사진이 없습니다."}</p>
-              </div>
-            )}
-          </div>
+          <DetailPhoto key={imageUrl} imageUrl={imageUrl} name={item.item_name || "습득물"} category={item.raw_category_name} />
           {item.item_source_code && <p className="item-detail-source">등록 정보 출처 · {sourceLabel(item.item_source_code)}</p>}
         </div>
         <div className="item-detail-body">
