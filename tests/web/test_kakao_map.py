@@ -414,7 +414,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.fetch_item_page(list(range(1, 302)), limit=50)
 
-    def test_keyword_search_matches_query_correction_and_rejects_unrelated_item(self) -> None:
+    def test_keyword_search_matches_phone_and_rejects_unrelated_item(self) -> None:
         phone = {
             "id": 1,
             "item_name": "애플 아이폰 15 프로",
@@ -432,7 +432,7 @@ class KakaoLocalClientTests(unittest.TestCase):
             "registered_on": "2026-08-25",
         }
 
-        scores = keyword_scores([wallet, phone], "아이퐁")
+        scores = keyword_scores([wallet, phone], "아이폰")
 
         self.assertEqual(set(scores), {1})
         self.assertGreater(scores[1], 0)
@@ -461,7 +461,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         )
         response = TestClient(app).get(
             "/api/found-items",
-            params={"location_ids": "77", "q": "아이퐁"},
+            params={"location_ids": "77", "q": "아이폰"},
         )
         payload = response.json()
 
@@ -596,7 +596,7 @@ class KakaoLocalClientTests(unittest.TestCase):
 
         response = TestClient(app).get(
             "/api/found-items",
-            params={"location_ids": "77", "q": "아이퐁"},
+            params={"location_ids": "77", "q": "아이폰"},
         )
 
         self.assertEqual(response.status_code, 200)

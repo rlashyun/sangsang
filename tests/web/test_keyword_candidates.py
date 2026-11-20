@@ -110,8 +110,8 @@ def test_headphone_is_not_corrected_to_phone():
     scored = keyword_scores(ITEMS, query_text("헤드폰"))
     assert {CORPUS.index("헤드폰") + 1, CORPUS.index("무선 해드폰") + 1} <= set(scored)
     assert CORPUS.index("핸드폰") + 1 not in scored
-    # positive 쌍: 사전에 넣은 오타 표기는 여전히 휴대폰이다.
-    assert query_text("휴대푠") == "휴대폰" and query_kinds(query_text("휴대푠")) == ["휴대폰"]
+    # positive 쌍: 핸드폰은 여전히 휴대폰 종류다.
+    assert query_kinds(query_text("핸드폰")) == ["휴대폰"]
 
 
 def test_rpc_sends_word_terms_only_when_present():

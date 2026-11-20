@@ -168,13 +168,13 @@ def test_new_category_spellings_survive_the_candidate_gate(query, expected):
     assert results and results[0]["id"] == expected
 
 
-def test_holder_word_is_not_a_phone_and_listed_typos_come_from_the_dictionary():
+def test_holder_word_is_not_a_phone_and_typos_are_not_corrected():
     # '휴대용'은 '휴대폰'과 한 글자 차이지만 휴대폰 종류로 좁혀지면 안 된다(보조배터리 종류다).
     assert query_text("휴대용 보조배터리") == "휴대용 보조배터리"
     assert query_kinds(query_text("휴대용 보조배터리")) == ["보조배터리"]
-    # PRD 4.5 (2026-11-21) — 자동 오타 보정은 없다. 사전에 넣은 표기만 대표어로 바뀐다.
-    assert query_text("휴대푠") == "휴대폰"
+    # PRD 4.5 (2026-11-21) — 오타는 따로 잡지 않는다.
     assert query_text("휴대퐁") == "휴대퐁"
+    assert query_kinds(query_text("휴대퐁")) == []
 
 
 def test_colors_unify_beside_registered_new_category_items_only():
