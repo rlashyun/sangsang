@@ -42,5 +42,5 @@ class OpenRouterAgentModel:
             if choice["finish_reason"] != "stop" or choice["message"].get("refusal"):
                 raise ValueError
             return json.loads(choice["message"]["content"])
-        except (OSError, HTTPException, ValueError, KeyError, IndexError, TypeError, AttributeError):
-            raise RuntimeError("대화 응답을 생성하지 못했습니다. 다시 시도해 주세요.") from None
+        except (OSError, HTTPException, ValueError, KeyError, IndexError, TypeError, AttributeError) as error:
+            raise RuntimeError("대화 응답을 생성하지 못했습니다. 다시 시도해 주세요.") from error

@@ -38,11 +38,11 @@ class KakaoLocalClient:
                 message = json.loads(body).get("msg") or error.reason
             except json.JSONDecodeError:
                 message = error.reason
-            raise RuntimeError(f"카카오 API HTTP {error.code}: {message}") from None
+            raise RuntimeError(f"카카오 API HTTP {error.code}: {message}") from error
         except urllib.error.URLError as error:
-            raise RuntimeError(f"카카오 API 연결 실패: {error.reason}") from None
-        except json.JSONDecodeError:
-            raise RuntimeError("카카오 API가 올바르지 않은 JSON을 반환했습니다.") from None
+            raise RuntimeError(f"카카오 API 연결 실패: {error.reason}") from error
+        except json.JSONDecodeError as error:
+            raise RuntimeError("카카오 API가 올바르지 않은 JSON을 반환했습니다.") from error
 
         if not isinstance(payload, dict):
             raise RuntimeError("카카오 API 응답 형식이 올바르지 않습니다.")
