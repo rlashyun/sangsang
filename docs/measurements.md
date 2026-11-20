@@ -61,6 +61,11 @@
 - 실제 예약 삭제 확인을 위해 민감정보 없는 만료 표식 `codex-release-expiry-check-20261120` 1건을 2026-11-20 15:57:05 KST에 넣었다. 15:58:00 KST의 실제 pg_cron 실행이 succeeded였고 표식은 0건으로 삭제됐다. 로컬 대역에서 확인하지 못했던 실제 예약 엔진의 실행·삭제를 확인했다. 이 시점에는 앱 병합·배포 전이다.
 - 병합 전 재검증: 전체 Python **437 passed, 1 warning, 0.83초**, 프런트 빌드 **72ms**(JS **402.69kB / gzip 125.40kB**, 50모듈), 관련 Node 웹 테스트 **10 passed**. 테스트는 더미 설정이며 실제 API를 호출하지 않았다.
 - 이 기능 브랜치와 배포 기록용 브랜치의 Preview 자동 배포는 `vercel.json`에서 끈다. 이번 승인은 main 운영 배포에 적용하고 Preview에 운영 DB가 연결되는 경로는 만들지 않는다. 설정 근거는 [Vercel Git configuration](https://vercel.com/docs/project-configuration/git-configuration)이며 main의 자동 배포는 유지한다.
+- **운영 앱 배포 완료:** PR [#66](https://github.com/rlashyun/sangsang/pull/66), 병합 커밋 `1522c62afc86c9fafefe8e0f76b3d62b5d4e7a70`, 2026-11-20 16:01:12 KST 병합. 필수 `pytest` 성공 후 병합했고 GitHub Vercel 상태 및 Production 배포 `7935553399`가 success임을 확인했다. 운영 별칭 `https://sangsang-retriever-mvp.vercel.app/`은 대화형 검색을 켠 화면을 반환했다. 기능 브랜치는 병합 후 원격·로컬에서 삭제했다.
+- **운영 API 검증(각 1회):** 별도 합성 대화로 서울역 좌표를 직접 선택해 `awaiting_clarification`, revision 1 (**0.691초**). 초기 요청을 그대로 재전송해 전체 응답 동일(**0.458초**). 이어서 “지갑”을 입력해 같은 세션의 revision 2, results **1,907건**(**4.010초**). 이 검색 요청의 재전송도 전체 응답 동일(**0.353초**). 별도 조건 확인 턴은 `run.started` 수신 직후 취소해 accepted true·cancelled(**2.170초**), revision 유지와 취소 결과의 동일 재사용을 확인했다. 끝에서 대화를 `ended`로 종료해 저장된 대화·조건·물품 캐시를 비웠다. 수치는 클라이언트 왕복을 포함한 단일 샘플이며 p95·부하 측정이 아니다. 실제 사용자 대화는 조회하지 않았다.
+- 공용 DB 사용은 운영 API와 실제 세션 RPC로 확인했지만, 요청을 서로 다른 실제 Vercel 인스턴스로 강제 라우팅하지는 않았다. 다중 라우터의 순차 대화·취소 경합은 앞선 대역 회귀 검증과 구분한다. 당시 신고의 공급자 원인은 여전히 단정하지 않는다.
+- 이번 운영 확인 원자료는 저장소 밖 `../retriever-work-docs/agent-search-recovery-20261120/release/`에 보관한다. 추가 기록 PR은 문서만 바꾸며 앱 코드와 적용 SQL은 그대로 유지한다.
+
 
 
 ## 대화형 검색 실패 복구·공용 세션 검증 — 2026-11-20 KST
