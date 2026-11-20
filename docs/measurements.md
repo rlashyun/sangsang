@@ -99,7 +99,9 @@
 - **미확인:** `--apply`가 `found_items.normalized_search_text`를 갱신할 때 DB 트리거(검색 문서 재계산 등)가 몇 건을 다시 만드는지는 재지 않았다. 괄호 규칙에서 실제 사람 이름이 몇 건 가려지는지는 텍스트를 보지 않아 모른다.
 - **PR #72 배포 뒤 재 dry-run**(2026-11-20 18:29:04~18:30:00 KST, 운영 배포 f1e5e5d 이후, `--apply` 없이 1회, 소요 56초): **scanned 472,760 · changed 1,751 · updated 0 · complete true**. 규칙 수정 뒤 측정한 값(1,751행)과 정확히 같다.
 - `--apply`가 UPDATE할 때 거치는 DB 트리거(마이그레이션 코드를 읽어 확인, 실행해 보지는 않음): `found_items_set_seen_at`이 `last_seen_at`을, `found_items_set_updated_at`이 `updated_at`을 UPDATE 시각으로 바꾼다(코드·SQL에서 `last_seen_at`을 읽는 곳은 찾지 못했다). `found_items_sync_search`는 검색 문서의 `content_hash`를 다시 계산하며 `search_text`는 원문 칸으로 만든다. 같은 함수 주석대로 기존 벡터는 지우지 않는다(마이그레이션 `20261113061646`이 `found_items_invalidate_bge_m3` 트리거를 이미 삭제했다).
-- 쓰기(`--apply`)는 아직 실행하지 않았다.
+- **`--apply` 실행**(사용자 승인, 2026-11-20 18:31~18:35 KST, 로컬 Windows PC → 운영 Supabase, 운영 배포 f1e5e5d 이후): 먼저 `--max-pages 1`로 첫 1,000건 구간만 써서(4행 갱신) 같은 구간 dry-run `changed` 0을 확인한 뒤, `--start-after-id 22472`로 나머지를 이어 썼다(소요 3분 14초, scanned 471,760, changed·updated 1,747, 오류 없음). 합계 **1,751행 갱신**이며 dry-run 예측과 같다. 바뀐 칸은 `normalized_search_text` 하나다.
+- **적용 후 검증**(18:36 KST, 읽기 전용): 전체 dry-run **scanned 472,760 · changed 0**(더 바뀔 행 없음). DB에서 apply 시간대(09:31~09:36 UTC)에 `updated_at`이 바뀐 행 **1,751건**(마스킹으로 갱신한 수와 일치). `found_items` 472,760건 불변, 수집 running 0건. 임베딩 행 `found_item_embeddings_bge_m3` 298,341건(전부 `is_current`) — 백필 직후 측정값 472,760 − 미생성 174,419 = 298,341과 같아 임베딩이 지워지지 않았다. 갱신한 1,751행 중 1,393행이 기존 임베딩을 갖고 있다.
+- **미확인·남은 일:** 검색 문서 472,124건·검색 벡터 298,105건은 apply 전 값을 재지 않아 전후 비교를 하지 못했다. 기존 임베딩 벡터는 마스킹 전 `item_embedding_input`(색상+물품명 원문)으로 만들어졌으므로, 번호·명의가 든 행의 벡터는 아직 원문 기반이다(임베딩 재생성 대상 건수는 별도 집계 필요).
 
 ## 운영 기준 마이그레이션 이력 정렬 — 2026-11-16 KST
 
