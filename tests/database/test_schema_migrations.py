@@ -448,6 +448,33 @@ class SchemaMigrationTests(unittest.TestCase):
             self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
             self.assertIn(f"grant execute on function {signature} to service_role", migration)
 
+    def test_unused_search_objects_are_dropped_but_live_search_and_kind_column_stay(self) -> None:
+        # PRD 5 — 용량 정리는 앱이 부르지 않는 객체만 지운다. 살아 있는 검색 RPC와 kind_mask 생성 열의 함수는 남긴다.
+        migration = self._squashed("20261121000000_drop_unused_search_objects.sql")
+        for dropped in (
+            "drop index if exists public.found_item_search_documents_kind;",
+            "drop index if exists public.search_engine_matched_location_id_idx;",
+            "drop function if exists public.search_found_items_semantic_fast(",
+            "drop function if exists public.search_found_item_candidates(",
+            "drop function if exists public.rerank_found_item_candidates(",
+            "drop function if exists public.read_found_item_vector_scores(",
+            "drop function if exists public.search_found_items_semantic(",
+            "drop function if exists public.allowed_search_kind_masks(",
+        ):
+            self.assertIn(dropped, migration)
+        for kept in ("keyword_found_item_candidates", "keyword_rerank_vectors", "search_found_item_details",
+                     "public.search_kind_mask(", "found_item_search_documents_location", "drop table", "drop column"):
+            self.assertNotIn(kept, migration)
+        # 앱 코드가 지운 RPC를 부르지 않아야 한다.
+        source = "\n".join(path.read_text(encoding="utf-8") for path in
+                           (MIGRATIONS.parents[1] / "src").rglob("*.py"))
+        for name in ("search_found_items_semantic", "search_found_item_candidates",
+                     "rerank_found_item_candidates", "read_found_item_vector_scores", "allowed_search_kind_masks"):
+            self.assertNotIn(name, source)
+        rollback = self._squashed("../rollbacks/20261121000000_drop_unused_search_objects.sql")
+        self.assertIn("create index if not exists found_item_search_documents_kind", rollback)
+        self.assertIn("create or replace function public.allowed_search_kind_masks(p_kinds text[])", rollback)
+
 
 if __name__ == "__main__":
     unittest.main()
