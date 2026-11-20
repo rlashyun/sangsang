@@ -270,9 +270,17 @@ def test_remask_is_a_no_op_after_new_ingestion():
 # --- 임베딩 API 입력 ---
 
 class EmbeddingStore:
-    def __init__(self, inputs):
+    def __init__(self, inputs, categories=None, categories_error=False):
         self.inputs = inputs
+        self.category_by_id = categories if categories is not None else {i: "기타물품 > 기타" for i in inputs}
+        self.categories_error = categories_error
         self.saved: dict[int, str] = {}
+        self.finished: tuple | None = None
+
+    def categories(self, item_ids):
+        if self.categories_error:
+            raise RuntimeError("임베딩 DB 작업 실패")
+        return {i: self.category_by_id[i] for i in item_ids if i in self.category_by_id}
 
     def batch(self, run, after):
         return [{"item_id": i, "embedded_input": text, "content_hash": "h"}
@@ -287,7 +295,8 @@ class EmbeddingStore:
         pass
 
     def finish(self, run, exhausted, error=None):
-        return {"status": "succeeded"}
+        self.finished = (exhausted, error)
+        return {"status": "succeeded" if error is None else "failed"}
 
 
 def test_embedding_api_receives_masked_text_while_snapshot_keeps_the_original():
@@ -306,3 +315,62 @@ def test_embedding_api_receives_masked_text_while_snapshot_keeps_the_original():
     # DB 해시 검증용 스냅숏은 원문 — 기존 저장·재사용 규칙과 맞물린다.
     assert store.saved == {1: original, 2: plain}
     assert mask_text(original) == sent[0]
+
+
+# --- 임베딩 입력의 괄호 이름 규칙: 배치 행의 분류로 고위험 여부를 판정한다(PRD 3.3 · Q5) ---
+
+class _Provider:
+    def __init__(self):
+        self.sent: list[str] = []
+
+    def embed_many(self, texts, **kwargs):
+        self.sent.extend(texts)
+        return [[0.5] * 1024 for _ in texts]
+
+
+def test_embedding_masks_bracket_names_only_for_high_risk_categories():
+    provider = _Provider()
+    store = EmbeddingStore(
+        {1: "검정 신용카드(홍길동)", 2: "검정 지갑(김철수)", 3: "검정 가방(홍길동)"},
+        categories={1: "카드 > 신용(체크)카드", 2: "지갑 > 남성용 지갑", 3: "가방 > 쌕"},
+    )
+    run_slice(store, provider, {"id": 1, "after_id": 0}, budget=60)
+    # positive: 고위험 분류는 괄호 속 이름을 가린다. negative: 가방은 그대로(괄호는 대개 브랜드·특징).
+    assert provider.sent == ["검정 신용카드(홍*동)", "검정 지갑(김*수)", "검정 가방(홍길동)"]
+    # 해시 검증용 스냅숏은 원문 그대로다.
+    assert store.saved == {1: "검정 신용카드(홍길동)", 2: "검정 지갑(김철수)", 3: "검정 가방(홍길동)"}
+
+
+def test_embedding_masks_strictly_when_the_category_is_unknown():
+    provider = _Provider()
+    store = EmbeddingStore({1: "검정 카드(홍길동)"}, categories={})
+    run_slice(store, provider, {"id": 1, "after_id": 0}, budget=60)
+    assert provider.sent == ["검정 카드(홍*동)"]
+
+
+def test_embedding_sends_nothing_when_the_category_lookup_fails():
+    provider = _Provider()
+    store = EmbeddingStore({1: "검정 카드(홍길동)"}, categories_error=True)
+    result = run_slice(store, provider, {"id": 1, "after_id": 0}, budget=60)
+    assert provider.sent == []
+    assert store.saved == {}
+    assert result == {"status": "failed"}
+    assert store.finished == (False, "database_or_ingestion")
+
+
+def test_embedding_store_reads_categories_by_item_id_in_one_request():
+    from retriever_lost_found.embedding.store import EmbeddingStore as RealStore
+
+    calls = []
+    store = RealStore.__new__(RealStore)
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("query")))
+        return [{"id": 2, "raw_category_name": "카드 > 신용(체크)카드"}, {"id": 1, "raw_category_name": None}]
+
+    store._request = fake_request
+    assert store.categories([2, 1, 2]) == {1: None, 2: "카드 > 신용(체크)카드"}
+    assert calls == [("GET", "found_items", [("select", "id,raw_category_name"), ("id", "in.(1,2)")])]
+    calls.clear()
+    assert store.categories([]) == {}
+    assert calls == []
