@@ -26,7 +26,6 @@ from ..integrations.supabase import (
     apply_item_counts,
     validate_location_ids,
 )
-from ..privacy.masking import IDENTIFIER_QUERY_ERROR, contains_identifier, mask_item_row
 from ..search.hybrid import search_with_deadline, SearchDeadlineExceeded
 from .alerts import create_alert_router
 
@@ -195,9 +194,6 @@ def create_app(
         # PRD 3.3 · D3 — 습득물 검색어 상한 30자 (장소 검색칸 200자와는 별개)
         if len(search_query) > 30:
             raise ValueError("습득물 검색어는 30자 이하여야 합니다.")
-        # PRD 3.3 · Q5 — 카드·주민·전화번호로 남의 물건을 역검색하지 못하게 한다.
-        if contains_identifier(search_query):
-            raise ValueError(IDENTIFIER_QUERY_ERROR)
         if not search_query:
             # PRD 3.3 · 5 — 검색어 없는 목록은 최신순 한 페이지만 보낸다.
             # 반경 안 후보 전체(3km 3.7만 건)를 넘기던 방식이 16~26초 지연의 원인이었다.
@@ -206,8 +202,7 @@ def create_app(
                 limit=FOUND_ITEM_PAGE_LIMIT,
                 before=parse_found_item_cursor(cursor),
             )
-            # PRD 3.3 · Q5 — 저장 원문은 그대로 두고 응답 사본만 가린다(절대 규칙 3).
-            items = [mask_item_row(item) for item in page["items"]]
+            items = page["items"]
             return JSONResponse(
                 content={
                     "items": items,
@@ -248,8 +243,6 @@ def ranked_item_page(
         if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
             raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
         offset = int(cursor.strip().split(":")[1])
-    if contains_identifier(query):
-        raise ValueError(IDENTIFIER_QUERY_ERROR)
     # PRD 4.1 · 4.5 — Both entry points use the same scoped search and paging.
     matched_items, candidate_count, semantic_status = search_with_deadline(
         found_item_client, query, location_ids, embedding_client, offset=offset,
@@ -257,8 +250,7 @@ def ranked_item_page(
     match_count = len(matched_items)
     next_offset = offset + FOUND_ITEM_PAGE_LIMIT
     return {
-        # PRD 3.3 · Q5 — 순위는 원문으로 매기고, 밖으로 나가는 페이지만 가린다.
-        "items": [mask_item_row(item) for item in matched_items[offset:next_offset]],
+        "items": matched_items[offset:next_offset],
         "candidate_count": candidate_count,
         "semantic_status": semantic_status,
         "match_count": match_count,

@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
-from ..privacy.masking import IDENTIFIER_QUERY_ERROR, contains_identifier
-
 
 @dataclass(frozen=True)
 class PlaceCandidate:
@@ -45,9 +43,6 @@ def _validated_query(query: str) -> str:
     query = query.strip()
     if not 1 <= len(query) <= 30:
         raise ValueError("습득물 검색어는 1자 이상 30자 이하여야 합니다.")
-    # PRD 3.3 · Q5 — 카드·주민·전화번호 형태의 검색어는 대화 검색에서도 받지 않는다.
-    if contains_identifier(query):
-        raise ValueError(IDENTIFIER_QUERY_ERROR)
     return query
 
 

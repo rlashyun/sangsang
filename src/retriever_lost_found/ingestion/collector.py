@@ -17,7 +17,6 @@ from .categories import (
     classify_product_category,
     normalize_text,
 )
-from ..privacy.masking import is_high_risk_category, mask_text
 from ..integrations.partner_api import create_client as create_partner_client
 from ..integrations.police_api import PoliceFoundItemsClient, read_service_key
 from ..integrations.deadline import DeadlineExceeded, check_retry_delay, request_timeout
@@ -92,10 +91,7 @@ def build_search_text(item: dict[str, Any]) -> str:
         item.get("clrNm"),
         item.get("prdtClNm"),
     )
-    text = normalize_text(" ".join(str(value or "") for value in values))
-    # PRD 3.3 · Q5 — 정규화 전용 칸이라 개인정보를 가려 저장한다(절대 규칙 3: 원문 칸은 그대로).
-    # 기존 행은 `python -m retriever_lost_found.privacy.remask`가 같은 규칙으로 맞춘다.
-    return mask_text(text, high_risk=is_high_risk_category(item.get("prdtClNm"))) or ""
+    return normalize_text(" ".join(str(value or "") for value in values))
 
 
 def fetch_page_with_retry(
