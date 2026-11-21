@@ -139,6 +139,8 @@ Preview에는 별도의 테스트 Supabase URL·서버 키와 임베딩 테이�
 OpenRouter의 GPT-6 Luna로 대화를 처리하고 카카오 장소 조회 및 설정한 Supabase의 기관·물품 검색을 호출한다.
 로컬 검증에는 테스트 Supabase를 사용한다. Vite 개발 중에는 `/?search=chat`으로 열면 백엔드의 대화형 검색 API를 사용한다.
 공용 대화 세션을 사용하려면 `20261120150000_agent_search_sessions.sql`을 먼저 적용한다. 기존 Supabase 서버 키를 사용하며 새 환경 변수는 없다. 유휴 30분 만료·삭제, 재시도와 취소 계약, 배포·복구 순서는 해당 문서에 있다. 운영 DB 적용과 배포는 별도 승인 후 진행한다.
+
+목록 사진의 축소본은 `20261121180000_found_item_thumbnails.sql` 적용 후 전용 공개 Storage 버킷에 저장한다. 상세 사진은 원본을 사용하고, 축소본 조회나 로딩에 실패하면 원본으로 돌아간다. 수집 완료 시 기존 `CRON_SECRET`으로 별도 작업을 시작하며, Vercel이 제공하는 `VERCEL_ENV=production`과 `VERCEL_PROJECT_PRODUCTION_URL`이 있을 때만 운영 작업을 호출한다. 로컬·Preview는 운영 작업을 호출하지 않는다. 한 번에 제한된 수만 처리하고 임대를 사용하므로 중단 뒤 다음 수집 때 재개할 수 있다. 원본 URL 변경은 새 축소본을 만들고 물품 삭제가 확인된 뒤 축소본을 정리한다. 작업 스위치 `thumbnail_worker_guard.enabled`는 마이그레이션 직후 꺼져 있다. 디스크·Storage 여유와 수집 부하, 소량 처리·복구를 확인한 후 켜며 끄면 새 작업 임대를 중단한다. 이미 실행 중인 작업은 끝날 수 있다.
 사용 흐름과 API 예시는 [대화형 검색 에이전트](docs/agent-search.md)를 참고한다. Vercel 진입점은 기본으로 대화형 검색을 켠다. Vercel 환경 변수 `AGENT_SEARCH=0`을 넣거나 `OPENROUTER_API_KEY`가 없으면 기존 검색 화면으로 돌아간다.
 
 ### 검색 초안: 키워드 후보 + 의미 재정렬

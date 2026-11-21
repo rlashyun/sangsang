@@ -44,6 +44,7 @@ export interface FoundItem {
   color_name?: string;
   description?: string;
   image_url?: string | null;
+  thumbnail_url?: string | null;
   registered_on?: string;
   raw_storage_name?: string;
   match_score?: number;
