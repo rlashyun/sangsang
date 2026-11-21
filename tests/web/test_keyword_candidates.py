@@ -137,10 +137,6 @@ def test_search_sends_one_letter_words_separately_and_drops_nike():
                      if candidate_matches(item["search_text"], set(terms), set(word_terms))]
             return {"items": items, "candidate_count": len(ITEMS)}
 
-        def fetch_rerank_items(self, ids, item_ids, **kwargs):
-            return [{"item_id": item["id"], "detail": {**item, "storage_location_id": 7}, "vector": None}
-                    for item in ITEMS if item["id"] in item_ids]
-
     client = Client()
     rows, _, _ = search_found_items(client, "키", [7])
     assert client.calls == [([], ["키"])]

@@ -495,6 +495,37 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("create index if not exists found_item_search_documents_kind", rollback)
         self.assertIn("create or replace function public.allowed_search_kind_masks(p_kinds text[])", rollback)
 
+    def test_one_bit_semantic_search_replaces_the_full_vector_copy(self) -> None:
+        # PRD 4.1, 4.5, 5 — 2026-11-21 확정안: 1비트 해밍 후보 500건 → 원본 halfvec 재채점.
+        # 원본 사본·2비트·실험 함수는 지우고, 동기화는 1비트 표만 유지한다.
+        [path] = MIGRATIONS.glob("*_one_bit_semantic_search.sql")
+        # GitHub 연동은 운영 최신 버전보다 뒤 번호만 순서대로 적용한다.
+        self.assertGreater(path.name.split("_", 1)[0], "20261121180000")
+        migration = self._squashed(path.name)
+        self.assertIn("alter table public.found_item_embeddings_bge_m3 alter column embedding set storage plain;",
+                      migration)
+        for dropped in ("drop table public.found_item_search_vectors;",
+                        "drop table if exists public.found_item_search_vectors_2bit;",
+                        "drop function if exists public.exp_semantic_1bit("):
+            self.assertIn(dropped, migration)
+        self.assertNotIn("cascade;", migration.replace("on delete cascade;", ""))
+        refresh = migration.split("create or replace function public.refresh_search_vector", 1)[1].split(
+            "create or replace function public.keyword_rerank_vectors", 1)[0]
+        self.assertIn("insert into public.found_item_search_vectors_1bit", refresh)
+        self.assertIn("extensions.binary_quantize(e.embedding)::bit(1024)", refresh)
+        self.assertIn("delete from public.found_item_search_vectors_1bit where item_id = p_item_id;", refresh)
+        semantic = migration.split("create function public.semantic_found_item_candidates", 1)[1]
+        self.assertIn("order by bit_count(b.embedding # q), b.item_id desc limit p_rescore", semantic)
+        self.assertIn("join public.found_item_embeddings_bge_m3 e on e.item_id = c.item_id", semantic)
+        self.assertIn("p_min float8 default 0.6, p_limit int default 200, p_rescore int default 500", semantic)
+        self.assertIn("security invoker", semantic)
+        signature = "public.semantic_found_item_candidates(bigint[], extensions.halfvec, float8, int, int)"
+        self.assertIn(f"revoke all on function {signature} from public, anon, authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+        rollback = self._squashed(f"../rollbacks/{path.name}")
+        self.assertIn("create table public.found_item_search_vectors (", rollback)
+        self.assertIn(f"drop function if exists {signature};", rollback)
+
 
 if __name__ == "__main__":
     unittest.main()

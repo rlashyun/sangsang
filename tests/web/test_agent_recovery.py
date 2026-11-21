@@ -260,9 +260,6 @@ def test_embedding_fallback_keeps_trace_across_search_worker(caplog):
         def fetch_items(self, scope):
             return [{'id': 1, 'storage_location_id': 42, 'item_name': '지갑'}]
 
-        def fetch_rerank_items(self, scope, ids, **kwargs):
-            return [{'detail': self.fetch_items(scope)[0], 'vector': None}]
-
     class BrokenEmbedding:
         def embed(self, *args, **kwargs):
             raise TimeoutError('private')
