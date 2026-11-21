@@ -320,9 +320,9 @@ uv run python scripts/search_storage_location_kakao.py 5052
 
 - `MAIL_FROM` — 보내는 주소. 서비스 전용 Gmail 주소와 같게 씁니다. 예: `리트리버 <서비스 Gmail 주소>`
 - `MAIL_SMTP_HOST` — `smtp.gmail.com`
-- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS) (〃)
-- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소 (〃)
-- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리, 공백 없이 (〃)
+- `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS)
+- `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소
+- `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리, 공백 없이
 - `PUBLIC_BASE_URL` — 메일 속 링크 주소의 앞부분. 로컬은 `http://127.0.0.1:8000`
 - `ALERT_SECRET` — 링크 토큰과 IP 해시에 쓰는 무작위 문자열
 - `ALERT_DAILY_SEND_LIMIT` — 선택. 기본 450
