@@ -73,7 +73,8 @@ def create_app(
         response = await call_next(request)
         response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Content-Security-Policy"] = content_security_policy()
+        response.headers["Content-Security-Policy"] = content_security_policy(
+            getattr(found_item_client, "url", ""))
         return response
 
     @app.exception_handler(ValueError)
@@ -207,7 +208,10 @@ def create_app(
                 before=parse_found_item_cursor(cursor),
             )
             # PRD 3.3 · Q5 — 저장 원문은 그대로 두고 응답 사본만 가린다(절대 규칙 3).
-            items = [mask_item_row(item) for item in page["items"]]
+            rows = page["items"]
+            if hasattr(found_item_client, "add_thumbnails"):
+                rows = found_item_client.add_thumbnails(rows)
+            items = [mask_item_row(item) for item in rows]
             return JSONResponse(
                 content={
                     "items": items,
@@ -256,9 +260,12 @@ def ranked_item_page(
     )
     match_count = len(matched_items)
     next_offset = offset + FOUND_ITEM_PAGE_LIMIT
+    page_items = matched_items[offset:next_offset]
+    if hasattr(found_item_client, "add_thumbnails"):
+        page_items = found_item_client.add_thumbnails(page_items)
     return {
         # PRD 3.3 · Q5 — 순위는 원문으로 매기고, 밖으로 나가는 페이지만 가린다.
-        "items": [mask_item_row(item) for item in matched_items[offset:next_offset]],
+        "items": [mask_item_row(item) for item in page_items],
         "candidate_count": candidate_count,
         "semantic_status": semantic_status,
         "match_count": match_count,
@@ -297,15 +304,17 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             page = ranked_item_page(found_item_client, query, ids, embedding_client, cursor or "")
             return adapt_search_page(page)
 
+        def find_items_by_id(scope, item_ids):
+            rows = found_item_client.fetch_item_details(list(scope), item_ids)
+            return [adapt_search_item(row) for row in found_item_client.add_thumbnails(rows)]
+
         agent_router = create_agent_router(
             store=SupabaseAgentStore(supabase_url, supabase_secret_key),
             openrouter_api_key=embedding_key,
             find_places=lambda query: adapt_places(kakao_client, query),
             get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),
             search_items=search_items,
-            find_items_by_id=lambda scope, item_ids: [
-                adapt_search_item(row) for row in found_item_client.fetch_item_details(list(scope), item_ids)
-            ],
+            find_items_by_id=find_items_by_id,
         )
     try:
         alert_settings = load_alert_settings()
@@ -367,7 +376,15 @@ def optional_float(value: str, name: str) -> float | None:
         raise ValueError(f"{name} 좌표가 숫자가 아닙니다.") from None
 
 
-def content_security_policy() -> str:
+def content_security_policy(supabase_url: str = "") -> str:
+    from urllib.parse import urlsplit
+    parsed = urlsplit(supabase_url)
+    image_host = ""
+    if (parsed.scheme == "https" and parsed.hostname
+            and re.fullmatch(r"[a-z0-9-]+\.supabase\.co", parsed.hostname)
+            and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment
+            and parsed.path in ("", "/") and parsed.port in (None, 443)):
+        image_host = " https://" + parsed.hostname
     return "; ".join(
         [
             "default-src 'self'",
@@ -377,7 +394,7 @@ def content_security_policy() -> str:
             "script-src 'self' https://dapi.kakao.com https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
             "style-src 'self' 'unsafe-inline' https://t1.daumcdn.net http://t1.daumcdn.net https://*.kakaocdn.net",
             # PRD 3.2-2 — 습득물 사진(image_url) 원본 호스트. 이미지로만 허용한다
-            "img-src 'self' data: blob: https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net https://minwon24.police.go.kr",
+            "img-src 'self' data: blob: https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net https://minwon24.police.go.kr" + image_host,
             "connect-src 'self' https://dapi.kakao.com https://*.daumcdn.net http://*.daumcdn.net https://*.kakao.com http://*.kakao.com https://*.kakaocdn.net",
             "font-src 'self' data:",
             "frame-src https://map.kakao.com",
