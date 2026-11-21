@@ -20,13 +20,27 @@ for _group in _CONCEPTS:
 _CANONICAL = {term: group["canonical"] for term, group in _LOOKUP.items()}
 ALIASES = tuple((term, group["canonical"]) for group in _CONCEPTS
                 for term in group["terms"] if term != group["canonical"])
-KIND_TERMS = {kind: frozenset(terms) for kind, terms in _DATA["kinds"].items()}
-KIND_NAMES = ("지갑", "휴대폰", "이어폰", "모자", "가방", "카드")
+# PRD 4.5 (2026-11-21) — 물건 종류는 동의어가 아니므로 별도 파일에 둔다. Supabase 분류 21개·하위분류에서 뽑았다.
+_KIND_DATA = json.loads(files(__package__).joinpath("item_kinds.json").read_text(encoding="utf-8"))
+KIND_NAMES = tuple(kind["name"] for kind in _KIND_DATA["kinds"])
+KIND_TERMS = {kind["name"]: frozenset(kind["terms"]) for kind in _KIND_DATA["kinds"]}
+KIND_CATEGORIES = {kind["name"]: tuple(kind["categories"]) for kind in _KIND_DATA["kinds"]}
+# 종류를 단정하지 않는 묘사(귀에 끼는 → 이어폰). 종류어가 없을 때만 쓴다.
+KIND_HINTS = {name: tuple(phrases) for name, phrases in _KIND_DATA["hints"].items()}
+_HINT_PATTERN = re.compile("|".join(re.escape(phrase) for phrases in KIND_HINTS.values() for phrase in phrases))
 _KINDS_BY_TERM: dict[str, set[str]] = {}
 for _kind, _terms in KIND_TERMS.items():
     for _term in _terms:
         _KINDS_BY_TERM.setdefault(_term, set()).add(_kind)
-_KIND_PATTERN = re.compile("|".join(re.escape(term) for term in sorted(_KINDS_BY_TERM, key=len, reverse=True)))
+# 1글자 종류어(책·옷)는 책상·옷걸이에 걸리지 않게 독립 단어일 때만 종류로 본다.
+_SHORT_KIND_TERMS = {term for term in _KINDS_BY_TERM if len(term) == 1}
+_KIND_PATTERN = re.compile("|".join(re.escape(term) for term in sorted(
+    set(_KINDS_BY_TERM) - _SHORT_KIND_TERMS, key=len, reverse=True)))
+# PRD 4.5 (2026-11-21 전체 물품) — 6개 종류어가 없어도 사전에 등록한 물품 단어(우산·안경 등)가
+# 있으면 색 단어를 대표어로 맞춘다. 미등록 문맥(브라운 면도기 등)은 그대로 둔다.
+_ITEM_PATTERN = re.compile("|".join(re.escape(term.replace(" ", "")) for term in sorted(
+    {term for group in _CONCEPTS if group["domain"] == "item" for term in group["terms"]},
+    key=len, reverse=True)))
 _EARPHONE_PATTERN = re.compile("이어폰|에어팟|버즈|유닛")
 _COLOR_WORDS = {term for group in _CONCEPTS if group["domain"] == "color" for term in group["terms"]}
 _EARPHONE_TERMS = {term for group in _CONCEPTS
@@ -47,6 +61,11 @@ for _word in _WORDS:
         for _char in _word:
             _node = _node.setdefault(_char, {})
         _node[None] = _word
+
+
+def is_known_word(word: str) -> bool:
+    """사전·종류 단어. 붙여 쓴 물품명을 나눌 때 독립 단어로 새로 생길 수 있다."""
+    return word in _WORDS
 
 
 @lru_cache(maxsize=8192)
@@ -85,7 +104,7 @@ def normalize_text(text: str, *, query: bool = False) -> str:
     text = normalize_base_text(text, keep_spaces=True)
     earphone = bool(_EARPHONE_PATTERN.search(text))
     # Color words in recognized item/brand descriptions or a color-only query.
-    color = query or bool(_KIND_PATTERN.search(text)) or all(
+    color = query or bool(_KIND_PATTERN.search(text)) or bool(_ITEM_PATTERN.search(text.replace(" ", ""))) or all(
         word in _LOOKUP for word in text.split()
     )
 
@@ -103,8 +122,10 @@ def kind_names(text: str) -> set[str]:
     """Longest types first: card wallets stay wallets, and pouches stay ambiguous."""
     # Callers normalize once before type detection; do not normalize each
     # item name/category/description a second time during supports_kind().
-    compact = text.replace(" ", "")
+    # 묘사 표현 속 단어('현금을 넣는 지갑'의 현금)는 종류가 아니다.
+    compact = _HINT_PATTERN.sub("|", text.replace(" ", ""))
     matches = [match[0] for match in _KIND_PATTERN.finditer(compact)]
+    matches += [word for word in text.split() if word in _SHORT_KIND_TERMS]
     names = {kind for term in matches for kind in _KINDS_BY_TERM[term]}
     # Galaxy is shared by phones and Buds; the explicit earphone type wins.
     if "이어폰" in names and not any("휴대폰" in _KINDS_BY_TERM[term] and term != "갤럭시" for term in matches):
@@ -142,8 +163,10 @@ def _kind_forms(words: frozenset[str]) -> frozenset[str]:
 
 
 _KIND_CANDIDATES = {kind: _kind_forms(words) for kind, words in KIND_TERMS.items()}
-_KIND_CANDIDATES["지갑"] |= {"돈을넣", "현금을넣", "돈을 넣", "현금을 넣"}
-_KIND_CANDIDATES["이어폰"] |= {"귀에끼", "귀에넣", "귀에착용", "귀에 끼", "귀에 넣", "귀에 착용"}
+for _kind, _phrases in KIND_HINTS.items():
+    # 원문에는 '돈을 넣'처럼 띄어 쓴 묘사도 있다. 조사 뒤 첫 공백만 넣은 형태를 함께 보낸다.
+    _KIND_CANDIDATES[_kind] |= {form for phrase in _phrases
+                                for form in (phrase, re.sub(r"(을|에)", r"\1 ", phrase, count=1))}
 
 
 def kind_candidate_terms(names: set[str]) -> set[str]:

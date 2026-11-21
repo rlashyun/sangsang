@@ -485,6 +485,7 @@ export function App() {
           searchCenters={searchCenters}
           previewPlace={previewPlace}
           radiusMeters={radiusMeters}
+          animateRadiusFit
           visibleInstitutions={visibleInstitutions}
           mapBadge={mapBadge}
           onPlaceSelect={handlePlaceSelect}

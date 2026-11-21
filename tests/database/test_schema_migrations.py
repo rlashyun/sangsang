@@ -362,6 +362,139 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("and status = 'pending' returning created_at into v_created_at", migration)
         self.assertIn("request.created_at = v_created_at limit 1", migration)
 
+    def test_item_categories_cover_every_ingestion_parent_category(self) -> None:
+        # PRD 2.2, 4.5 — 수집 코드의 상위분류 21개가 DB에 모두 있어야 기타물품 대체가 오분류를 만들지 않는다.
+        from retriever_lost_found.ingestion.categories import SERVICE_CATEGORIES
+
+        core = (MIGRATIONS / "20260826133434_create_lost_found_core_schema.sql").read_text(encoding="utf-8")
+        expansion = (MIGRATIONS / "20261120090000_all_item_categories.sql").read_text(encoding="utf-8")
+        for category in SERVICE_CATEGORIES:
+            with self.subTest(code=category.code):
+                pair = f"'{category.code}', '{category.name}'"
+                self.assertTrue(pair in core or pair in expansion)
+        lowered = expansion.lower()
+        # 기존 6개 행·id와 물품은 건드리지 않고 새 분류만 더한다.
+        self.assertIn("on conflict (code) do nothing", lowered)
+        for statement in ("delete from", "update public.item_categories", "drop "):
+            self.assertNotIn(statement, lowered)
+
+    def test_keyword_candidates_drop_the_kind_mask_filter_and_stay_service_role_only(self) -> None:
+        # PRD 4.1, 4.5 — 종류 판단은 서버 동의어 사전이 p_terms로 넘긴다. DB kind_mask는 별칭을 빠뜨린다.
+        migration = " ".join(
+            (MIGRATIONS / "20261120120000_keyword_candidates_without_kind_mask.sql")
+            .read_text(encoding="utf-8").lower().split()
+        )
+        body = migration.split("create function public.keyword_found_item_candidates", 1)[1]
+        self.assertIn("drop function public.keyword_found_item_candidates(bigint[],text[],text[]);", migration)
+        self.assertIn("(p_location_ids bigint[],p_terms text[]) returns json", body)
+        self.assertNotIn("kind_mask", body)
+        self.assertNotIn("p_kinds", body)
+        # 범위 필터와 단어 포함 조건은 그대로 남아야 한다.
+        self.assertIn("d.storage_location_id=any($1) and cardinality($1) between 1 and 300", body)
+        self.assertIn("strpos(d.search_text,lower(t.term))>0", body)
+        self.assertIn("security invoker", body)
+        signature = "public.keyword_found_item_candidates(bigint[],text[])"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
+    def test_keyword_candidates_compare_one_letter_words_as_standalone_words(self) -> None:
+        # PRD 4.5 — 1글자 단어는 BM25처럼 독립 단어로만 통과시키고, 나머지 strpos 조건과 범위 필터는 그대로 둔다.
+        migration = self._squashed("20261121120000_keyword_candidates_word_terms.sql")
+        self.assertIn("drop function public.keyword_found_item_candidates(bigint[],text[]);", migration)
+        body = migration.split("create function public.keyword_found_item_candidates", 1)[1]
+        # 기본값이 있어야 2인자로 부르는 이전 앱도 동작한다.
+        self.assertIn("(p_location_ids bigint[],p_terms text[],p_word_terms text[] default '{}') returns json", body)
+        self.assertIn("d.storage_location_id=any($1) and cardinality($1) between 1 and 300", body)
+        self.assertIn("strpos(d.search_text,lower(t.term))>0", body)
+        self.assertIn("'(^|[^[:alnum:]])'||regexp_replace(lower(w.word),'([^[:alnum:]])','\\\\\\1','g')"
+                      "||'($|[^[:alnum:]])'", body)
+        self.assertIn("security invoker", body)
+        self.assertNotIn("kind_mask", body)
+        signature = "public.keyword_found_item_candidates(bigint[],text[],text[])"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+        rollback = self._squashed("../rollbacks/20261121120000_keyword_candidates_word_terms.sql")
+        self.assertIn(f"drop function if exists {signature};", rollback)
+        self.assertIn("(p_location_ids bigint[],p_terms text[]) returns json", rollback)
+
+    @staticmethod
+    def _squashed(name: str) -> str:
+        """SQL 주석(`--` 이후)을 빼고 공백을 정규화한다. 주석 속 설명이 검사에 걸리지 않게 한다."""
+        lines = (MIGRATIONS / name).read_text(encoding="utf-8").lower().splitlines()
+        return " ".join(" ".join(line.split("--", 1)[0] for line in lines).split())
+
+    def test_embedding_cycle_checks_use_partial_indexes_instead_of_full_scans(self) -> None:
+        # PRD 4.5, 5 — 62만 건에서 전체 힙 스캔 누락 확인이 8.9초로 Data API 8초 제한(57014)을 넘었다.
+        migration = self._squashed("20261120143159_embedding_scan_indexes.sql")
+        self.assertIn("on public.found_items (id) where embedding_input <> ''", migration)
+        self.assertIn(
+            "on public.found_item_embeddings_bge_m3 (item_id) "
+            "where is_current and input_version = 'color_ko_item_name:v2'", migration)
+        body = migration.split("create or replace function public.ensure_embedding_cycle", 1)[1]
+        # 하루 단위 건수는 색인을 쓸 수 있는 범위 조건이어야 한다. 행마다 변환하는 식은 전체 스캔이다.
+        self.assertNotIn("(first_seen_at at time zone 'asia/seoul')::date=p_business_date", body)
+        self.assertIn("first_seen_at>=(p_business_date::timestamp at time zone 'asia/seoul')", body)
+        self.assertIn("first_seen_at<((p_business_date+1)::timestamp at time zone 'asia/seoul')", body)
+        signature = "public.ensure_embedding_cycle(date,text,boolean)"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
+    def test_backfill_runs_do_not_create_historical_embedding_cycles(self) -> None:
+        # PRD 4.5 — 과거 날짜 회차가 다음 날 정규 회차를 뒤로 밀지 않게 한다. 정규 실행은 그대로 회차를 만든다.
+        migration = self._squashed("20261120143345_skip_backfill_embedding_cycles.sql")
+        body = migration.split("create or replace function public.enqueue_embeddings_on_ingestion_finish", 1)[1]
+        skip = "if coalesce(new.metadata->>'trigger','')='manual_backfill' then return new; end if;"
+        self.assertIn(skip, body)
+        self.assertIn("perform public.ensure_embedding_run(", body)
+        self.assertLess(body.index(skip), body.index("perform public.ensure_embedding_run("))
+
+    def test_embedding_batches_pick_missing_ids_from_indexes_before_reading_rows(self) -> None:
+        # PRD 4.5, 5 — after_id=0인 새 회차의 첫 조회가 8~10초였다. ID를 먼저 고르고 고른 행만 읽는다.
+        migration = self._squashed("20261120143534_indexed_embedding_batches.sql")
+        batch = migration.split("create or replace function public.embedding_run_batch", 1)[1].split(
+            "create or replace function public.reuse_run_embeddings", 1)[0]
+        reuse = migration.split("create or replace function public.reuse_run_embeddings", 1)[1]
+        for body in (batch, reuse):
+            self.assertIn("with ids as materialized ( select f.id from public.found_items f", body)
+            self.assertIn("raise exception 'embedding lease unavailable'", body)
+        self.assertIn("raise exception 'ingestion still running'", batch)
+        self.assertIn("perform public.reuse_run_embeddings(p_run_id,p_token,p_after);", batch)
+        self.assertIn("e.input_version='color_ko_item_name:v2' and e.is_current", batch)
+        self.assertIn("limit least(greatest(p_limit,1),64)", batch)
+        self.assertIn("for share of f skip locked", reuse)
+        self.assertIn("on conflict(item_id) do nothing", reuse)
+        for signature in ("public.embedding_run_batch(bigint,uuid,bigint,integer)",
+                          "public.reuse_run_embeddings(bigint,uuid,bigint,integer)"):
+            self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+            self.assertIn(f"grant execute on function {signature} to service_role", migration)
+
+    def test_unused_search_objects_are_dropped_but_live_search_and_kind_column_stay(self) -> None:
+        # PRD 5 — 용량 정리는 앱이 부르지 않는 객체만 지운다. 살아 있는 검색 RPC와 kind_mask 생성 열의 함수는 남긴다.
+        migration = self._squashed("20261121000000_drop_unused_search_objects.sql")
+        for dropped in (
+            "drop index if exists public.found_item_search_documents_kind;",
+            "drop index if exists public.search_engine_matched_location_id_idx;",
+            "drop function if exists public.search_found_items_semantic_fast(",
+            "drop function if exists public.search_found_item_candidates(",
+            "drop function if exists public.rerank_found_item_candidates(",
+            "drop function if exists public.read_found_item_vector_scores(",
+            "drop function if exists public.search_found_items_semantic(",
+            "drop function if exists public.allowed_search_kind_masks(",
+        ):
+            self.assertIn(dropped, migration)
+        for kept in ("keyword_found_item_candidates", "keyword_rerank_vectors", "search_found_item_details",
+                     "public.search_kind_mask(", "found_item_search_documents_location", "drop table", "drop column"):
+            self.assertNotIn(kept, migration)
+        # 앱 코드가 지운 RPC를 부르지 않아야 한다.
+        source = "\n".join(path.read_text(encoding="utf-8") for path in
+                           (MIGRATIONS.parents[1] / "src").rglob("*.py"))
+        for name in ("search_found_items_semantic", "search_found_item_candidates",
+                     "rerank_found_item_candidates", "read_found_item_vector_scores", "allowed_search_kind_masks"):
+            self.assertNotIn(name, source)
+        rollback = self._squashed("../rollbacks/20261121000000_drop_unused_search_objects.sql")
+        self.assertIn("create index if not exists found_item_search_documents_kind", rollback)
+        self.assertIn("create or replace function public.allowed_search_kind_masks(p_kinds text[])", rollback)
+
 
 if __name__ == "__main__":
     unittest.main()

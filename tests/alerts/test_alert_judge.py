@@ -7,6 +7,7 @@ import unittest
 from alert_fakes import NOW, FakeAlertStore, FakeMonotonic
 from retriever_lost_found.alerts.judge import search_judge
 from retriever_lost_found.alerts.matching import SIMILARITY_JUDGE, run_match_pass
+from retriever_lost_found.search import hybrid
 from retriever_lost_found.search.hybrid import search_found_items
 
 LOCATION_ID = 7
@@ -41,12 +42,12 @@ def candidate(item: dict) -> dict:
 class SameAsSearchClient:
     """운영 검색이 부르는 RPC를 SQL 조건대로 흉내 낸다(외부 호출 없음, AGENTS.md 7장)."""
 
-    def fetch_candidate_bundle(self, location_ids, terms, *, timeout, kind_terms=None):
-        assert location_ids == [LOCATION_ID] and kind_terms is None
-        # keyword_found_item_candidates — term <> '' and strpos(search_text, lower(term)) > 0
+    def fetch_candidate_bundle(self, location_ids, terms, *, timeout, word_terms=()):
+        assert location_ids == [LOCATION_ID]
+        # keyword_found_item_candidates — strpos(search_text, lower(term)) > 0, 1글자 단어는 독립 단어로만
         items = [
             candidate(item) for item in ITEMS
-            if any(term and term.lower() in search_text(item) for term in terms)
+            if hybrid.candidate_matches(search_text(item), {term.lower() for term in terms if term}, set(word_terms))
         ]
         return {"items": items, "candidate_count": len(ITEMS)}
 

@@ -41,7 +41,9 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     result = json.loads(response.text.splitlines()[-1])["response"]
     assert result["recommended_item_ids"] == [1]
     assert result["matches"]["next_cursor"] == "next"
-    assert client.post("/api/search-chat/turns", json=select).status_code == 409
+    replayed = client.post("/api/search-chat/turns", json=select)
+    assert json.loads(replayed.text.splitlines()[-1])["response"] == result
+    assert client.post("/api/search-chat/turns", json={**select, "candidate_id": "other"}).status_code == 409
     page_params = {"session_id": result["session_id"], "revision": result["revision"], "cursor": "next"}
     response = client.post("/api/search-chat/pages", json=page_params)
     assert response.json()["matches"]["items"] == [second]
@@ -57,6 +59,38 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     assert [call.args for call in search.call_args_list] == [
         ((42,), "갈색 지갑", None), ((42,), "브라운 지갑", None), ((42,), "브라운 지갑", "next"),
     ]
+
+
+def test_expanded_radius_scope_cursor_and_replay_stay_together():
+    model = Mock(side_effect=[
+        {"action": "search", "message": "", "place_query": "강남역", "item_query": "지갑",
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
+        {"query": None},
+    ])
+    search = Mock(side_effect=[
+        SearchPage((), 0), SearchPage(({"item_id": 7, "institution_id": 99},), 2, "next"),
+        SearchPage(({"item_id": 8, "institution_id": 42},), 2),
+    ])
+    client = TestClient(create_app(Mock(), "dummy", agent_router=create_agent_router(
+        model=model, find_places=lambda _: [PlaceCandidate("p1", "강남역", "", 37.5, 127.03)],
+        get_institutions=lambda: [Institution(42, 37.5, 127.03), Institution(99, 37.511, 127.03)], search_items=search,
+    )))
+    start = client.post("/api/search-chat/turns", json={"type": "message", "text": "강남역 지갑", "request_id": "expand-start"})
+    first = json.loads(start.text.splitlines()[-1])["response"]
+    request = {"type": "select_place", "candidate_id": "p1", "request_id": "expand-select",
+               "session_id": first["session_id"], "revision": first["revision"]}
+    reply = client.post("/api/search-chat/turns", json=request)
+    events = [json.loads(line) for line in reply.text.splitlines()]
+    result = events[-1]["response"]
+    assert result["conditions"]["radius_m"] == 1500
+    assert result["conditions"]["institution_ids"] == [42, 99]
+    assert result["recommended_item_ids"] == [7]
+    assert any(event.get("expansion_reason") == "no_matches" for event in events)
+    assert json.loads(client.post("/api/search-chat/turns", json=request).text.splitlines()[-1])["response"] == result
+    assert search.call_count == 2
+    page = client.post("/api/search-chat/pages", json={"session_id": result["session_id"], "revision": result["revision"], "cursor": "next"})
+    assert page.json()["matches"]["items"][0]["item_id"] == 8
+    assert search.call_args.args == ((42, 99), "지갑", "next")
 
 
 def test_chat_api_confirms_map_point_before_and_after_item():
@@ -146,6 +180,8 @@ def test_runtime_agent_reuses_places_institutions_and_ranked_search(monkeypatch)
     monkeypatch.setenv("KAKAO_JAVASCRIPT_KEY", "dummy")
     monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "dummy")
+    from retriever_lost_found.web.agent_store import MemoryAgentStore
+    monkeypatch.setattr("retriever_lost_found.web.agent_store.SupabaseAgentStore", lambda *args: MemoryAgentStore())
     search = Mock(return_value=([
         {"id": 1, "storage_location_id": 42, "item_name": "갈색 지갑", "match_score": 0.8}
     ], 1, "ok"))

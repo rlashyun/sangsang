@@ -43,7 +43,7 @@ def test_bm25_korean_partial_words_and_unrelated_rejection():
     assert 3 not in scores
 
 
-def test_color_only_matches_are_rejected_but_wallet_and_typo_survive():
+def test_color_only_matches_are_rejected_but_wallet_survives():
     items = [
         {"id": 1, "item_name": "검정 가죽 지갑"},
         {"id": 2, "item_name": "빨강 장지갑"},
@@ -51,7 +51,6 @@ def test_color_only_matches_are_rejected_but_wallet_and_typo_survive():
         {"id": 4, "item_name": "검정 카드"},
     ]
     assert set(keyword_scores(items, "검정 가죽 지갑")) == {1, 2}
-    assert 3 in keyword_scores(items, "휴대푠")
 
 
 def test_reviewed_color_and_brand_aliases():
@@ -132,6 +131,17 @@ def test_detail_query_filters_both_ids_and_locations():
     assert query["p_item_ids"] == [1, 2] and query["p_location_ids"] == [7]
 
 
+def test_keyword_candidate_rpc_sends_scope_and_terms_without_kind_mask_argument():
+    # PRD 4.1, 4.5 — 20261120120000 마이그레이션의 2인자 함수와 맞아야 한다(p_kinds 없음).
+    client = SupabaseFoundItemClient("https://test.supabase.co", "test-key")
+    bundle = {"candidate_count": None, "items": [{"id": 1}]}
+    with patch("retriever_lost_found.integrations.supabase._request_json", return_value=bundle) as call:
+        assert client.fetch_candidate_bundle([7, 7], ["가방", "백팩"], timeout=1) == bundle
+    request = call.call_args.args[0]
+    assert request.full_url.endswith("/rest/v1/rpc/keyword_found_item_candidates")
+    assert json.loads(request.data) == {"p_location_ids": [7], "p_terms": ["가방", "백팩"]}
+
+
 def test_rerank_cannot_add_a_wrong_kind_outside_keyword_candidates():
     class Items(FakeItems):
         def fetch_items(self,ids):
@@ -141,13 +151,7 @@ def test_rerank_cannot_add_a_wrong_kind_outside_keyword_candidates():
     assert status=="ok" and [r["id"] for r in rows]==[2]
 
 
-def test_query_correction_keeps_phone_candidate():
-    assert keyword_scores([{"id":1,"item_name":"아이폰"}],"아이퐁")
-
-
-def test_query_only_correction_and_explicit_kind_take_priority():
-    assert query_text("아이퐁") == "아이폰"
-    assert query_text("휴대푠") == "휴대폰"
+def test_explicit_kind_takes_priority():
     assert len(query_kinds(query_text("블루투스 휴대폰"))) == 1
 
 

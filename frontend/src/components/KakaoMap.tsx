@@ -14,6 +14,7 @@ import {
   markerCountLabel,
   radiusKilometersLabel,
 } from "../lib/geo.js";
+import { flyMapToBounds, whenMapSettled } from "../lib/map-flight.js";
 import { escapeHtml } from "../lib/presentation";
 import { createRadiusHalo } from "../lib/radius-halo.js";
 import {
@@ -53,6 +54,10 @@ interface KakaoMapProps {
   showInstitutionCounts?: boolean;
   /** 지도 왼쪽을 가린 패널의 폭(px). 선택한 지점을 가려지지 않은 영역의 가운데에 둔다. */
   leftInset?: number;
+  /** 물품의 검증된 보관기관 위치. 검색 중심·범위는 바꾸지 않고 지도만 이동한다. */
+  focusedInstitution?: Institution | null;
+  /** 장소 확정 후 반경 맞춤을 부드럽게 이동한다. 끄면 기존처럼 바로 맞춘다. */
+  animateRadiusFit?: boolean;
   /** 보관기관 핀을 더블클릭해 고른 위치. 없으면 더블클릭 선택과 안내를 쓰지 않는다. */
   onPointSelect?: (point: { latitude: number; longitude: number; name: string; address: string }) => void;
   onPlaceSelect: (place: Place) => void;
@@ -186,6 +191,8 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   mapBadge,
   showInstitutionCounts = true,
   leftInset = 0,
+  focusedInstitution = null,
+  animateRadiusFit = false,
   onPointSelect,
   onPlaceSelect,
   onInstitutionSelect,
@@ -469,10 +476,23 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
 
   // PRD 4.4 — 여백은 한 번만 계산해 반경과 후보를 패널 오른쪽의 지도 안에 맞춘다.
   useEffect(() => {
-    if (!mapReady || !mapRef.current || !selectedPlace) return;
+    const map = mapRef.current;
+    const container = containerRef.current;
+    if (!mapReady || !map || !container || !selectedPlace) return;
     const kakao = window.kakao;
-    mapRef.current.setBounds(circleBounds(kakao, searchCenters, radiusMeters), 48, 48, 48, 48 + leftInset);
-  }, [leftInset, mapReady, radiusMeters, searchCenters, selectedPlace]);
+    const bounds = circleBounds(kakao, searchCenters, radiusMeters);
+    const padding: [number, number, number, number] = [48, 48, 48, 48 + leftInset];
+    if (!animateRadiusFit) {
+      map.setBounds(bounds, ...padding);
+      return;
+    }
+    // PRD 4.3 · 4.4, 스프린트 6번 — 확정·반경 변경·경유지 추가 때 가까우면 순간이동 대신 부드럽게 확대·축소한다.
+    // 카카오 애니메이션 한 번만 쓰므로 사용자가 도중에 지도를 움직이면 카카오가 그대로 처리한다.
+    return flyMapToBounds(kakao, map, bounds, padding, {
+      viewport: { width: container.clientWidth, height: container.clientHeight },
+      reduceMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+    });
+  }, [animateRadiusFit, leftInset, mapReady, radiusMeters, searchCenters, selectedPlace]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || selectedPlace || !places.length) return;
@@ -488,18 +508,20 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     if (!previewPlace) {
       const bounds = new kakao.maps.LatLngBounds();
       places.forEach(place => bounds.extend(new kakao.maps.LatLng(place.latitude, place.longitude)));
-      map.setBounds(bounds, 48, 48, 48, 48 + leftInset);
-      return;
+      // 반경 맞춤 애니메이션이 진행 중이면 끝난 뒤 맞춰야 애니메이션이 이 이동을 덮어쓰지 않는다.
+      return whenMapSettled(map, () => map.setBounds(bounds, 48, 48, 48, 48 + leftInset));
     }
-    map.setLevel(3, { animate: false });
     const target = new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude);
-    if (leftInset) {
-      const projection = map.getProjection();
-      const point = projection.containerPointFromCoords(target);
-      map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
-    } else {
-      map.setCenter(target);
-    }
+    const cancelMove = whenMapSettled(map, () => {
+      map.setLevel(3, { animate: false });
+      if (leftInset) {
+        const projection = map.getProjection();
+        const point = projection.containerPointFromCoords(target);
+        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+      } else {
+        map.setCenter(target);
+      }
+    });
     const marker = searchMarkersRef.current.find(({ place }) => place === previewPlace)?.marker;
     if (marker) {
       infoWindowRef.current.setContent(
@@ -508,7 +530,39 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       );
       infoWindowRef.current.open(map, marker);
     }
+    return cancelMove;
   }, [leftInset, mapColors, mapReady, onPlaceSelect, places, placeNumbers, previewPlace, selectedPlace]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !focusedInstitution) return;
+    const { latitude, longitude } = focusedInstitution;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
+    const kakao = window.kakao;
+    let marker: any = null;
+    // PRD 4.3-C · 4.4 — 기관 핀을 강조하고, 패널이 가리지 않는 지도 중앙에 맞춘다.
+    const cancelMove = whenMapSettled(map, () => {
+      const target = new kakao.maps.LatLng(latitude, longitude);
+      map.setLevel(3, { animate: false });
+      if (leftInset) {
+        const projection = map.getProjection();
+        const point = projection.containerPointFromCoords(target);
+        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+      } else {
+        map.setCenter(target);
+      }
+      marker = new kakao.maps.Marker({
+        map, position: target, title: focusedInstitution.name,
+        image: compactMarkerImage(kakao, mapColors, focusedInstitution.source, true),
+        zIndex: 10, clickable: false,
+      });
+    });
+    return () => {
+      cancelMove();
+      marker?.setMap(null);
+    };
+  }, [focusedInstitution, leftInset, mapColors, mapReady]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;

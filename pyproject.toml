@@ -23,4 +23,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "retriever_lost_found.web" = ["static/*"]
-"retriever_lost_found.search" = ["synonyms.json"]
+"retriever_lost_found.search" = ["synonyms.json", "item_kinds.json"]

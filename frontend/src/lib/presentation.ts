@@ -25,13 +25,14 @@ export function institutionLocationIds(scope: Institution[]) {
 
 export type CategoryKind = "bag" | "cap" | "buds" | "wallet" | "phone" | "card" | "box";
 
-// PRD 4.5 — 6개 분류는 상위 분류명이 정확히 일치할 때만 구분하고, 그 밖은 기타(box)로 둔다.
+// PRD 4.5 — 분류명이 정확히 일치할 때만 그림을 고르고, 그 밖은 기타(box)로 둔다.
+// 2026-11-17 전체 물품 확대로 의류·전자기기에 신발·태블릿 등이 들어오므로 모자·이어폰 그림은 하위분류까지 본다.
 export function categoryKind(rawCategory?: string): CategoryKind {
-  const parent = String(rawCategory || "").split(">")[0].trim();
+  const [parent = "", child = ""] = String(rawCategory || "").split(">").map(part => part.trim());
+  if (parent === "의류") return child === "모자" ? "cap" : "box";
+  if (parent === "전자기기") return child === "무선이어폰" ? "buds" : "box";
   return ({
     "가방": "bag",
-    "의류": "cap",
-    "전자기기": "buds",
     "지갑": "wallet",
     "휴대폰": "phone",
     "카드": "card",

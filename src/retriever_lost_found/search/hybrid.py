@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from threading import BoundedSemaphore
 import logging
 import math
 from time import monotonic
 from typing import Any
 
-from .text import levenshtein_ratio
 from . import synonyms
 from .synonyms import ALIASES
 
@@ -20,11 +20,6 @@ _semantic_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="semantic"
 _semantic_slots = BoundedSemaphore(4)
 _search_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="found-items")
 _search_slots = BoundedSemaphore(4)
-# PRD 4.5 — fixed, corpus-reviewed expressions; original records stay untouched.
-KINDS = (("카드지갑", "지갑", "장지갑", "반지갑", "머니클립"),
-         ("휴대폰", "핸드폰", "스마트폰", "아이폰"),
-         ("이어폰", "에어팟", "버즈"), ("모자", "썬캡", "캡모자"),
-         ("가방", "백팩", "배낭"), ("카드", "신용", "체크카드", "교통카드"))
 
 
 def search_text(text: str) -> str:
@@ -32,34 +27,24 @@ def search_text(text: str) -> str:
 
 
 def query_text(text: str) -> str:
-    """Correct only an unambiguous one-edit query word against the small item vocabulary.
+    """PRD 4.5 — 검색어 정리: 대소문자·특수문자 전처리와 동의어 대표어만 맞춘다.
 
-    The work depends on query length, never the number of found items.
+    2026-11-21 김성현 결정으로 자동 오타 보정은 뺐다. 옛 6종 22단어에 한 글자 차이만 고쳐
+    '스마트키'를 '스마트폰'으로 바꾸는 오보정이 생겼다. 오타는 따로 잡지 않는다.
     """
-    vocabulary = {word for group in KINDS for word in group}
-    words = synonyms.normalize_text(text, query=True).split()
-    for index, word in enumerate(words):
-        if len(word)<3 or any(term in word for term in vocabulary):
-            continue
-        candidates = [term for term in vocabulary if abs(len(term)-len(word))<=1
-                      and levenshtein_ratio(word, term)>=1-1/max(len(word),len(term))-1e-9]
-        if len(candidates)==1:
-            words[index] = candidates[0]
-    return " ".join(words)
+    return synonyms.normalize_text(text, query=True)
 
 
-def query_kinds(query: str) -> list[tuple[str, ...]]:
+def query_kinds(query: str) -> list[str]:
+    """검색어(또는 물품 글)가 가리키는 물건 종류 이름. 종류 목록은 item_kinds.json(분류 21개 기준)이다."""
     names = synonyms.kind_names(query)
-    groups = [group for name, group in zip(synonyms.KIND_NAMES, KINDS) if name in names]
-    # Keep the reviewed descriptive hints used by the existing search path.
-    remaining = query.replace(" ", "")
+    kinds = [name for name in synonyms.KIND_NAMES if name in names]
     # 명시한 종류가 있으면 이를 우선한다. '블루투스'만으로 이어폰을 단정하지 않는다.
-    if not groups:
-        if any(word in remaining for word in ("귀에끼", "귀에넣", "귀에착용")):
-            groups.append(KINDS[2])
-        if any(word in remaining for word in ("돈을넣", "현금을넣")):
-            groups.append(KINDS[0])
-    return groups
+    if not kinds:
+        compact = query.replace(" ", "")
+        kinds = [name for name, phrases in synonyms.KIND_HINTS.items()
+                 if any(phrase in compact for phrase in phrases)]
+    return kinds
 
 
 def _description_kinds(item: dict, normalized_document: str | None):
@@ -70,7 +55,7 @@ def _description_kinds(item: dict, normalized_document: str | None):
     return query_kinds(search_text(str(item.get("search_text") or "")))
 
 
-def supports_kind(item: dict, wanted: list[tuple[str, ...]], query: str,
+def supports_kind(item: dict, wanted: list[str], query: str,
                   *, normalized_document: str | None = None) -> bool:
     # 자유 설명의 잘못된 '아이폰' 표기가 명확한 이어폰 이름을 뒤집지 않게 한다.
     primary = search_text(str(item.get("item_name") or ""))
@@ -87,7 +72,7 @@ def supports_kind(item: dict, wanted: list[tuple[str, ...]], query: str,
             return False
     if not wanted or any(group in groups for group in wanted):
         return True
-    if KINDS[1] in wanted and groups == [KINDS[2]]:
+    if "휴대폰" in wanted and groups == ["이어폰"]:
         return False
     # 한 행에 함께 보관된 다른 물품이 설명에 명시된 경우는 보존한다.
     if description_groups is None:
@@ -107,8 +92,50 @@ def _tokens(normalized_text: str) -> list[str]:
     )]
 
 
+def candidate_terms(query: str) -> tuple[set[str], set[str]]:
+    """PRD 4.5 — 포함 검사(키워드 후보 조회)에 보낼 (포함 단어, 독립 1글자 단어).
+
+    `query`는 query_text()를 거친 검색어다. 포함 검사는 BM25가 점수를 줄 물품을 먼저 버리지 않는다.
+    """
+    kinds = query_kinds(query)
+    if kinds:
+        # 종류어가 있으면 종류 표현만 쓴다. 색 같은 속성만 맞는 물품은 supports_kind가 어차피 0점을 준다.
+        # 종류 표현에는 Supabase 분류명이 들어 있어 '귀금속 > 시계' 같은 분류 경로로도 통과한다.
+        # 1글자 종류어(책·옷)는 정규화가 붙여 쓴 말을 나눠 새로 만들 수 있으므로 strpos로 넓게 보낸다.
+        terms, words = synonyms.kind_candidate_terms(set(kinds)), set()
+    else:
+        terms = {term[2:] for term in tokenize(query)} | synonyms.expanded_terms(query)
+        # BM25는 1글자 검색어를 조각 없이 독립 단어(w:키)로만 비교한다. 사전 단어나 대표어가 아니면
+        # 정규화로 새로 생기지 않으므로, 원문에서 앞뒤가 글자·숫자가 아닐 때만 통과시켜도 결과가 같다.
+        canonical = {name for _, name in synonyms.ALIASES}
+        words = {word for word in search_text(query).split() if len(word) == 1
+                 and not synonyms.is_known_word(word) and word not in canonical}
+    terms = {term.lower() for term in terms if term.strip()} - words
+    # 짧은 단어가 이미 들어 있는 긴 단어(지갑 ⊂ 장지갑)는 결과를 바꾸지 않으므로 빼서 비교 횟수를 줄인다.
+    return {term for term in terms if not any(other != term and other in term for other in terms)}, words
+
+
+def _standalone(text: str, word: str) -> bool:
+    start = text.find(word)
+    while start >= 0:
+        end = start + len(word)
+        if (start == 0 or not text[start - 1].isalnum()) and (end == len(text) or not text[end].isalnum()):
+            return True
+        start = text.find(word, start + 1)
+    return False
+
+
+def candidate_matches(text: str, terms: set[str], words: set[str]) -> bool:
+    """keyword_found_item_candidates(20261121120000)와 같은 포함 판정. text는 DB search_text(소문자 원문)다."""
+    return any(term in text for term in terms) or any(_standalone(text, word) for word in words)
+
+
 class SearchDeadlineExceeded(RuntimeError):
-    pass
+    failure_reason = "timeout"
+
+
+class SearchBusy(SearchDeadlineExceeded):
+    failure_reason = "busy"
 
 
 def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0):
@@ -117,8 +144,8 @@ def search_with_deadline(client, query, location_ids, embedding_client=None, *, 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
     """
     if not _search_slots.acquire(blocking=False):
-        raise SearchDeadlineExceeded("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
-    future = _search_pool.submit(search_found_items, client, query, location_ids, embedding_client, offset=offset)
+        raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
+    future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids, embedding_client, offset=offset)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -133,8 +160,7 @@ def keyword_scores(items: list[dict[str, Any]], query: str, *, timings: dict | N
     kinds = query_kinds(query)
     terms = set(tokenize(query))
     # Small, reviewed kind synonyms also retrieve descriptive phrases such as cash storage.
-    for group in kinds:
-        name = next(name for name, legacy in zip(synonyms.KIND_NAMES, KINDS) if legacy == group)
+    for name in kinds:
         terms.update(tokenize(" ".join(synonyms.KIND_TERMS[name])))
     texts = [search_text(item.get("search_text") or " ".join(
         str(item.get(field) or "") for field in ("item_name", "raw_category_name", "color_name", "description")
@@ -170,15 +196,12 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         vector_future = _semantic_pool.submit(embedding_client.embed,query,timeout=min(semantic_budget,4.0))
         vector_future.add_done_callback(lambda _: _semantic_slots.release())
     kinds = query_kinds(query)
-    names = {name for name, group in zip(synonyms.KIND_NAMES, KINDS) if group in kinds}
-    # PRD 4.1/4.5: one scoped RPC; literal type expressions also recover aliases
-    # absent from the legacy DB kind_mask. Attribute-only hits cannot widen it.
-    terms = synonyms.kind_candidate_terms(names) if kinds else (
-        {term[2:] for term in tokenize(query)} | synonyms.expanded_terms(query)
-    )
+    # PRD 4.1/4.5: one scoped RPC without the DB kind_mask filter. Literal type
+    # expressions from synonyms.json do the kind gate, including aliases the
+    # mask never knew. Attribute-only hits cannot widen it.
+    terms, words = candidate_terms(query)
     if hasattr(client,"fetch_candidate_bundle"):
-        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),kind_terms=None,
-                                               timeout=1.8)
+        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
         items,count = bundle["items"],bundle.get("candidate_count")
     else:
         items = client.fetch_items(location_ids)
@@ -202,8 +225,14 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         try:
             vector = vector_future.result(timeout=max(0,min(started+semantic_budget,deadline-0.1)-monotonic()))
             status = "ok"
-        except (RuntimeError,TimeoutError):
+        except (RuntimeError,TimeoutError) as error:
+            # PRD 5 — Report fallback without logging the query or provider payload.
+            from ..agent_diagnostics import record
+            record("embedding.fallback", error=error, stage="embedding", final_status="fallback")
             vector_future.cancel()
+    if embedding_client is not None and vector_future is None:
+        from ..agent_diagnostics import record
+        record("embedding.fallback", stage="embedding", reason="busy", final_status="fallback")
     query_norm = math.sqrt(math.sumprod(vector,vector)) if vector is not None else 0
     by_id = {int(item["id"]):item for item in items if int(item["id"]) in lexical}
     scored = {}

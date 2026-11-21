@@ -27,19 +27,9 @@ from typing import Any
 from ..search import hybrid, synonyms
 
 
-def candidate_terms(query: str) -> set[str]:
-    """`search_found_items`가 키워드 후보 RPC에 넘기는 것과 같은 검색어 묶음."""
-    query = hybrid.query_text(query)
-    kinds = hybrid.query_kinds(query)
-    if kinds:
-        names = {name for name, group in zip(synonyms.KIND_NAMES, hybrid.KINDS) if group in kinds}
-        return synonyms.kind_candidate_terms(names)
-    return {term[2:] for term in hybrid.tokenize(query)} | synonyms.expanded_terms(query)
-
-
-def _has_candidate_term(search_text: str, terms: set[str]) -> bool:
-    # keyword_found_item_candidates — term <> '' and strpos(search_text, lower(term)) > 0
-    return any(term and term.lower() in search_text for term in terms)
+def candidate_terms(query: str) -> tuple[set[str], set[str]]:
+    """`search_found_items`가 키워드 후보 RPC에 넘기는 것과 같은 (포함 단어, 독립 1글자 단어)."""
+    return hybrid.candidate_terms(hybrid.query_text(query))
 
 
 # 동의어 사전에서 조건으로 쓰는 분류. 카드 상품은 "티머니 카드"/"교통카드 티머니"처럼 표기에 따라
@@ -106,8 +96,10 @@ def meets_conditions(search_text: str, conditions: dict[str, list[str]]) -> bool
 
 def search_judge(query: str, candidates: list[dict[str, Any]]) -> list[tuple[dict[str, Any], float]]:
     """설계 3.2 — matching.SimilarityJudge. 후보는 반경·출처·커서로 이미 좁혀져 있다(공간 1차 필터)."""
-    terms = candidate_terms(query)
-    pool = [item for item in candidates if _has_candidate_term(str(item.get("search_text") or ""), terms)]
+    terms, words = candidate_terms(query)
+    # keyword_found_item_candidates와 같은 포함 판정(PRD 4.5 — 검색 화면과 같은 후보).
+    pool = [item for item in candidates
+            if hybrid.candidate_matches(str(item.get("search_text") or ""), terms, words)]
     if not pool:
         return []
     scores = hybrid.keyword_scores(pool, hybrid.query_text(query))

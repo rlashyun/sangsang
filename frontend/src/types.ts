@@ -113,7 +113,8 @@ export interface AgentResponse {
   search_attempts: { query: string }[];
   recommended_item_ids: number[];
   matches: AgentMatches | null;
-  error: { message: string } | null;
+  trace_id?: string;
+  error: { message: string; code?: string; retryable?: boolean } | null;
 }
 
 export type AgentTurn =
@@ -124,6 +125,6 @@ export type AgentTurn =
 
 export type AgentEvent =
   | { type: "run.started"; session_id: string; run_id: string }
-  | { type: "scope.updated"; radius_m: number; previous_radius_m?: number; institution_ids: number[] }
-  | { type: "tool.started"; tool: string; attempt?: number }
+  | { type: "scope.updated"; radius_m: number; previous_radius_m?: number; expansion_reason?: "no_matches" | "no_institutions"; institution_ids: number[] }
+  | { type: "tool.started"; tool: string; attempt?: number; is_rewrite?: boolean }
   | { type: "run.finished"; response: AgentResponse };

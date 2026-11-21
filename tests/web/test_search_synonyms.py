@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from retriever_lost_found.search.hybrid import keyword_scores, query_kinds, query_text, search_found_items, search_text
+from retriever_lost_found.search.hybrid import candidate_matches, keyword_scores, query_kinds, query_text, search_found_items, search_text
 
 
 @pytest.mark.parametrize(("source", "expected"), [
@@ -87,13 +87,12 @@ def test_kind_retrieval_does_not_expand_into_generic_phrase_components():
 
 
 def test_new_subtypes_and_ambiguous_pouches_have_the_right_kinds():
-    from retriever_lost_found.search.hybrid import KINDS
-    assert query_kinds("비니") == [KINDS[3]]
-    assert query_kinds("버킷햇") == [KINDS[3]]
-    assert query_kinds("카드홀더") == [KINDS[0]]
-    assert query_kinds("카드지갑") == [KINDS[0]]
-    assert query_kinds("갤럭시 버즈") == [KINDS[2]]
-    assert set(query_kinds("파우치")) == {KINDS[0], KINDS[4]}
+    assert query_kinds("비니") == ["모자"]
+    assert query_kinds("버킷햇") == ["모자"]
+    assert query_kinds("카드홀더") == ["지갑"]
+    assert query_kinds("카드지갑") == ["지갑"]
+    assert query_kinds("갤럭시 버즈") == ["이어폰"]
+    assert set(query_kinds("파우치")) == {"지갑", "가방"}
 
 
 def test_bm25_uses_the_same_brand_dictionary_without_mutating_source():
@@ -106,7 +105,7 @@ def test_bm25_uses_the_same_brand_dictionary_without_mutating_source():
 
 
 class ScopedLiteralCandidates:
-    """Mirror the existing RPC: kinds gate ignores terms; None uses literal OR."""
+    """Mirror the RPC: location scope + literal OR over terms, no DB kind_mask."""
     def __init__(self):
         self.items = [
             {"id": 1, "storage_location_id": 7, "item_name": "루이비똥", "search_text": "루이비똥"},
@@ -117,14 +116,14 @@ class ScopedLiteralCandidates:
         ]
         self.requests = []
 
-    def fetch_candidate_bundle(self, locations, terms, *, kind_terms, timeout):
+    def fetch_candidate_bundle(self, locations, terms, *, timeout, word_terms=()):
         assert locations == [7]
-        self.requests.append((terms, kind_terms))
+        self.requests.append(terms)
         # These fixtures deliberately have no legacy kind_mask. New synonyms
         # must not disappear before Python can normalize or score them.
-        items = [] if kind_terms else [
+        items = [
             item for item in self.items if item["storage_location_id"] in locations
-            and any(term.lower() in item["search_text"].lower() for term in terms)
+            and candidate_matches(item["search_text"].lower(), {term.lower() for term in terms}, set(word_terms))
         ]
         return {"items": items, "candidate_count": None}
 
@@ -141,9 +140,49 @@ def test_synonyms_survive_the_real_candidate_gate_and_keep_location_scope(query,
     results, _, _ = search_found_items(client, query, [7])
     assert {row["id"] for row in results} == set(expected)
     assert len(client.requests) == 1
-    terms, kinds = client.requests[0]
+    terms = client.requests[0]
     if "비니" in query:
         assert "검정" not in terms  # Color alone must not broaden kind retrieval.
+
+
+class AllCategoryCandidates(ScopedLiteralCandidates):
+    """PRD 4.5 (2026-11-21) — 기존 6개 분류 밖 물품도 같은 후보 조회 경로를 탄다."""
+    def __init__(self):
+        super().__init__()
+        self.items = [
+            {"id": 11, "storage_location_id": 7, "item_name": "썬글라스", "search_text": "썬글라스"},
+            {"id": 12, "storage_location_id": 7, "item_name": "보조베터리", "search_text": "보조베터리"},
+            {"id": 13, "storage_location_id": 7, "item_name": "검정 휴대폰", "search_text": "검정 휴대폰"},
+            {"id": 14, "storage_location_id": 7, "item_name": "수모", "search_text": "수모"},
+            {"id": 15, "storage_location_id": 7, "item_name": "블랙장우산", "search_text": "블랙장우산"},
+            {"id": 16, "storage_location_id": 7, "item_name": "흰색 장우산", "search_text": "흰색 장우산"},
+        ]
+
+
+@pytest.mark.parametrize(("query", "expected"), [
+    ("선글라스", 11), ("휴대용 보조배터리", 12), ("휴대폰", 13), ("수영모자", 14),
+])
+def test_new_category_spellings_survive_the_candidate_gate(query, expected):
+    # BM25 bigram(휴대 등)으로 다른 물품이 함께 후보에 들 수는 있지만, 표기가 다른 정답이 1위여야 한다.
+    results, _, _ = search_found_items(AllCategoryCandidates(), query, [7])
+    assert results and results[0]["id"] == expected
+
+
+def test_holder_word_is_not_a_phone_and_typos_are_not_corrected():
+    # '휴대용'은 '휴대폰'과 한 글자 차이지만 휴대폰 종류로 좁혀지면 안 된다(보조배터리 종류다).
+    assert query_text("휴대용 보조배터리") == "휴대용 보조배터리"
+    assert query_kinds(query_text("휴대용 보조배터리")) == ["보조배터리"]
+    # PRD 4.5 (2026-11-21) — 오타는 따로 잡지 않는다.
+    assert query_text("휴대퐁") == "휴대퐁"
+    assert query_kinds(query_text("휴대퐁")) == []
+
+
+def test_colors_unify_beside_registered_new_category_items_only():
+    assert search_text("블랙장우산") == "검정 장우산"
+    assert search_text("붉은 우산") == "빨강 우산"
+    assert search_text("브라운 면도기") == "브라운 면도기"
+    scores = keyword_scores(AllCategoryCandidates().items, "검정 장우산")
+    assert scores[15] > scores.get(16, 0)
 
 
 def test_embedding_receives_the_canonical_query_not_the_expanded_dictionary():
