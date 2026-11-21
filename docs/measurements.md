@@ -50,6 +50,13 @@
     - 상세 200건: 약 136ms(read 293).
     - 합계 728ms(read 5,065). 이전 TOAST 저장 때 같은 형태(상세 500건) 쿼리는 1,116ms(read 5,212)였다.
     - 바로 다시 실제 함수 `semantic_found_item_candidates`로 부르면 50ms(hit 7,898, read 8).
+  - **짧은 글자 열 행 안 복귀(마이그레이션 `20261121200000`, PR #92 병합 후, 14:04 UTC 완료).** 병합으로 `toast_tuple_target=4000`이 적용되고 `keyword_rerank_vectors`가 삭제된 것을 확인한 뒤 `inline_embedding_storage.sql` 2단계를 돌렸다.
+    - 6만 id씩 13구간(첫 구간 21473~81472는 41,018행)을 `content_hash || ''`, `embedded_input || ''`로 다시 썼다. 구간당 WAL은 약 200~300MB였다.
+    - 4구간 뒤와 9구간 뒤에 VACUUM을 한 번씩 돌려 죽은 행 공간을 재사용하게 했다. 첫 VACUUM에서 이미 TOAST가 1,494MB → 92MB로 잘렸다(파일 뒤쪽이 비어 있었다).
+    - WAL 폴더는 1,760MB에서 시작해 최대 2,864MB였다. 체크포인트 뒤 2,128MB로 내려갔다. 아카이브 실패 0, 실행 중 다른 쿼리 0이었다.
+    - 끝난 뒤 616,318행 모두 `content_hash`·`embedded_input`·`embedding`이 TOAST 0건이다. 마지막 `vacuum (analyze)` 뒤 TOAST 0바이트, 힙 2,206MB(이전 1,664MB), 색인 89MB, 표 전체 2,334MB(이전 3,286MB), DB 4,788MB → 3,836MB였다.
+    - 힙에는 죽은 행을 치운 빈 공간이 남아 있다. 앞으로 쓰는 행이 이 공간을 다시 쓴다. 파일 크기까지 줄이려면 `VACUUM FULL`(표 잠금, 표 크기만큼 여유 디스크와 WAL 필요)이 필요해 하지 않았다.
+    - 속도(EXPLAIN ANALYZE BUFFERS, 운영, 1회, 서울역 1km, 질의는 물품 21473 벡터, 상세 200건): `semantic_found_item_candidates` 698ms(hit 6,499, read 1,058). 행 이동 직후 728ms와 같은 수준이다.
 - **원본 임베딩 테이블 이름 변경 사고(운영, 마이그레이션 밖).** `found_item_embeddings_bge_m3`가 `original_embeddings`로 이름이 바뀌어 있었다(10:01 UTC 발견). 함수 본문은 이름으로 참조하므로 `refresh_search_vector`가 컴파일 오류(42704)를 냈다. 이 함수를 부르는 `found_items` 트리거 때문에 물품 INSERT/UPDATE가 모두 실패하는 상태였다. 사용자 요청으로 원래 이름으로 되돌렸고(`alter table ... rename`) 함수가 다시 컴파일되는 것을 확인했다. 오전 임베딩 실행(00:37~00:38 UTC, 3,252건)은 변경 전이라 정상이었다. 변경 시각과 그 사이 실패한 쓰기는 확인하지 못했다.
 
 ## 반경 전체 의미 검색 — 1·2비트 양자화 속도와 디스크 사고 — 2026-11-21 KST
