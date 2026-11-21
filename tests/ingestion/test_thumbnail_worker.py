@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from threading import Barrier, Lock
 
 from retriever_lost_found.thumbnails.worker import dispatch_thumbnails, process_pending, run_pass
 
@@ -49,6 +50,31 @@ def test_worker_obeys_task_limit():
     store = FakeStore([task(1, "ok"), task(2, "ok")])
     assert run_pass(store, FakeStorage(), limit=1, sleep=lambda _: None)["processed"] == 1
     assert len(store.tasks) == 1
+
+
+def test_two_photos_are_processed_concurrently_and_completed():
+    barrier = Barrier(2, timeout=3)
+    lock = Lock()
+    active = 0
+    maximum = 0
+
+    class ConcurrentStorage(FakeStorage):
+        def create(self, item_id, url):
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            barrier.wait()
+            with lock:
+                active -= 1
+            return "key"
+
+    store = FakeStore([task(1, "ok"), task(2, "ok")])
+    result = run_pass(store, ConcurrentStorage(), sleep=lambda _: None)
+    assert maximum == 2
+    assert result["processed"] == 2
+    assert result["failed"] == 0
+    assert len([name for name, _ in store.calls if name == "thumbnail_finish"]) == 2
 
 
 def test_process_does_not_run_a_second_worker():
