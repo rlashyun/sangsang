@@ -191,6 +191,33 @@ class SupabaseFoundItemClient:
             raise RuntimeError("검색 벡터 응답 형식이 올바르지 않습니다.") from None
         return rows
 
+    def fetch_semantic_items(self, location_ids: list[int], vector, *, timeout: float,
+                             min_similarity: float = 0.6, limit: int = 100, rescore: int = 500):
+        """PRD 4.1, 4.5 — 반경 전체 의미 검색(마이그레이션 one_bit_semantic_search).
+
+        DB가 1비트 해밍 거리로 rescore건을 고르고 원본 halfvec 코사인으로 다시 매겨
+        min_similarity 이상 상위 limit건만 돌려준다. 점수는 원본 코사인 그대로다.
+        """
+        values = [float(value) for value in vector]
+        if len(values) != 1024 or not all(math.isfinite(value) for value in values):
+            raise ValueError("질의 벡터 형식이 올바르지 않습니다.")
+        rows = self._search_rpc("semantic_found_item_candidates", {
+            "p_location_ids": _unique_location_ids(location_ids),
+            "p_query": "[" + ",".join(f"{value:.6g}" for value in values) + "]",
+            "p_min": min_similarity, "p_limit": limit, "p_rescore": rescore}, timeout)
+        try:
+            if not isinstance(rows, list) or len(rows) > limit:
+                raise ValueError
+            for row in rows:
+                detail = row["detail"]
+                row["similarity"] = float(row["similarity"])
+                if (int(detail["id"]) != int(row["item_id"]) or detail.get("storage_location_id") not in location_ids
+                        or not math.isfinite(row["similarity"])):
+                    raise ValueError
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise RuntimeError("의미 검색 응답 형식이 올바르지 않습니다.") from None
+        return rows
+
     def _search_rpc(self, name: str, payload: dict, timeout: float):
         if timeout <= 0:
             raise RuntimeError("검색 시간이 초과되었습니다. 범위를 좁혀 다시 검색해주세요.")

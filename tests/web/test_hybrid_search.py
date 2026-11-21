@@ -332,3 +332,62 @@ def test_embedding_uses_stored_model_and_provider():
         body = json.loads(opener.return_value.open.call_args.args[0].data)
         assert body["model"] == "baai/bge-m3"
         assert body["provider"] == {"only": ["deepinfra"], "allow_fallbacks": False}
+
+
+# PRD 4.5 — 2026-11-21 확정안: 1비트 후보 → 원본 재채점 의미 검색 + 0.75·BM25 + 0.25·정규화 코사인.
+class SemanticItems(FakeItems):
+    def __init__(self, rows=(), error=None):
+        self.rows, self.error, self.calls = list(rows), error, []
+
+    def fetch_semantic_items(self, ids, vector, **kwargs):
+        self.calls.append(kwargs)
+        if self.error:
+            raise self.error
+        return self.rows
+
+
+def test_semantic_search_adds_items_the_keyword_step_missed():
+    extra = {"id": 9, "storage_location_id": 7, "item_name": "반지갑", "image_url": None}
+    client = SemanticItems([{"item_id": 9, "similarity": 0.8, "detail": extra}])
+    rows, _, status = search_found_items(client, "지갑", [7], FakeEmbedding())
+    assert status == "ok" and {r["id"] for r in rows} == {1, 2, 9}
+    assert client.calls[0]["min_similarity"] == 0.6 and client.calls[0]["rescore"] == 500
+    semantic_only = next(r for r in rows if r["id"] == 9)
+    assert semantic_only["match_score"] == pytest.approx(0.25 * (0.8 - 0.6) / 0.4)
+
+
+def test_semantic_only_items_need_the_threshold_and_the_kind_gate():
+    rows = [{"item_id": 8, "similarity": 0.59, "detail": {"id": 8, "storage_location_id": 7, "item_name": "카드지갑"}},
+            {"item_id": 9, "similarity": 0.9, "detail": {"id": 9, "storage_location_id": 7, "item_name": "검정 우산"}},
+            {"item_id": 10, "similarity": 0.9, "detail": {"id": 10, "storage_location_id": 999, "item_name": "지갑"}}]
+    results, _, _ = search_found_items(SemanticItems(rows), "지갑", [7], FakeEmbedding())
+    assert {r["id"] for r in results} == {1, 2}
+
+
+def test_semantic_search_runs_even_without_keyword_matches():
+    extra = {"id": 9, "storage_location_id": 7, "item_name": "머니클립"}
+    rows, _, status = search_found_items(SemanticItems([{"item_id": 9, "similarity": 0.7, "detail": extra}]),
+                                         "청록색 돈집게", [7], FakeEmbedding())
+    assert status == "ok" and [r["id"] for r in rows] == [9]
+
+
+def test_semantic_rpc_failure_keeps_keyword_rerank():
+    rows, _, status = search_found_items(SemanticItems(error=RuntimeError("db")), "지갑", [7], FakeEmbedding())
+    assert status == "ok" and {r["id"] for r in rows} == {1, 2}
+
+
+def test_semantic_rpc_sends_scope_vector_and_rescore_count():
+    client = SupabaseFoundItemClient("https://test.supabase.co", "test-key")
+    detail = {"id": 1, "storage_location_id": 7}
+    with patch("retriever_lost_found.integrations.supabase._request_json",
+               return_value=[{"item_id": 1, "similarity": 0.7, "detail": detail}]) as call:
+        rows = client.fetch_semantic_items([7, 7], [0.5] * 1024, timeout=1)
+    request = call.call_args.args[0]
+    body = json.loads(request.data)
+    assert request.full_url.endswith("/rest/v1/rpc/semantic_found_item_candidates")
+    assert body["p_location_ids"] == [7] and body["p_rescore"] == 500 and body["p_limit"] == 100
+    assert body["p_min"] == 0.6 and body["p_query"].startswith("[0.5,") and rows[0]["similarity"] == 0.7
+    with patch("retriever_lost_found.integrations.supabase._request_json",
+               return_value=[{"item_id": 1, "similarity": 0.7, "detail": {**detail, "storage_location_id": 9}}]):
+        with pytest.raises(RuntimeError):
+            client.fetch_semantic_items([7], [0.5] * 1024, timeout=1)
