@@ -105,6 +105,10 @@ export interface AgentResponse {
   message: string;
   conditions: {
     place: AgentPlace | null;
+    places?: AgentPlace[];
+    place_operation?: "add" | "replace" | "set" | null;
+    pending_place_queries?: string[];
+    selecting_place_query?: string | null;
     item_query: string | null;
     radius_m: number | null;
     institution_ids: number[];
@@ -122,7 +126,9 @@ export type AgentTurn =
   | { type: "message"; text: string; changing_place: boolean; visible_item_ids: number[] }
   | { type: "select_place"; candidate_id: string }
   | { type: "select_point"; latitude: number; longitude: number; name?: string; address?: string }
-  | { type: "change_radius"; radius_m: number };
+  | { type: "change_radius"; radius_m: number }
+  | { type: "add_place" | "cancel_place_selection" | "skip_place" }
+  | { type: "replace_place" | "remove_place"; place_target: number };
 
 export type AgentEvent =
   | { type: "run.started"; session_id: string; run_id: string }

@@ -16,8 +16,8 @@ from starlette.concurrency import run_in_threadpool
 
 from ..integrations.agent_model import OpenRouterAgentModel
 
-from .agent_conversation import ITEM_QUESTION, Conversation, ItemDetails, Model, confirm_place, respond_to_message, search_conversation
-from .agent_search import Institution, PlaceCandidate, SearchPage
+from .agent_conversation import ITEM_QUESTION, PLACE_ITEM_QUESTION, Conversation, ItemDetails, Model, PlaceSelectionError, advance_place_selection, confirm_place, edit_places, respond_to_message, search_conversation
+from .agent_search import Institution, PlaceCandidate, SearchPage, resolve_institution_scope
 from .agent_store import AgentStore, MemoryAgentStore
 from ..agent_diagnostics import trace_id, start_trace, record, failure_fields
 
@@ -31,12 +31,13 @@ class Payload(BaseModel):
 
 
 class Turn(Payload):
-    type: Literal["message", "select_place", "select_point", "change_radius", "end"]
+    type: Literal["message", "select_place", "select_point", "change_radius", "end", "add_place", "replace_place", "remove_place", "cancel_place_selection", "skip_place"]
     request_id: str = Field(min_length=1, max_length=80)
     session_id: str | None = Field(default=None, max_length=80)
     revision: int | None = Field(default=None, ge=0)
     text: str | None = Field(default=None, min_length=1, max_length=1000)
     changing_place: bool = False
+    place_target: int | None = Field(default=None, ge=1, le=3)
     visible_item_ids: list[int] = Field(default_factory=list, max_length=10)
     candidate_id: str | None = Field(default=None, min_length=1, max_length=200)
     radius_m: Literal[1000, 1500, 2000] | None = None
@@ -94,6 +95,9 @@ def _restore(data: dict) -> Session:
     state = dict(data.pop("state"))
     state["candidates"] = tuple(PlaceCandidate(**place) for place in state["candidates"])
     state["confirmed"] = PlaceCandidate(**state["confirmed"]) if state["confirmed"] else None
+    state["places"] = tuple(PlaceCandidate(**place) for place in state.get("places", ()))
+    state["batch_places"] = tuple(PlaceCandidate(**place) for place in state.get("batch_places", ()))
+    state["pending_place_queries"] = tuple(state.get("pending_place_queries", ()))
     state["recent"] = tuple(tuple(pair) for pair in state["recent"])
     state["item_details"] = ItemDetails(**state["item_details"])
     data["scope"] = tuple(data["scope"])
@@ -104,6 +108,10 @@ def _restore(data: dict) -> Session:
 def _conditions(session: Session) -> dict:
     return {"conditions": {
         "place": asdict(session.state.confirmed) if session.state.confirmed else None,
+        "places": [asdict(place) for place in session.state.selected_places()],
+        "place_operation": session.state.place_operation,
+        "pending_place_queries": list(session.state.pending_place_queries),
+        "selecting_place_query": session.state.place_query if session.state.place_operation else None,
         "item_query": session.state.item_query, "radius_m": session.radius_m,
         "institution_ids": list(session.scope),
     }, "place_candidates": [asdict(place) for place in session.state.candidates]}
@@ -283,14 +291,40 @@ def create_agent_router(
                     scope, radius, manual_radius = (), None, None
                     result = {"status": "ended", "message": "대화를 마쳤어요."}
                 elif not session.cancelled.is_set():
-                    if turn.type == "message":
+                    place_query = None
+                    places_changed = False
+                    if turn.type == "skip_place":
+                        state = advance_place_selection(state)
+                        if state.place_operation is not None:
+                            place_query = state.place_query
+                            result = {"status": "awaiting_place_selection", "message": ""}
+                        else:
+                            result = {"status": "ready_to_search"} if state.confirmed and state.item_query else {
+                                "status": "awaiting_clarification", "message": ITEM_QUESTION if state.confirmed else "어디서 잃어버렸어요?",
+                            }
+                    elif turn.type in ("add_place", "replace_place", "remove_place", "cancel_place_selection"):
+                        # PRD 4.3-A — UI와 LLM 명령은 같은 서버 검증을 거친다.
+                        state = edit_places(state, turn.type, turn.place_target)
+                        if turn.type in ("add_place", "replace_place"):
+                            result = {"status": "awaiting_place_clarification", "message":
+                                      "추가할 장소를 알려주세요." if turn.type == "add_place" else "변경할 장소를 알려주세요."}
+                        elif state.place_operation is not None:
+                            places_changed = True
+                            result = {"status": "awaiting_place_selection" if state.candidates else "no_place_candidates",
+                                      "message": f"이어서 ‘{state.place_query}’ 위치를 확인해 주세요."}
+                        else:
+                            if turn.type == "remove_place":
+                                scope = ()
+                            result = {"status": "ready_to_search"} if state.confirmed and state.item_query else {
+                                "status": "awaiting_clarification", "message": ITEM_QUESTION if state.confirmed else "어디서 잃어버렸어요?",
+                            }
+                    elif turn.type == "message":
                         def deferred_places(query: str) -> Sequence[PlaceCandidate]:
                             # Place lookup progress is streamed below, before doing real I/O.
                             nonlocal place_query
                             place_query = query
                             return ()
 
-                        place_query = None
                         visible_by_id = {item_id: session.items[item_id] for item_id in turn.visible_item_ids if item_id in session.items}
                         missing_ids = [item_id for item_id in turn.visible_item_ids if item_id not in visible_by_id and item_id > 0]
                         if missing_ids and scope and find_items_by_id:
@@ -315,8 +349,13 @@ def create_agent_router(
                         prior_place = state
                         state = reply.state
                         # PRD 4.3-A — Reopening selection can invalidate a confirmed place with the same search text.
-                        if state.place_query != prior_place.place_query or (prior_place.confirmed and not state.confirmed):
+                        legacy_place_change = turn.changing_place and prior_place.confirmed and not state.confirmed
+                        query_changed = state.place_query != prior_place.place_query
+                        places_changed = state.selected_places() != prior_place.selected_places()
+                        if legacy_place_change or (state.place_operation is None and query_changed and not places_changed):
                             manual_radius = radius = None
+                            scope = ()
+                        if places_changed:
                             scope = ()
                         result = {"status": reply.status, "message": reply.message}
                         if reply.decision is not None:
@@ -361,24 +400,10 @@ def create_agent_router(
                                     result = {"status": "ready_to_search"}
                             if result["status"] == "answered":
                                 state = replace(state, recent=(*state.recent, (turn.text, result["message"]))[-4:])
-                        if place_query is not None:
-                            yield line({"type": "tool.started", "tool": "places"})
-                            if session.cancelled.is_set():
-                                raise RunCancelled
-                            try:
-                                candidates = tuple(find_places(place_query))
-                            except RuntimeError:
-                                yield line({"type": "tool.failed", "tool": "places"})
-                                raise
-                            yield line({"type": "tool.completed", "tool": "places"})
-                            state = replace(state, candidates=candidates)
-                            if candidates:
-                                result = {"status": "awaiting_place_selection", "message": "지도에 표시한 장소가 맞나요?"}
-                            state = replace(state, recent=(*state.recent[:-1], (turn.text, result["message"])))
                     elif turn.type == "select_place":
                         state, pending = confirm_place(state, turn.candidate_id)
                         result = {"status": "ready_to_search"} if pending else {
-                            "status": "awaiting_clarification", "message": ITEM_QUESTION,
+                            "status": "awaiting_clarification", "message": PLACE_ITEM_QUESTION if len(state.selected_places()) < 3 else ITEM_QUESTION,
                         }
                     elif turn.type == "select_point":
                         # 지도에서 직접 고른 지점은 후보 조회 없이 바로 확정 장소가 된다.
@@ -394,17 +419,48 @@ def create_agent_router(
                         if pending:
                             result = {"status": "ready_to_search"}
                         else:
-                            result = {"status": "awaiting_clarification", "message": ITEM_QUESTION}
+                            result = {"status": "awaiting_clarification", "message": PLACE_ITEM_QUESTION if len(state.selected_places()) < 3 else ITEM_QUESTION}
                             state = replace(state, recent=(*state.recent, ("지도에서 위치를 골랐어요.", result["message"]))[-4:])
                     else:
                         manual_radius = turn.radius_m
                         result = {"status": "ready_to_search"}
 
+                    # PRD 4.3-A — 확정 뒤에도 남은 장소 후보를 차례로 조회하고 마지막에만 검색한다.
+                    if turn.type in ("select_place", "select_point") and state.place_operation is not None:
+                        place_query = state.place_query
+                        result = {"status": "awaiting_place_selection", "message": ""}
+                    if place_query is not None:
+                        yield line({"type": "tool.started", "tool": "places"})
+                        if session.cancelled.is_set():
+                            raise RunCancelled
+                        try:
+                            candidates = tuple(find_places(place_query))
+                        except RuntimeError:
+                            yield line({"type": "tool.failed", "tool": "places"})
+                            raise
+                        yield line({"type": "tool.completed", "tool": "places"})
+                        state = replace(state, candidates=candidates)
+                        if state.place_operation is not None:
+                            prefix = "이어서" if turn.type in ("select_place", "select_point", "skip_place") else "먼저"
+                            message = f"{prefix} ‘{place_query}’ 위치를 확인해 주세요." if candidates else (
+                                f"‘{place_query}’ 장소를 찾지 못했어요. 다시 알려주시거나 건너뛰어 주세요."
+                            )
+                        else:
+                            message = "지도에 표시한 장소가 맞나요?" if candidates else result["message"]
+                        result = {"status": "awaiting_place_selection" if candidates else "no_place_candidates", "message": message}
+                        state = replace(state, recent=(*state.recent, (turn.text or "장소 확인", message))[-4:])
+
+                    actions = None
                     if result["status"] == "ready_to_search":
                         actions = search_conversation(
                             state, model=call_model, get_institutions=get_institutions,
                             search_items=lambda ids, query: search_items(ids, query, None), radius_m=manual_radius,
                         )
+                    elif state.confirmed is not None and (result["status"] == "awaiting_clarification" or places_changed or turn.type in ("select_place", "select_point", "skip_place")):
+                        # PRD 4.3-A — 장소 확정 직후 물품 입력 전에도 기관과 반경을 표시한다.
+                        actions = resolve_institution_scope(state.confirmed, get_institutions=get_institutions,
+                                                            search_centers=state.selected_places(), radius_m=radius)
+                    if actions is not None:
                         while not session.cancelled.is_set():
                             event = next(actions, None)
                             if event is None:
@@ -421,9 +477,13 @@ def create_agent_router(
                             else:
                                 state = event.pop("state")
                                 result = event
+                    if not state.selected_places() and state.place_operation is None:
+                        scope, radius, manual_radius = (), None, None
                 completed_work = True
             except RunCancelled:
                 result = {"status": "cancelled", "message": "검색을 취소했어요."}
+            except PlaceSelectionError as error:
+                result = {"status": "error", "message": str(error), "error": _error("invalid_place", str(error))}
             except Exception as error:
                 fields = failure_fields(error)
                 record("turn.failed", started=started, error=error, stage=stage, final_status="error")
@@ -460,6 +520,10 @@ def create_agent_router(
                     "trace_id": server_trace_id, "message": "", "search_attempts": [], "recommended_item_ids": [], "matches": None, "error": None,
                     "conditions": {
                         "place": asdict(session.state.confirmed) if session.state.confirmed else None,
+                        "places": [asdict(place) for place in session.state.selected_places()],
+                        "place_operation": session.state.place_operation,
+                        "pending_place_queries": list(session.state.pending_place_queries),
+                        "selecting_place_query": session.state.place_query if session.state.place_operation else None,
                         "item_query": session.state.item_query, "radius_m": session.radius_m,
                         "institution_ids": list(session.scope),
                     },

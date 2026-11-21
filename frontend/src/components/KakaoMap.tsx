@@ -417,7 +417,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     const map = mapRef.current;
     clustererRef.current.clear();
 
-    if (!selectedPlace) {
+    if (!selectedPlace && !searchCenters.length) {
       if (institutionMarkersRef.current.length) {
         clustererRef.current.addMarkers(institutionMarkersRef.current);
       }
@@ -433,13 +433,13 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     )).filter(Boolean);
     if (nearbyMarkers.length) clustererRef.current.addMarkers(nearbyMarkers);
     searchMarkersRef.current.forEach(({ marker, place, number }) => {
-      marker.setMap(place === selectedPlace ? map : null);
+      marker.setMap(!selectedPlace || place === selectedPlace ? map : null);
       marker.setImage(place === selectedPlace
         ? placePreviewMarkerImage(kakao, mapColors)
         : compactMarkerImage(kakao, mapColors, "partner", false, number));
     });
 
-  }, [countsAvailable, institutions, mapColors, mapReady, onPlaceSelect, places, placeNumbers, selectedPlace, visibleInstitutions]);
+  }, [countsAvailable, institutions, mapColors, mapReady, onPlaceSelect, places, placeNumbers, searchCenters, selectedPlace, visibleInstitutions]);
 
   useEffect(() => {
     const map = mapRef.current;
