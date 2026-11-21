@@ -73,6 +73,8 @@ GET /api/found-items?location_ids=...[&cursor=등록일:id]   ← q가 없을 �
 
 **2026-11-21 텍스트 검색 확정(PRD 4.5)** — 질의 임베딩 뒤 `semantic_found_item_candidates`가 반경 안 전체 물품을 1비트 벡터(`found_item_search_vectors_1bit`) 해밍 거리로 비교해 500건을 고르고, 원본 `found_item_embeddings_bge_m3` half 벡터로 코사인을 다시 계산해 0.60 이상 상위 200건을 준다. 의미 점수는 이 결과에서만 나오며, 키워드 상위 200건 벡터를 따로 읽어 서버에서 재정렬하는 단계는 없앴다(`keyword_rerank_vectors`는 `20261121200000`에서 지웠다). 최종 점수는 `0.75×BM25 + 0.25×(cos−0.60)/0.40`. 키워드 결과는 모두 유지하고 의미 결과도 종류 충돌 검사를 거친다. 검색용 원본 사본 `found_item_search_vectors`는 지웠고, 원본 임베딩 열은 TOAST 대신 행 안에 저장한다(`storage plain`, 기존 행은 `supabase/maintenance/inline_embedding_storage.sql`로 나눠 옮긴다). 벡터를 행 안에 두면 행이 약 2.26KB라 짧은 글자 열이 TOAST로 밀려나므로 `toast_tuple_target = 4000`으로 행 전체를 행 안에 둔다(`20261121200000`). 임베딩 저장·물품 위치 변경 때 `refresh_search_vector`가 1비트 표를 갱신한다. 원본 임베딩 테이블 이름은 바꾸지 않는다(함수 본문이 이름으로 참조한다).
 
+**2026-11-22 Gemini Embedding 2 전환 1단계(PRD 4.5)** — `20261122100000_gemini2_embeddings`는 저장소만 만든다. 앱 검색·일일 동기화(크론 임베딩)·BGE 경로(`refresh_search_vector`·`sync_search_document`)는 바꾸지 않는다. `found_item_embeddings_gemini2`(halfvec 1024, 처음부터 `storage plain`·`toast_tuple_target = 4000`)와 `found_item_search_vectors_gemini2_1bit`를 로컬 적재 도구가 `upsert_gemini2_embeddings`(200건씩)로 채운다. 물품 입력은 `title: none | text: {마스킹한 embedding_input}`이고, `image_url`이 실제 사진(기본 이미지 `img02_no_img.gif`가 아님)이면 같은 입력에 사진을 넣어 벡터 1개를 만든다. 사진을 받지 못한 물품은 글만으로 먼저 저장하고 나중에 글+사진으로 덮어쓴다. `embedded_input`·`content_hash`는 BGE 표처럼 원문과 그 sha256이고, 사진은 원본 URL·원본 바이트 sha256을 함께 둔다. `semantic_found_item_candidates_gemini2`(기본 0.525)는 검색 전환 단계 전까지 부르지 않는다. BGE 표는 Gemini 적재를 마친 뒤 지운다.
+
 ### 보관기관 매칭 (수집 시)
 
 ```
