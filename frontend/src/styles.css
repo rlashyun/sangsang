@@ -102,6 +102,12 @@
   background: var(--color-bg-page);
 }
 
+/* PRD 4.3-A — 확정 장소별 변경·제거와 최대 세 곳 추가. */
+.agent-selected-places { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.agent-selected-places li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.agent-selected-places li > span { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
+.agent-place-queue { margin: 4px 0; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+
 :root[data-theme="warm-ivory"] {
   --color-bg-page: #f3eadc;
   --color-bg-surface: #fffaf2;

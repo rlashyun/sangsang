@@ -150,8 +150,10 @@ export function AgentSearchApp() {
   }, []);
 
   const conditions = response?.conditions;
-  const currentPlace = confirmingPlace ?? (placeChanging ? null : conditions?.place ?? null);
-  const canAttachPhotos = Boolean(conditions?.place) && !placeChanging && !confirmingPlace;
+  const selectedPlaces = conditions?.places ?? (conditions?.place ? [conditions.place] : []);
+  const choosingPlace = Boolean(conditions?.place_operation) || Boolean(response?.place_candidates.length);
+  const currentPlace = confirmingPlace ?? (choosingPlace || placeChanging ? null : conditions?.place ?? null);
+  const canAttachPhotos = Boolean(conditions?.place) && !choosingPlace && !placeChanging && !confirmingPlace;
   const placeName = currentPlace?.name;
   const placeAddress = currentPlace?.address;
   const placeLatitude = currentPlace?.latitude;
@@ -163,7 +165,9 @@ export function AgentSearchApp() {
       phone: "", category: "", url: "",
     }
   ), [placeName, placeAddress, placeLatitude, placeLongitude]);
-  const searchCenters = useMemo(() => selectedPlace ? [selectedPlace] : [], [selectedPlace]);
+  // PRD 4.4 — 물품 단서만 바뀐 턴에서는 같은 장소 목록의 지도 화면을 유지한다.
+  const centersKey = JSON.stringify(selectedPlaces);
+  const searchCenters = useMemo(() => (JSON.parse(centersKey) as AgentPlace[]).map(mapPlace), [centersKey]);
   const candidates = response?.place_candidates;
   const numberedPlaces = useMemo(() => (candidates ?? []).map((candidate, index) => ({
     id: candidate.candidate_id, number: index + 1, place: mapPlace(candidate),
@@ -177,10 +181,10 @@ export function AgentSearchApp() {
   const institutionIds = pendingScope?.institution_ids ?? (confirmingPlace ? undefined : conditions?.institution_ids);
   const scopeReady = !confirmingPlace || pendingScope !== null;
   const visibleInstitutions = useMemo(() => {
-    if (!selectedPlace) return institutions;
+    if (!searchCenters.length && !selectedPlace) return institutions;
     const scope = new Set(institutionIds);
     return institutions.filter(row => row.storage_location_id !== undefined && scope.has(row.storage_location_id));
-  }, [institutions, institutionIds, selectedPlace]);
+  }, [institutions, institutionIds, selectedPlace, searchCenters]);
   const institutionIndex = useMemo(() => new Map(institutions.flatMap(row =>
     row.storage_location_id === undefined ? [] : [[row.storage_location_id, row] as const])), [institutions]);
   const onMapPlaceSelect = useCallback((place: Place) => {
@@ -432,15 +436,8 @@ export function AgentSearchApp() {
     input.current?.focus();
   }
 
-  function startPlaceChange() {
-    hideFollowup();
-    setPlaceChanging(true);
-    setSelectedInstitution([]);
-    setTab("chat");
-    setMessages(current => [...current, {
-      author: "agent", text: "새 장소를 알려주세요. 장소를 입력하거나 지도에서 보관기관 핀을 두 번 눌러 고를 수 있어요.",
-    }]);
-    input.current?.focus();
+  function startPlaceChange(placeTarget = selectedPlaces.length) {
+    void submit({ type: "replace_place", place_target: placeTarget });
   }
 
   function send(event: FormEvent) {
@@ -540,7 +537,7 @@ export function AgentSearchApp() {
     ? `보관기관 ${visibleInstitutions.length.toLocaleString("ko-KR")}곳`
     : "등록된 기관 없음";
   const mapBadge = currentPlace
-    ? `${currentPlace.name} 기준 ${radiusKilometersLabel(mappedRadius)}`
+    ? `${searchCenters.length > 1 ? `${searchCenters.length}개 장소` : currentPlace.name} 기준 ${radiusKilometersLabel(mappedRadius)}`
       + (scopeReady && institutionsLoaded ? ` · ${mapInstitutionSummary}` : "")
     : institutionsLoaded ? "숫자를 누르면 확대 · 핀을 누르면 기관 정보" : "확대하면 개별 기관을 볼 수 있어요";
   const submittedQuery = response?.search_attempts.at(-1)?.query ?? conditions?.item_query ?? "";
@@ -566,10 +563,26 @@ export function AgentSearchApp() {
     </header>
     <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
       <section className={`agent-panel${drawerOpen ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
-        {(conditions?.item_query || currentPlace || pagePlaces.length > 0 || placeChanging) && <dl className="agent-summary">
-          <div><dt>장소</dt><dd>{currentPlace?.name || "선택 대기 중"}</dd>
-            {currentPlace && <button type="button" disabled={busy} onClick={startPlaceChange}>장소 변경</button>}
-            {placeChanging && <button type="button" disabled={busy} onClick={() => setPlaceChanging(false)}>취소</button>}</div>
+        {(conditions?.item_query || conditions?.place_operation || selectedPlaces.length > 0 || currentPlace || pagePlaces.length > 0 || placeChanging) && <dl className="agent-summary">
+          <div><dt>장소</dt><dd>
+            {selectedPlaces.length ? <ul className="agent-selected-places" aria-label="선택한 장소">
+              {selectedPlaces.map((place, index) => <li key={`${place.latitude}:${place.longitude}`}>
+                <span title={place.address}>{place.name}</span>
+                <button type="button" disabled={busy} aria-label={`${place.name} 변경`} onClick={() => startPlaceChange(index + 1)}>변경</button>
+                <button type="button" disabled={busy} aria-label={`${place.name} 제거`}
+                  onClick={() => void submit({ type: "remove_place", place_target: index + 1 })}>제거</button>
+              </li>)}
+            </ul> : "선택 대기 중"}
+            {selectedPlaces.length > 0 && selectedPlaces.length < 3 && !conditions?.place_operation &&
+              <button type="button" disabled={busy} onClick={() => void submit({ type: "add_place" })}>장소 추가</button>}
+            {conditions?.place_operation && <>
+              <p className="agent-place-queue" role="status">{conditions.selecting_place_query && `확인 중 · ${conditions.selecting_place_query}`}
+                {Boolean(conditions.pending_place_queries?.length) && ` · 다음 ${conditions.pending_place_queries?.join(", ")}`}</p>
+              <button type="button" disabled={busy} onClick={() => void submit({ type: "skip_place" })}>이 장소 건너뛰기</button>
+              <button type="button" disabled={busy}
+                onClick={() => void submit({ type: "cancel_place_selection" })}>장소 선택 취소</button>
+            </>}
+          </dd></div>
           <div><dt>물건</dt><dd>{conditions?.item_query || "입력 대기 중"}</dd>
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
