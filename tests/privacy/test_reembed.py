@@ -10,7 +10,7 @@ from retriever_lost_found.privacy.reembed import plan_candidates, run_reembed
 
 CUTOFF = "2026-11-20T18:50:00+09:00"
 MIGRATION = (
-    Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "20261121151000_replace_masked_embeddings.sql"
+    Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "20261121211000_replace_masked_embeddings.sql"
 )
 
 ROWS = [

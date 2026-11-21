@@ -102,6 +102,12 @@
   background: var(--color-bg-page);
 }
 
+/* PRD 4.3-A — 확정 장소별 변경·제거와 최대 세 곳 추가. */
+.agent-selected-places { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.agent-selected-places li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.agent-selected-places li > span { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
+.agent-place-queue { margin: 4px 0; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+
 :root[data-theme="warm-ivory"] {
   --color-bg-page: #f3eadc;
   --color-bg-surface: #fffaf2;
@@ -1533,6 +1539,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .usage-guide-note strong { color: var(--color-action-text-strong); }
 .usage-guide-note p { font-size: inherit; }
+.usage-guide-daangn { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--color-border-separator); }
+.usage-guide-daangn p { margin-top: 6px; }
 .usage-guide-categories p { margin-top: 6px; }
 .usage-guide-categories ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .usage-guide-categories li {
@@ -1571,13 +1579,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
     white-space: nowrap;
   }
   .usage-guide-action p { margin-bottom: 0; }
-}
-@media (min-width: 761px) {
-  .usage-guide-steps > .usage-guide-card {
-    display: grid;
-    grid-template-rows: subgrid;
-    grid-row: span 3;
-  }
 }
 @media (min-width: 761px) and (max-height: 780px) {
   .usage-guide-header { padding-block: 11px; }
@@ -2021,6 +2022,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 /* PRD 4.3-A · 4.4 — 대화 패널을 기존 지도 위에 놓고 모바일에서는 지도 위쪽을 열어 둔다. */
 .agent-shell { --search-panel-width: min(450px, calc(48vw - 24px)); --agent-drawer-width: calc(var(--search-panel-width) * .85); }
 .agent-panel {
+  --agent-panel-padding: 14px;
   position: relative;
   z-index: 5;
   display: flex;
@@ -2029,7 +2031,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   height: calc(100% - 2 * var(--layout-gutter));
   min-height: 0;
   margin: var(--layout-gutter);
-  padding: 14px;
+  padding: var(--agent-panel-padding);
   gap: 10px;
   overflow: hidden;
   border: 1px solid var(--color-border-panel);
@@ -2051,6 +2053,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   cursor: pointer;
 }
 .agent-result-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; }
+.agent-result-followup { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; }
+.agent-result-followup > p { margin: 0; line-height: 1.6; }
 .agent-action-chip {
   display: inline-flex;
   align-items: center;
@@ -2070,6 +2074,26 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-radius-footer { margin-top: 0; }
 .agent-radius-footer .item-radius-actions { flex-wrap: wrap; }
 .agent-feed { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 9px; padding: 2px; }
+/* PRD 4.3-A — 스크롤은 패널 오른쪽 끝에 얇게, 실제 이동 중에만 표시한다. */
+.agent-feed {
+  --chat-scrollbar-thumb: transparent;
+  margin-right: calc(4px - var(--agent-panel-padding));
+  padding-right: calc(var(--agent-panel-padding) - 2px);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--chat-scrollbar-thumb) transparent;
+}
+.agent-feed.is-scrolling { --chat-scrollbar-thumb: color-mix(in srgb, var(--color-text-secondary) 28%, transparent); }
+@supports selector(::-webkit-scrollbar) {
+  .agent-feed { scrollbar-width: auto; scrollbar-color: auto; }
+  .agent-feed::-webkit-scrollbar { width: 4px; background: transparent; }
+  .agent-feed::-webkit-scrollbar-track { background: transparent; }
+  .agent-feed::-webkit-scrollbar-thumb { border-radius: 4px; background-color: var(--chat-scrollbar-thumb); transition: background-color .18s ease; }
+  .agent-feed::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+}
+/* PRD 4.3-A — 대화는 입력창 위에서 시작해 시간순으로 쌓인다. 넘치면 위로 스크롤한다. */
+.agent-feed::before { content: ""; margin-top: auto; }
+.agent-feed > * { flex-shrink: 0; }
 .agent-bubble {
   align-self: flex-start;
   max-width: 91%;
@@ -2094,7 +2118,31 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-pagination { justify-content: center; margin-block: 4px; }
 .agent-pagination button[aria-current="page"] { background: var(--color-bg-selected); color: var(--color-action-text); font-weight: 700; }
 .agent-candidates, .agent-item-list { display: grid; gap: 7px; padding: 0; margin: 0; list-style: none; }
-.agent-candidates li { display: grid; gap: 4px; }
+.agent-candidates .agent-place-card { display: grid; grid-template-columns: minmax(0, 1fr) 112px; height: 60px; overflow: hidden; border: 1px solid var(--color-border-card); border-radius: 12px; background: var(--color-bg-surface); }
+.agent-place-card.is-selected { border-color: var(--color-action); background: var(--color-bg-selected); }
+.agent-candidates .agent-place-card:hover, .agent-candidates .agent-place-card:focus-within { background: var(--color-bg-selected); }
+.agent-place-card .agent-candidate { min-width: 0; padding-block: 8px; border: 0; border-radius: 0; background: transparent; }
+.agent-place-card .agent-candidate > span:last-child { min-width: 0; }
+.agent-place-card .agent-candidate :is(strong, small) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agent-place-card-action { display: flex; justify-content: flex-end; align-items: center; padding-right: 8px; }
+.agent-place-card-action .agent-place-confirm { min-height: 30px; padding: 5px 8px; font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.agent-place-replies { display: flex; align-self: flex-start; flex-wrap: wrap; gap: 6px; padding-block: 3px; }
+/* PRD 4.3-A — 챗봇 답안처럼 내용 길이에 맞춘 둥근 테두리 버튼. */
+.agent-place-replies .agent-action-chip {
+  justify-content: center;
+  min-height: 32px;
+  padding: 5px 11px;
+  border-radius: 14px;
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.agent-place-replies .agent-place-next { background: var(--color-bg-selected); color: var(--color-action-text); }
+.agent-place-replies .agent-action-chip:hover { background: var(--color-bg-hover); border-color: var(--color-action); }
+@media (max-width: 820px) {
+  .agent-place-replies .agent-action-chip { min-height: 36px; }
+}
 .agent-confirmed-card {
   display: grid;
   align-self: start;
@@ -2121,7 +2169,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   color: var(--color-text-primary);
   cursor: pointer;
 }
-.agent-candidate:hover, .agent-candidate[aria-pressed="true"], .agent-item:hover { background: var(--color-bg-selected); }
+.agent-item:hover { background: var(--color-bg-selected); }
 .agent-candidate > span:first-child { border-radius: 50%; width: 24px; height: 24px; display: grid; place-items: center; flex: none; background: var(--color-bg-selected); color: var(--color-action-text); }
 .agent-candidate strong, .agent-candidate small, .agent-item strong, .agent-item small { display: block; overflow-wrap: anywhere; }
 .agent-candidate small, .agent-item small { color: var(--color-text-secondary); margin-top: 2px; }
@@ -2138,13 +2186,27 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-list-heading { margin-block: 2px 7px; }
 .agent-status { padding: 7px 9px; border-radius: 9px; background: var(--color-bg-hover); }
 .agent-status-error { color: var(--color-error); }
-.agent-compose { display: flex; align-items: center; gap: 7px; padding-top: 8px; border-top: 1px solid var(--color-border-separator); }
+.agent-compose { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border-separator); }
+.agent-compose-row { display: flex; align-items: center; gap: 7px; }
 .agent-compose .agent-photo, .agent-compose .agent-send { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; }
 .agent-compose .agent-photo { background: var(--color-bg-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border-input); border-radius: 10px; }
 .agent-compose .agent-photo:hover { background: var(--color-bg-selected); color: var(--color-action-text); }
 .agent-compose .agent-send { border-radius: 50%; }
 .agent-compose svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .agent-compose input { flex: 1; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--color-border-input); border-radius: 10px; background: var(--color-bg-surface); color: inherit; }
+.agent-photo-draft { min-width: 0; }
+.agent-photo-previews { display: flex; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.agent-photo-previews li { position: relative; flex: none; }
+.agent-photo-previews img { display: block; width: 64px; height: 64px; object-fit: contain; border-radius: 9px; border: 1px solid var(--color-border-card); background: var(--color-bg-hover); }
+.agent-photo-previews button { position: absolute; top: -4px; right: -4px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--color-border-control); border-radius: 50%; background: var(--color-bg-surface); color: var(--color-text-primary); font-size: 17px; line-height: 1; }
+.agent-photo-note, .agent-photo-error { margin: 7px 0 0; font-size: 11px; line-height: 1.5; color: var(--color-text-secondary); }
+.agent-photo-error { color: var(--color-error); }
+.agent-message-text { margin: 0; white-space: pre-wrap; }
+.agent-bubble-with-photos { width: min(260px, 91%); }
+.agent-message-photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 6px; }
+.agent-message-photos img { display: block; width: 100%; height: 160px; object-fit: contain; border-radius: 9px; background: var(--color-bg-surface); }
+.agent-photo-caption { display: block; margin-top: 6px; font-size: 10px; line-height: 1.5; }
+.agent-bubble-with-photos .agent-message-text { margin-top: 6px; }
 .agent-panel button:disabled { opacity: .55; cursor: not-allowed; }
 
 
@@ -2169,11 +2231,36 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   font-size: 13px;
 }
 .agent-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 12px; border-bottom: 1px solid var(--color-border-separator); }
-.agent-drawer-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
-.agent-drawer .agent-item-list { gap: 0; }
-.agent-drawer .agent-item { gap: 8px; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--color-border-separator); border-radius: 0; }
-.agent-drawer .agent-item .item-thumbnail { flex: 0 0 56px; width: 56px; height: 56px; min-height: 0; padding: 3px; border-radius: 12px; }
+.agent-drawer-scope { display: flex; flex: none; min-height: 40px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-border-separator); }
+.agent-drawer-scope > div { min-width: 0; }
+.agent-drawer-scope strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-drawer-scope strong { font-size: 12px; font-weight: 600; }
+.agent-drawer-scope button { flex: none; border: 0; background: transparent; padding: 5px 0; font: inherit; font-size: 11px; color: var(--color-action-text); cursor: pointer; }
+.agent-drawer-body { --agent-item-row-height: 84px; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
+/* PRD 4.3-A — 제목 아래부터 채우고 남은 높이는 결과 행에 고르게 배분한다. */
+.agent-drawer-body > * { flex-shrink: 0; }
+.agent-drawer .agent-item-list { flex: 1; min-height: 0; gap: 0; grid-auto-rows: minmax(var(--agent-item-row-height), 1fr); }
+.agent-drawer .agent-item-list.is-sparse { grid-auto-rows: var(--agent-item-row-height); align-content: start; }
+.agent-drawer .agent-item { height: 100%; gap: 12px; padding: 4px 12px; border: 0; border-bottom: 1px solid var(--color-border-separator); border-radius: 0; }
+/* PRD 4.3-C — 원본은 자르지 않고 고정 영역의 가로·세로 중 먼저 닿는 쪽에 맞춘다. */
+.agent-drawer .agent-item .item-thumbnail { align-self: center; flex: 0 0 72px; width: 72px; height: 72px; min-height: 0; padding: 0; border-radius: 10px; background: var(--color-bg-hover); border-color: var(--color-border-separator); }
+.agent-item .item-thumbnail-visual { height: 100%; aspect-ratio: auto; }
+.agent-item .item-thumbnail-visual img { width: 100%; height: 100%; object-fit: contain; }
+.agent-item .item-thumbnail-visual svg { width: 30px; height: 30px; opacity: .65; }
+.agent-item-copy { flex: 1; min-width: 0; }
+.agent-item .agent-item-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.3; }
+.agent-item-attributes { display: flex; align-items: center; gap: 4px 6px; margin-top: 3px; font-size: 10.5px; color: var(--color-text-secondary); }
+.agent-item-category { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-item-color { padding: 1px 5px; border-radius: 4px; background: var(--color-bg-hover); }
+.agent-item .agent-item-meta { display: flex; align-items: baseline; gap: 4px; margin-top: 4px; font-size: 10.5px; line-height: 1.35; }
+.agent-item-storage { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-item-date { flex: none; white-space: nowrap; }
+.agent-drawer .agent-pagination { flex: none; gap: 6px; margin-top: 8px; }
+.agent-drawer .agent-pagination button { min-width: 28px; min-height: 32px; padding: 4px; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); }
+.agent-drawer .agent-pagination button[aria-current="page"] { background: transparent; color: var(--color-text-primary); font-weight: 700; }
+.agent-drawer .agent-pagination button:hover { color: var(--color-action-text); }
 .agent-drawer .agent-list-heading, .agent-drawer .agent-bubble, .agent-drawer .agent-pagination { margin-inline: 12px; }
+.agent-drawer .agent-pagination { height: 48px; min-height: 48px; flex-wrap: nowrap; margin: 0; padding: 7px 12px; border-top: 1px solid var(--color-border-separator); align-items: center; }
 .agent-drawer .agent-radius-footer { padding: 8px 12px; }
 .agent-drawer .agent-status { flex: none; margin: 0 12px 6px; }
 /* 결과 서랍 손잡이 — 채팅 패널(닫힘) 또는 서랍(열림)의 오른쪽 면에 붙어 열고 닫는다(사용자 선택 시안 A). */
@@ -2245,7 +2332,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .app-shell.agent-shell { --layout-gutter: 9px; height: calc(100dvh - 64px); min-height: 0; overflow: hidden; display: flex; align-items: stretch; justify-content: end; }
   .agent-shell .map-panel, .agent-shell #map { min-height: 0; }
   .agent-shell .map-panel { position: absolute; inset: 0 0 56%; }
-  .agent-panel { width: calc(100% - 2 * var(--layout-gutter)); height: 56%; margin-bottom: var(--layout-gutter); padding: 10px; gap: 6px; }
+  .agent-panel { --agent-panel-padding: 10px; width: calc(100% - 2 * var(--layout-gutter)); height: 56%; margin-bottom: var(--layout-gutter); padding: var(--agent-panel-padding); gap: 6px; }
   .agent-compose input { font-size: 16px; }
   .agent-shell .map-toolbar { bottom: 10px; }
 }

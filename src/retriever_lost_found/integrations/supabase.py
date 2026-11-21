@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import base64
-import struct
 import gzip
 import math
 from http.client import HTTPException
@@ -147,6 +145,31 @@ class SupabaseFoundItemClient:
             "total_count": int(total_count) if total_count is not None else None,
         }
 
+    def add_thumbnails(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """PRD 3.2-2 — 축소본 조회 실패 시 검색 결과는 원본을 그대로 사용한다."""
+        from ..thumbnails.storage import ThumbnailStorage
+
+        ids = sorted({int(row["id"]) for row in rows if row.get("id") and row.get("image_url")})
+        if not ids:
+            return rows
+        query = urllib.parse.urlencode({"select": "item_id,source_url,object_key", "status": "eq.ready",
+                                        "deleted_at": "is.null", "item_id": "in.(" + ",".join(map(str, ids)) + ")"})
+        try:
+            storage = ThumbnailStorage(self.url, self.secret_key)
+            request = urllib.request.Request(f"{self.url}/rest/v1/found_item_thumbnails?{query}",
+                                             headers=_headers(self.secret_key))
+            records = _request_json(request, 0.5, "축소 사진 조회")
+            if not isinstance(records, list):
+                return rows
+            lookup = {(r["item_id"], r["source_url"]): r["object_key"] for r in records}
+            result = []
+            for row in rows:
+                key = lookup.get((row.get("id"), row.get("image_url")))
+                result.append({**row, "thumbnail_url": storage.public_url(key)} if key else row)
+            return result
+        except (RuntimeError, OSError, HTTPException, ValueError, KeyError, TypeError):
+            return rows
+
     def fetch_search_candidates(self, location_ids: list[int]) -> list[dict[str, Any]]:
         """PRD 4.5 — 상세/사진/중복 정규화 텍스트를 순위 계산 전에 전송하지 않는다."""
         return self.fetch_items(location_ids, search_only=True)
@@ -164,31 +187,31 @@ class SupabaseFoundItemClient:
             raise RuntimeError("검색 후보 응답 형식이 올바르지 않습니다.")
         return payload
 
-    def fetch_rerank_items(self, location_ids: list[int], item_ids: list[int], *, timeout: float):
-        ids = sorted(set(int(item_id) for item_id in item_ids))
-        if not ids:
-            return []
-        if len(ids)>200 or any(item_id<=0 for item_id in ids):
-            raise ValueError("재정렬 후보는 최대 200건입니다.")
-        rows = self._search_rpc("keyword_rerank_vectors", {
-            "p_location_ids": _unique_location_ids(location_ids), "p_item_ids": ids}, timeout)
+    def fetch_semantic_items(self, location_ids: list[int], vector, *, timeout: float,
+                             min_similarity: float = 0.6, limit: int = 200, rescore: int = 500):
+        """PRD 4.1, 4.5 — 반경 전체 의미 검색(마이그레이션 one_bit_semantic_search).
+
+        DB가 1비트 해밍 거리로 rescore건을 고르고 원본 halfvec 코사인으로 다시 매겨
+        min_similarity 이상 상위 limit건만 돌려준다. 점수는 원본 코사인 그대로다.
+        """
+        values = [float(value) for value in vector]
+        if len(values) != 1024 or not all(math.isfinite(value) for value in values):
+            raise ValueError("질의 벡터 형식이 올바르지 않습니다.")
+        rows = self._search_rpc("semantic_found_item_candidates", {
+            "p_location_ids": _unique_location_ids(location_ids),
+            "p_query": "[" + ",".join(f"{value:.6g}" for value in values) + "]",
+            "p_min": min_similarity, "p_limit": limit, "p_rescore": rescore}, timeout)
         try:
-            if not isinstance(rows,list):
+            if not isinstance(rows, list) or len(rows) > limit:
                 raise ValueError
             for row in rows:
                 detail = row["detail"]
-                if (int(row["item_id"]) not in ids or int(detail["id"])!=int(row["item_id"])
-                    or detail.get("storage_location_id") not in location_ids):
+                row["similarity"] = float(row["similarity"])
+                if (int(detail["id"]) != int(row["item_id"]) or detail.get("storage_location_id") not in location_ids
+                        or not math.isfinite(row["similarity"])):
                     raise ValueError
-                if row["vector"] is not None:
-                    raw = base64.b64decode(row["vector"].replace("\n",""),validate=True)
-                    values = struct.unpack("!hh1024f",raw)
-                    vector = values[2:]
-                    if values[:2]!=(1024,0) or not all(math.isfinite(v) for v in vector) or not any(vector):
-                        raise ValueError
-                    row["vector"] = vector
-        except (KeyError,TypeError,ValueError,AttributeError,struct.error):
-            raise RuntimeError("검색 벡터 응답 형식이 올바르지 않습니다.") from None
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise RuntimeError("의미 검색 응답 형식이 올바르지 않습니다.") from None
         return rows
 
     def _search_rpc(self, name: str, payload: dict, timeout: float):

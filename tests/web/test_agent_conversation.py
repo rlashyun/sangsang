@@ -56,6 +56,34 @@ def test_conversation_retains_place_and_applies_item_correction():
     assert events[-1]["recommended_item_ids"] == [7]
 
 
+@pytest.mark.parametrize("asks_for", ["item", None])
+def test_known_item_searches_even_when_model_requests_optional_details(asks_for):
+    place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
+    changes = {"kind": "지갑", "color": None, "brand": None, "features": None}
+    model = Mock(return_value={**decision("clarify", asks_for=asks_for,
+        message="지갑의 색상이나 브랜드, 특징을 알려주실 수 있나요?"), "item_changes": changes})
+    turn = respond_to_message(Conversation("강남역", confirmed=place), "지갑이요", model=model, find_places=Mock())
+    assert turn.status == "ready_to_search"
+    assert turn.pending.query == "지갑"
+    assert turn.message == ""
+
+
+def test_missing_item_still_requires_a_question():
+    place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
+    model = Mock(return_value=decision("clarify", asks_for="item", message="어떤 물건인가요?"))
+    turn = respond_to_message(Conversation("강남역", confirmed=place), "잃어버렸어요", model=model, find_places=Mock())
+    assert turn.status == "awaiting_clarification"
+    assert turn.pending is None
+
+
+def test_place_clarification_is_not_bypassed_for_known_item():
+    place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
+    model = Mock(return_value=decision("clarify", asks_for="place", message="어느 역인가요?"))
+    turn = respond_to_message(Conversation("강남역", "지갑", confirmed=place), "다른 역이에요", model=model, find_places=Mock())
+    assert turn.status == "awaiting_clarification"
+    assert turn.pending is None
+
+
 def test_changed_place_requires_confirmation_and_old_candidate_cannot_be_selected():
     old_place = PlaceCandidate("old", "강남역", "", 37.5, 127.03)
     new_place = PlaceCandidate("new", "역삼역", "", 37.5, 127.04)
@@ -151,9 +179,12 @@ def test_invalid_rewrite_keeps_zero_match_response():
     result = list(search_conversation(
         state, model=model, get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
     ))[-1]
-    search.assert_called_once_with((42,), "갈색 지갑")
+    assert [call.args for call in search.call_args_list] == [((42,), "갈색 지갑")] * 3
+    assert [attempt["radius_m"] for attempt in result["search_attempts"]] == [1000, 1500, 2000]
     assert result["status"] == "no_matches"
     assert result["matches"]["total_count"] == 0
+    assert result["message"] == "확정한 범위에서 조건에 맞는 습득물을 찾지 못했어요."
+    assert model.call_count == 1
 
 
 def test_short_reply_to_place_question_remains_a_place_clue():

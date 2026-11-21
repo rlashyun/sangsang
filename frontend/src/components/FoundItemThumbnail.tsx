@@ -5,9 +5,12 @@ import type { FoundItem } from "../types";
 import { CategoryIcon } from "./CategoryIcon";
 
 export function FoundItemThumbnail({ item }: { item: FoundItem }) {
-  const imageUrl = foundItemImageUrl(item.image_url);
+  const originalUrl = foundItemImageUrl(item.image_url);
+  const thumbnailUrl = originalUrl ? foundItemImageUrl(item.thumbnail_url) : null;
   const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [failedThumbnail, setFailedThumbnail] = useState<string | null>(null);
+  const imageUrl = thumbnailUrl && failedThumbnail !== thumbnailUrl ? thumbnailUrl : originalUrl;
   const hasImage = imageUrl !== null && failedUrl !== imageUrl;
   const isLoaded = hasImage && loadedUrl === imageUrl;
   const isLoading = hasImage && !isLoaded;
@@ -20,14 +23,20 @@ export function FoundItemThumbnail({ item }: { item: FoundItem }) {
           <img
             src={imageUrl}
             alt={`${item.item_name || "습득물"} 사진`}
-            // PRD 3.2-2 · 5 — 원본 사진은 보이는 목록 주변에서만 지연 로딩하고 영역을 고정한다.
+            // PRD 3.2-2 · 5 — 축소본 실패 시 원본을 사용하고 지연 로딩과 고정 영역을 유지한다.
             loading="lazy"
             decoding="async"
             width={88}
             height={88}
             className={isLoaded ? "is-loaded" : ""}
             onLoad={() => setLoadedUrl(imageUrl)}
-            onError={() => setFailedUrl(imageUrl)}
+            onError={() => {
+              if (thumbnailUrl && imageUrl === thumbnailUrl && imageUrl !== originalUrl) {
+                setFailedThumbnail(thumbnailUrl);
+              } else {
+                setFailedUrl(imageUrl);
+              }
+            }}
           />
         )}
         {!hasImage && (

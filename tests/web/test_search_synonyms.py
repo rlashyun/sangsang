@@ -127,10 +127,6 @@ class ScopedLiteralCandidates:
         ]
         return {"items": items, "candidate_count": None}
 
-    def fetch_rerank_items(self, locations, item_ids, **kwargs):
-        return [{"detail": item, "vector": None} for item in self.items
-                if item["storage_location_id"] in locations and item["id"] in item_ids]
-
 
 @pytest.mark.parametrize(("query", "expected"), [
     ("루이비통", [1]), ("검정 비니", [2]), ("모자", [2]), ("휴대폰", [3, 5]),

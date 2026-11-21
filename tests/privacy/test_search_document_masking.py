@@ -1,7 +1,7 @@
 """PRD 3.3 · Q5 (2026-11-21 결정 ⓑ) — 검색 문서의 번호 마스킹.
 
 화면에서 가린 번호를 검색어로 맞혀 보지 못하게 search_text의 번호를 가린다. 이름은 검색되게 둔다.
-SQL(20261121150000)은 Python `mask_numbers`와 같은 정규식을 써야 하므로 패턴 문자열을 직접 대조한다.
+SQL(20261121210000)은 Python `mask_numbers`와 같은 정규식을 써야 하므로 패턴 문자열을 직접 대조한다.
 모든 데이터는 합성 픽스처이며 DB·외부 API를 호출하지 않는다(AGENTS.md 7장).
 """
 
@@ -19,7 +19,7 @@ MIGRATION = (
     Path(__file__).resolve().parents[2]
     / "supabase"
     / "migrations"
-    / "20261121150000_mask_search_document_numbers.sql"
+    / "20261121210000_mask_search_document_numbers.sql"
 )
 
 CARD_ITEM = {
