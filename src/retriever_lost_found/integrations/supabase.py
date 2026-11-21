@@ -145,6 +145,31 @@ class SupabaseFoundItemClient:
             "total_count": int(total_count) if total_count is not None else None,
         }
 
+    def add_thumbnails(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """PRD 3.2-2 — 축소본 조회 실패 시 검색 결과는 원본을 그대로 사용한다."""
+        from ..thumbnails.storage import ThumbnailStorage
+
+        ids = sorted({int(row["id"]) for row in rows if row.get("id") and row.get("image_url")})
+        if not ids:
+            return rows
+        query = urllib.parse.urlencode({"select": "item_id,source_url,object_key", "status": "eq.ready",
+                                        "deleted_at": "is.null", "item_id": "in.(" + ",".join(map(str, ids)) + ")"})
+        try:
+            storage = ThumbnailStorage(self.url, self.secret_key)
+            request = urllib.request.Request(f"{self.url}/rest/v1/found_item_thumbnails?{query}",
+                                             headers=_headers(self.secret_key))
+            records = _request_json(request, 0.5, "축소 사진 조회")
+            if not isinstance(records, list):
+                return rows
+            lookup = {(r["item_id"], r["source_url"]): r["object_key"] for r in records}
+            result = []
+            for row in rows:
+                key = lookup.get((row.get("id"), row.get("image_url")))
+                result.append({**row, "thumbnail_url": storage.public_url(key)} if key else row)
+            return result
+        except (RuntimeError, OSError, HTTPException, ValueError, KeyError, TypeError):
+            return rows
+
     def fetch_search_candidates(self, location_ids: list[int]) -> list[dict[str, Any]]:
         """PRD 4.5 — 상세/사진/중복 정규화 텍스트를 순위 계산 전에 전송하지 않는다."""
         return self.fetch_items(location_ids, search_only=True)

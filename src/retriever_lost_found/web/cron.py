@@ -18,6 +18,7 @@ from ..config import read_optional_env_value
 from ..ingestion.collector import SOURCE_CODES
 from ..ingestion.service import SOURCE_ORDER, run_incremental_sync
 from ..embedding.orchestration import dispatch_embeddings, process_pending_embeddings
+from ..thumbnails.worker import dispatch_thumbnails, process_pending as process_pending_thumbnails
 
 
 router = APIRouter(prefix="/api/cron", include_in_schema=False)
@@ -41,7 +42,8 @@ def _authorized(request: Request) -> JSONResponse | None:
 
 
 def _run_source(
-    request: Request, source: Literal["partner", "police"], *, cleanup_expired: bool = True,
+    request: Request, source: Literal["partner", "police"], background_tasks: BackgroundTasks,
+    *, cleanup_expired: bool = True,
 ) -> JSONResponse:
     authorization_error = _authorized(request)
     if authorization_error is not None:
@@ -51,6 +53,7 @@ def _run_source(
     # delivery leaves a pending job for the 11:00/23:00 KST recovery crons (PRD 4.5).
     if result.get("status") != "already_running":
         dispatch_embeddings()
+        background_tasks.add_task(dispatch_thumbnails)
     return JSONResponse(
         status_code=200 if result.get("status") == "succeeded" else 500,
         content=result,
@@ -59,27 +62,27 @@ def _run_source(
 
 
 @router.get("/partner-sync")
-def partner_sync(request: Request) -> JSONResponse:
+def partner_sync(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     """오늘까지 연계기관 등록분을 증분 동기화하고 만료 물품을 정리합니다."""
-    return _run_source(request, "partner")
+    return _run_source(request, "partner", background_tasks)
 
 
 @router.get("/police-sync")
-def police_sync(request: Request) -> JSONResponse:
+def police_sync(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     """오늘까지 경찰관서 등록분을 증분 동기화하고 만료 물품을 정리합니다."""
-    return _run_source(request, "police")
+    return _run_source(request, "police", background_tasks)
 
 
 @router.get("/partner-sync-afternoon")
-def partner_sync_afternoon(request: Request) -> JSONResponse:
+def partner_sync_afternoon(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     """오늘까지 연계기관 등록분을 증분 동기화하며 삭제하지 않습니다."""
-    return _run_source(request, "partner", cleanup_expired=False)
+    return _run_source(request, "partner", background_tasks, cleanup_expired=False)
 
 
 @router.get("/police-sync-afternoon")
-def police_sync_afternoon(request: Request) -> JSONResponse:
+def police_sync_afternoon(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
     """오늘까지 경찰관서 등록분을 증분 동기화하며 삭제하지 않습니다."""
-    return _run_source(request, "police", cleanup_expired=False)
+    return _run_source(request, "police", background_tasks, cleanup_expired=False)
 
 
 @router.post("/embedding-sync")
@@ -102,6 +105,16 @@ def embedding_recovery(request: Request) -> JSONResponse:
     return JSONResponse(status_code=200 if result.get("status") in
                         ("succeeded", "pending", "waiting_or_idle") else 500,
                         content=result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/thumbnail-sync")
+def thumbnail_callback(request: Request, background_tasks: BackgroundTasks) -> JSONResponse:
+    # PRD 5 — 다른 크론과 같은 비밀값 검증을 거친다.
+    authorization_error = _authorized(request)
+    if authorization_error is not None:
+        return authorization_error
+    background_tasks.add_task(process_pending_thumbnails)
+    return JSONResponse(status_code=202, content={"status": "accepted"}, headers={"Cache-Control": "no-store"})
 
 
 def _run_alert_matching(store: AlertStore, *, deadline: float) -> dict[str, Any]:
