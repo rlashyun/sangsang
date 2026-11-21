@@ -151,7 +151,8 @@ def test_invalid_rewrite_keeps_zero_match_response():
     result = list(search_conversation(
         state, model=model, get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
     ))[-1]
-    search.assert_called_once_with((42,), "갈색 지갑")
+    assert [call.args for call in search.call_args_list] == [((42,), "갈색 지갑")] * 3
+    assert [attempt["radius_m"] for attempt in result["search_attempts"]] == [1000, 1500, 2000]
     assert result["status"] == "no_matches"
     assert result["matches"]["total_count"] == 0
 

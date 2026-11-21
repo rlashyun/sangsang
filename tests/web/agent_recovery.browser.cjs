@@ -101,7 +101,7 @@ async (page) => {
     await page.getByRole("button", { name: "다시 시도", exact: true }).click();
     await page.getByRole("button", { name: /1 서울역/ }).click();
     check(JSON.stringify(requests[0]) === JSON.stringify(requests[1]), "response-loss retry must preserve full initial request");
-    await page.getByRole("button", { name: "이 위치 선택하기", exact: true }).click();
+    await page.getByRole("button", { name: "이 장소 선택하기", exact: true }).click();
     await page.getByText("검색 응답이 늦어 중단했어요. 같은 요청을 다시 시도해 주세요.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "다시 시도", exact: true }).click();
     await page.getByText("조건에 맞는 물품이 없어요.", { exact: true }).waitFor();
