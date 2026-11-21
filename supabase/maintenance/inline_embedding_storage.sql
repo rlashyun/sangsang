@@ -32,3 +32,19 @@ from public.found_item_embeddings_bge_m3;
 select pg_size_pretty(pg_relation_size('public.found_item_embeddings_bge_m3')) heap,
        pg_size_pretty(pg_relation_size(reltoastrelid)) toast
 from pg_class where oid = 'public.found_item_embeddings_bge_m3'::regclass;
+
+-- ===== 2단계(마이그레이션 20261121200000_inline_embedding_rows 적용 뒤): TOAST로 밀려난 짧은 글자 되돌리기 =====
+-- toast_tuple_target=4000이면 2.26KB 행은 통째로 행 안에 남는다. 다만 이미 TOAST에 있는 값은 그 행을 다시 써야 돌아온다.
+-- 값을 그대로 넣으면 TOAST 포인터가 재사용되므로 || ''로 새 값을 만들어 넣는다(내용은 같아 해시 검사 제약도 그대로 통과).
+-- 4) 구간 하나씩(:lo < item_id <= :hi). 0)의 확인을 구간마다 반복한다.
+set statement_timeout = '120s';
+update public.found_item_embeddings_bge_m3
+set content_hash = content_hash || '', embedded_input = embedded_input || ''
+where item_id > :lo and item_id <= :hi
+  and (pg_column_toast_chunk_id(content_hash) is not null or pg_column_toast_chunk_id(embedded_input) is not null);
+
+-- 5) 남은 값 확인 → 0이면 VACUUM. TOAST에 살아 있는 값이 없으므로 파일 끝까지 비어 잘려 나간다.
+select count(*) filter (where pg_column_toast_chunk_id(content_hash) is not null
+                          or pg_column_toast_chunk_id(embedded_input) is not null) still_toasted
+from public.found_item_embeddings_bge_m3;
+-- vacuum public.found_item_embeddings_bge_m3;
