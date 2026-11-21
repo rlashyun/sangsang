@@ -29,7 +29,11 @@ create index found_item_thumbnails_pending_idx on public.found_item_thumbnails (
 create table public.thumbnail_backfill_progress (
     singleton boolean primary key default true check (singleton),
     last_id bigint not null default 0,
-    completed boolean not null default false
+    completed boolean not null default false,
+    orphan_item_id bigint not null default 0,
+    orphan_key text not null default '',
+    orphan_completed boolean not null default false,
+    next_scan_at timestamptz not null default now()
 );
 insert into public.thumbnail_backfill_progress default values;
 alter table public.thumbnail_backfill_progress enable row level security;
@@ -73,6 +77,11 @@ begin
     on conflict do nothing;
   end if;
   return new;
+exception when others then
+  -- PRD 5 — 기록 실패는 수집을 막지 않는다. 주기적 전체 대조가 누락을 복구한다.
+  raise warning 'thumbnail enqueue deferred (%)', sqlstate;
+  if tg_op = 'DELETE' then return old; end if;
+  return new;
 end $$;
 
 create trigger found_items_thumbnail_insert after insert on public.found_items
@@ -101,13 +110,53 @@ end $$;
 
 create function public.thumbnail_backfill_next(p_limit integer)
 returns boolean language plpgsql security invoker set search_path = '' as $$
-declare current_id bigint; next_id bigint; done boolean;
+declare
+  progress public.thumbnail_backfill_progress%rowtype;
+  next_id bigint;
+  orphan_id bigint;
+  orphan_key_value text;
 begin
-  select last_id, completed into current_id, done from public.thumbnail_backfill_progress where singleton for update;
-  if done then return true; end if;
-  next_id := public.thumbnail_backfill(current_id, p_limit);
-  update public.thumbnail_backfill_progress set last_id = next_id, completed = (next_id = current_id) where singleton;
-  return next_id = current_id;
+  select * into progress from public.thumbnail_backfill_progress where singleton for update;
+  if progress.completed and progress.orphan_completed then
+    if progress.next_scan_at > now() then return true; end if;
+    progress.last_id := 0;
+    progress.completed := false;
+    progress.orphan_item_id := 0;
+    progress.orphan_key := '';
+    progress.orphan_completed := false;
+  end if;
+  if not progress.completed then
+    next_id := public.thumbnail_backfill(progress.last_id, p_limit);
+    progress.completed := next_id = progress.last_id;
+    progress.last_id := next_id;
+  end if;
+  if not progress.orphan_completed then
+    with batch as materialized (
+      select item_id, object_key from public.found_item_thumbnails
+      where (item_id, object_key) > (progress.orphan_item_id, progress.orphan_key)
+      order by item_id, object_key limit greatest(1, least(p_limit, 500))
+    ), removed as (
+      update public.found_item_thumbnails t set deleted_at = now(), retry_after = now()
+      from batch b where t.item_id = b.item_id and t.object_key = b.object_key
+        and t.deleted_at is null and not exists (select 1 from public.found_items f where f.id = t.item_id)
+      returning t.item_id
+    ) select item_id, object_key into orphan_id, orphan_key_value from batch order by item_id desc, object_key desc limit 1;
+    if orphan_id is null then
+      progress.orphan_completed := true;
+    else
+      progress.orphan_item_id := orphan_id;
+      progress.orphan_key := orphan_key_value;
+    end if;
+  end if;
+  if progress.completed and progress.orphan_completed then
+    progress.next_scan_at := now() + interval '1 day';
+  end if;
+  update public.thumbnail_backfill_progress set
+    last_id = progress.last_id, completed = progress.completed,
+    orphan_item_id = progress.orphan_item_id, orphan_key = progress.orphan_key,
+    orphan_completed = progress.orphan_completed, next_scan_at = progress.next_scan_at
+  where singleton;
+  return progress.completed and progress.orphan_completed;
 end $$;
 
 -- 하나씩 임대해 중복 업로드와 삭제 경합을 방지한다. 작업자가 중단돼도 임대 만료 후 재개한다.
