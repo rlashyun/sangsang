@@ -61,6 +61,38 @@ def test_chat_api_confirms_place_retries_and_pages_without_llm():
     ]
 
 
+def test_expanded_radius_scope_cursor_and_replay_stay_together():
+    model = Mock(side_effect=[
+        {"action": "search", "message": "", "place_query": "강남역", "item_query": "지갑",
+         "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None},
+        {"query": None},
+    ])
+    search = Mock(side_effect=[
+        SearchPage((), 0), SearchPage(({"item_id": 7, "institution_id": 99},), 2, "next"),
+        SearchPage(({"item_id": 8, "institution_id": 42},), 2),
+    ])
+    client = TestClient(create_app(Mock(), "dummy", agent_router=create_agent_router(
+        model=model, find_places=lambda _: [PlaceCandidate("p1", "강남역", "", 37.5, 127.03)],
+        get_institutions=lambda: [Institution(42, 37.5, 127.03), Institution(99, 37.511, 127.03)], search_items=search,
+    )))
+    start = client.post("/api/search-chat/turns", json={"type": "message", "text": "강남역 지갑", "request_id": "expand-start"})
+    first = json.loads(start.text.splitlines()[-1])["response"]
+    request = {"type": "select_place", "candidate_id": "p1", "request_id": "expand-select",
+               "session_id": first["session_id"], "revision": first["revision"]}
+    reply = client.post("/api/search-chat/turns", json=request)
+    events = [json.loads(line) for line in reply.text.splitlines()]
+    result = events[-1]["response"]
+    assert result["conditions"]["radius_m"] == 1500
+    assert result["conditions"]["institution_ids"] == [42, 99]
+    assert result["recommended_item_ids"] == [7]
+    assert any(event.get("expansion_reason") == "no_matches" for event in events)
+    assert json.loads(client.post("/api/search-chat/turns", json=request).text.splitlines()[-1])["response"] == result
+    assert search.call_count == 2
+    page = client.post("/api/search-chat/pages", json={"session_id": result["session_id"], "revision": result["revision"], "cursor": "next"})
+    assert page.json()["matches"]["items"][0]["item_id"] == 8
+    assert search.call_args.args == ((42, 99), "지갑", "next")
+
+
 def test_chat_api_confirms_map_point_before_and_after_item():
     # 지도 더블클릭으로 고른 지점: 물품 없이 먼저 고르면 물품을 묻고, 이어서 물품을 말하면 검색한다.
     model = Mock(side_effect=[

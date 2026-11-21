@@ -130,6 +130,33 @@ def test_inflight_duplicate_and_cancel_on_other_instance_cannot_commit_late_resu
     assert final(b.post('/api/search-chat/turns', json={**request, 'request_id': 'search-again'}))['status'] == 'results'
 
 
+def test_cancelled_zero_match_does_not_expand_or_rewrite():
+    store = MemoryAgentStore()
+    entered, release = Event(), Event()
+
+    def zero_after_wait(*_):
+        entered.set()
+        assert release.wait(5)
+        return SearchPage((), 0)
+
+    search = Mock(side_effect=zero_after_wait)
+    model = Mock(return_value=decision())
+    a = make_client(store, search_items=search, model=model)
+    b = make_client(store)
+    previous = start(a)
+    with ThreadPoolExecutor() as pool:
+        future = pool.submit(a.post, '/api/search-chat/turns', json=select(previous))
+        assert entered.wait(5)
+        row = store.command(previous['session_id'], 'get')
+        assert b.post('/api/search-chat/cancel', json=dict(session_id=previous['session_id'], run_id=row['run_id'])).json()['accepted']
+        release.set()
+        result = final(future.result(5))
+    assert result['status'] == 'cancelled'
+    assert result['conditions'] == previous['conditions']
+    search.assert_called_once()
+    assert model.call_count == 1
+
+
 def test_dead_worker_lease_fences_late_completion_and_expiry():
     now = [100.]
     store = MemoryAgentStore(clock=lambda: now[0])

@@ -81,3 +81,50 @@ def test_failed_search_does_not_retry(pending_search):
         next(events)
     search.assert_called_once()
     rewrite.assert_not_called()
+
+
+def test_zero_matches_expands_until_first_match_and_keeps_final_scope(pending_search):
+    search = Mock(side_effect=[SearchPage((), 0), SearchPage(({"item_id": 7, "institution_id": 99},), 1, "next")])
+    rewrite = Mock(return_value=None)
+    events = list(search_confirmed_place(
+        pending_search, "p1", get_institutions=lambda: [
+            Institution(42, 37.5, 127.03), Institution(99, 37.511, 127.03), Institution(100, 37.516, 127.03),
+        ], search_items=search, rewrite_query=rewrite,
+    ))
+    scopes = [event for event in events if event.get("type") == "scope.updated"]
+    assert [event["radius_m"] for event in scopes] == [1000, 1500]
+    assert scopes[-1]["expansion_reason"] == "no_matches"
+    assert scopes[-1]["previous_radius_m"] == 1000
+    assert [call.args for call in search.call_args_list] == [((42,), "갈색 지갑"), ((42, 99), "갈색 지갑")]
+    assert events[-1]["matches"] == {"items": [{"item_id": 7, "institution_id": 99}], "total_count": 1, "next_cursor": "next"}
+    rewrite.assert_called_once()
+
+
+def test_zero_matches_stops_at_two_kilometers_with_one_rewrite_budget(pending_search):
+    search = Mock(return_value=SearchPage((), 0))
+    rewrite = Mock(return_value="브라운 지갑")
+    events = list(search_confirmed_place(
+        pending_search, "p1", get_institutions=lambda: [Institution(42, 37.5, 127.03)],
+        search_items=search, rewrite_query=rewrite,
+    ))
+    assert [event["radius_m"] for event in events if event.get("type") == "scope.updated"] == [1000, 1500, 2000]
+    assert events[-1]["status"] == "no_matches"
+    assert [event["radius_m"] for event in events[-1]["search_attempts"]] == [1000, 1000, 1500, 2000]
+    rewrite.assert_called_once()
+
+
+def test_expansion_starts_at_requested_radius_and_generator_close_stops_work(pending_search):
+    search = Mock(return_value=SearchPage((), 0))
+    events = search_confirmed_place(
+        pending_search, "p1", get_institutions=lambda: [Institution(42, 37.5, 127.03)],
+        search_items=search, rewrite_query=Mock(return_value=None), radius_m=1500,
+    )
+    scopes = []
+    for event in events:
+        if event.get("type") == "scope.updated":
+            scopes.append(event["radius_m"])
+            if event["radius_m"] == 2000:
+                events.close()
+                break
+    assert scopes == [1500, 2000]
+    search.assert_called_once()

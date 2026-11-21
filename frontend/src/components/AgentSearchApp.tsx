@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AgentRequestError, AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
-import { DEFAULT_SEARCH_RADIUS_METERS, nextSearchRadiusMeters, previousSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
+import { DEFAULT_SEARCH_RADIUS_METERS, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
+import { useChatPhotos, type ChatPhoto } from "../lib/useChatPhotos";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
@@ -13,9 +14,8 @@ import { FoundItemDetail } from "./FoundItemDetail";
 import { KakaoMap } from "./KakaoMap";
 import { NewItemAlert } from "./NewItemAlert";
 import { UsageGuide } from "./UsageGuide";
-import { BellIcon, SearchIcon } from "./ActionIcons";
 
-const ITEM_PAGE_SIZE = AGENT_ITEM_PAGE_SIZE;
+// PRD 4.3-A — 2026-11-21 사용자 피드백: 대화와 확정 버튼의 공간을 확보해 5곳씩 보여준다.
 const PLACE_PAGE_SIZE = 5;
 const TOOL_LABELS: Record<string, string> = {
   places: "장소 후보를 찾고 있어요.",
@@ -23,7 +23,7 @@ const TOOL_LABELS: Record<string, string> = {
   found_items: "습득물을 찾고 있어요.",
 };
 
-type ChatMessage = { author: "user" | "agent"; text: string } | { confirmedPlace: AgentPlace };
+type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[] } | { confirmedPlace: AgentPlace };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
 
@@ -37,14 +37,20 @@ export function AgentSearchApp() {
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos } = useChatPhotos();
+  const photoInput = useRef<HTMLInputElement>(null);
   const [response, setResponse] = useState<AgentResponse | null>(null);
   const [items, setItems] = useState<AgentItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [itemPage, setItemPage] = useState(0);
+  const [itemPageSize, setItemPageSize] = useState(AGENT_ITEM_PAGE_SIZE);
   const [placePage, setPlacePage] = useState(0);
   const [selectedCandidate, setSelectedCandidate] = useState<string | null>(null);
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [progress, setProgress] = useState("");
+  const [revealingReplies, setRevealingReplies] = useState(false);
+  const [followupVisible, setFollowupVisible] = useState(false);
+  const replyTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [pendingScope, setPendingScope] = useState<Scope | null>(null);
   const [confirmingPlace, setConfirmingPlace] = useState<AgentPlace | null>(null);
   const [error, setError] = useState("");
@@ -60,7 +66,9 @@ export function AgentSearchApp() {
   const selectedInstitutionRef = useRef(selectedInstitution);
   selectedInstitutionRef.current = selectedInstitution;
   const [institutionItemIds, setInstitutionItemIds] = useState<number[]>([]);
+  const [institutionMatchCount, setInstitutionMatchCount] = useState<number | null>(null);
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
+  const [focusedInstitution, setFocusedInstitution] = useState<Institution | null>(null);
   const [mapInset, setMapInset] = useState(0);
   // 장소 변경 중: 확정한 장소를 화면에서 비우고 처음처럼 입력·지도 더블클릭으로 고르게 한다.
   const [placeChanging, setPlaceChanging] = useState(false);
@@ -74,6 +82,41 @@ export function AgentSearchApp() {
   const recoveryRequired = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const feed = useRef<HTMLDivElement>(null);
+  const [feedScrolling, setFeedScrolling] = useState(false);
+  const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => replyTimers.current.forEach(clearTimeout), []);
+  useEffect(() => () => {
+    if (scrollIdleTimer.current !== null) clearTimeout(scrollIdleTimer.current);
+  }, []);
+
+  function showFeedScrollbar() {
+    setFeedScrolling(true);
+    if (scrollIdleTimer.current !== null) clearTimeout(scrollIdleTimer.current);
+    scrollIdleTimer.current = setTimeout(() => setFeedScrolling(false), 700);
+  }
+
+  function hideFollowup() {
+    replyTimers.current.forEach(clearTimeout);
+    replyTimers.current = [];
+    setFollowupVisible(false);
+  }
+
+  function revealReplies(replies: ChatMessage[], showFollowup = false) {
+    // PRD 4.3-A — 도착한 답변은 순서대로 표시한 뒤 후속 안내를 보여준다.
+    hideFollowup();
+    setRevealingReplies(true);
+    replies.forEach((reply, index) => {
+      if (index === 0) setMessages(current => [...current, reply]);
+      else replyTimers.current.push(setTimeout(() => setMessages(current => [...current, reply]), index * 300));
+    });
+    replyTimers.current.push(setTimeout(() => {
+      setRevealingReplies(false);
+    }, Math.max(1, replies.length) * 300));
+    if (showFollowup) {
+      replyTimers.current.push(setTimeout(() => setFollowupVisible(true), Math.max(1, replies.length) * 300 + 700));
+    }
+  }
 
   useEffect(() => {
     const load = new AbortController();
@@ -108,6 +151,7 @@ export function AgentSearchApp() {
 
   const conditions = response?.conditions;
   const currentPlace = confirmingPlace ?? (placeChanging ? null : conditions?.place ?? null);
+  const canAttachPhotos = Boolean(conditions?.place) && !placeChanging && !confirmingPlace;
   const placeName = currentPlace?.name;
   const placeAddress = currentPlace?.address;
   const placeLatitude = currentPlace?.latitude;
@@ -161,6 +205,7 @@ export function AgentSearchApp() {
       const sameGroup = groupInScope.length === currentGroup.length
         && groupInScope.every((row, index) => row.storage_location_id === currentGroup[index].storage_location_id);
       if (!sameGroup) {
+        setInstitutionMatchCount(null);
         setInstitutionItemIds([]);
         setSelectedInstitution(groupInScope);
       }
@@ -169,16 +214,41 @@ export function AgentSearchApp() {
   }, [conditions, currentPlace, response?.matches]);
 
   const matchCount = response?.matches?.total_count ?? 0;
-  const pageCount = Math.ceil((cursor ? matchCount : items.length) / ITEM_PAGE_SIZE);
-  const busy = Boolean(progress) || paging;
+  const pageCount = Math.ceil((cursor ? matchCount : items.length) / itemPageSize);
+  const busy = Boolean(progress) || paging || revealingReplies;
   const detail = openItem?.item_id === location.state?.agentItemId ? openItem : null;
   const alertOpen = Boolean(location.state?.agentAlert);
-  const previousRadius = previousSearchRadiusMeters(mappedRadius);
   const nextRadius = nextSearchRadiusMeters(mappedRadius);
+
+  // PRD 4.3-A — 카드 높이를 기준으로 화면에 들어가는 만큼 표시한다.
+  useLayoutEffect(() => {
+    const body = document.querySelector<HTMLElement>(".agent-drawer-body");
+    if (!body) return;
+    const resize = () => {
+      const reserved = 72;
+      const rowHeight = parseFloat(getComputedStyle(body).getPropertyValue("--agent-item-row-height")) || 84;
+      const size = Math.max(1, Math.floor((body.clientHeight - reserved) / rowHeight));
+      setItemPageSize(size);
+      setItemPage(0);
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(body);
+    resize();
+    return () => observer.disconnect();
+  }, [tab, response?.matches, selectedInstitution.length]);
 
   useEffect(() => {
     if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [messages, selectedCandidate]);
+  }, [messages, selectedCandidate, followupVisible, photos.length, photoError]);
+
+  function changePlaceCandidates(page: number) {
+    setPlacePage(page);
+    setSelectedCandidate(null);
+    // PRD 4.3-A — 후보 묶음만 교체하며 대화·검색 조건은 유지한다.
+    requestAnimationFrame(() => {
+      feed.current?.querySelector(".agent-candidates")?.scrollIntoView({ block: "start" });
+    });
+  }
 
   // 채팅·결과 서랍이 가린 지도 왼쪽 폭. 모바일은 지도가 위쪽에 따로 있어 가리는 폭이 없다.
   useLayoutEffect(() => {
@@ -192,14 +262,15 @@ export function AgentSearchApp() {
     return () => window.removeEventListener("resize", measure);
   }, [tab, response?.matches]);
 
-  async function submit(turn: AgentTurn, retry = false) {
-    if (controller.current) return;
+  async function submit(turn: AgentTurn, retry = false, attachedPhotos: ChatPhoto[] = []) {
+    if (controller.current || revealingReplies) return;
     if (!retry && recoveryRequired.current) {
       setError("이전 검색의 처리 결과를 먼저 확인해 주세요. ‘다시 시도’를 누르면 이어서 복구해요.");
       return;
     }
     const request = new AbortController();
     controller.current = request;
+    hideFollowup();
     if (!retry || !retryRequest.current) {
       retryRequest.current = { id: crypto.randomUUID(), session: sessionIdentity.current };
     }
@@ -209,7 +280,7 @@ export function AgentSearchApp() {
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
     if (turn.type === "message" && !retry) {
-      setMessages(current => [...current, { author: "user", text: turn.text }]);
+      setMessages(current => [...current, { author: "user", text: turn.text, photos: attachedPhotos }]);
       setDraft("");
     }
     if (turn.type === "select_place") {
@@ -230,11 +301,17 @@ export function AgentSearchApp() {
         if (event.type === "scope.updated") {
           setPendingScope(event);
           if (event.previous_radius_m !== undefined && event.radius_m > event.previous_radius_m) {
-            setProgress(`보관기관이 없어 반경을 ${radiusKilometersLabel(event.radius_m)}로 넓혔어요.`);
+            if (event.expansion_reason === "no_matches") {
+              const message = `${radiusKilometersLabel(event.previous_radius_m)} 안에 일치하는 물건이 없어 ${radiusKilometersLabel(event.radius_m)}로 넓혀 찾고 있어요.`;
+              setMessages(current => [...current, { author: "agent", text: message }]);
+              setProgress(message);
+            } else {
+              setProgress(`보관기관이 없어 반경을 ${radiusKilometersLabel(event.radius_m)}로 넓혔어요.`);
+            }
           }
         }
         if (event.type === "tool.started") {
-          setProgress(event.attempt === 2 ? "다른 표현으로 한 번 더 찾고 있어요." : TOOL_LABELS[event.tool] || "검색 중이에요.");
+          setProgress(event.is_rewrite ? "다른 표현으로 한 번 더 찾고 있어요." : TOOL_LABELS[event.tool] || "검색 중이에요.");
         }
       }, request.signal, identity.id);
       sessionIdentity.current = result;
@@ -249,8 +326,12 @@ export function AgentSearchApp() {
         // PRD 4.3-A — Show the confirmed location before asking for item details.
         replies.push({ confirmedPlace: result.conditions.place });
       }
-      if (result.message) replies.push({ author: "agent", text: result.message });
-      if (replies.length) setMessages(current => [...current, ...replies]);
+      const completedSearch = (result.status === "results" || result.status === "no_matches") && result.matches !== null;
+      const message = result.status === "results" && (result.matches?.total_count ?? 0) > 0
+        ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
+        : result.message;
+      if (message) replies.push({ author: "agent", text: message });
+      revealReplies(replies, completedSearch);
       if (result.status === "answered") {
         // PRD 4.3 — An informational turn advances the session without replacing results.
         setResponse(current => current ? { ...current, revision: result.revision } : result);
@@ -260,6 +341,7 @@ export function AgentSearchApp() {
           setSelectedCandidate(result.highlight_candidate_id ?? null);
         }
       } else if (result.status !== "cancelled") {
+        setFocusedInstitution(null);
         setPlaceChanging(result.status === "awaiting_place_clarification");
         setResponse(result.status === "ended" ? null : result);
         setItems(result.matches?.items ?? []);
@@ -316,7 +398,7 @@ export function AgentSearchApp() {
 
   async function changePage(page: number) {
     if (!response || controller.current) return;
-    if ((page + 1) * ITEM_PAGE_SIZE <= items.length || !cursor) {
+    if ((page + 1) * itemPageSize <= items.length || !cursor) {
       setItemPage(page);
       return;
     }
@@ -327,7 +409,7 @@ export function AgentSearchApp() {
     let buffered = items;
     let nextCursor: string | null = cursor;
     try {
-      while (nextCursor && buffered.length < (page + 1) * ITEM_PAGE_SIZE) {
+      while (nextCursor && buffered.length < (page + 1) * itemPageSize) {
         const batch = await fetchAgentPage(response.session_id, response.revision, nextCursor, request.signal);
         if (!batch.items.length && batch.next_cursor) throw new Error("다음 결과를 불러오지 못했어요.");
         if (batch.next_cursor === nextCursor) throw new Error("다음 결과를 불러오지 못했어요.");
@@ -336,7 +418,7 @@ export function AgentSearchApp() {
         setItems(buffered);
         setCursor(nextCursor);
       }
-      setItemPage(Math.min(page, Math.max(0, Math.ceil(buffered.length / ITEM_PAGE_SIZE) - 1)));
+      setItemPage(Math.min(page, Math.max(0, Math.ceil(buffered.length / itemPageSize) - 1)));
     } catch (err) {
       if (!request.signal.aborted) setError(err instanceof Error ? err.message : "다음 결과를 불러오지 못했어요.");
     } finally {
@@ -351,6 +433,7 @@ export function AgentSearchApp() {
   }
 
   function startPlaceChange() {
+    hideFollowup();
     setPlaceChanging(true);
     setSelectedInstitution([]);
     setTab("chat");
@@ -362,14 +445,67 @@ export function AgentSearchApp() {
 
   function send(event: FormEvent) {
     event.preventDefault();
-    if (draft.trim()) {
+    if (busy || addingPhotos) return;
+    const text = draft.trim();
+    if (!text && !photos.length) return;
+    if (text) {
       const visibleItemIds = selectedInstitution.length
         ? institutionItemIds
-        : items.slice(itemPage * ITEM_PAGE_SIZE, (itemPage + 1) * ITEM_PAGE_SIZE).map(item => item.item_id);
-      void submit({
-        type: "message", text: draft.trim(), changing_place: placeChanging, visible_item_ids: visibleItemIds,
-      });
+        : items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize).map(item => item.item_id);
+      const turn: AgentTurn = { type: "message", text, changing_place: placeChanging, visible_item_ids: visibleItemIds };
+      if (recoveryRequired.current) {
+        void submit(turn);
+        return;
+      }
+      void submit(turn, false, canAttachPhotos ? takePhotos() : []);
+    } else {
+      if (!canAttachPhotos) {
+        explainPhotoPlaceRequirement();
+        return;
+      }
+      // PRD 4.2 — 사진 첨부만 제공하며 실제 이미지 검색 완료로 처리하지 않는다.
+      const selectedPhotos = takePhotos();
+      setMessages(current => [...current, { author: "user", text: "", photos: selectedPhotos }]);
+      setDraft("");
+      revealReplies([{ author: "agent", text: currentPlace
+        ? "사진을 첨부했어요. 물건의 특징도 글로 알려주세요."
+        : "사진을 첨부했어요. 찾을 장소와 물건의 특징도 글로 알려주세요." }]);
     }
+  }
+
+  function explainPhotoPlaceRequirement() {
+    const text = "사진을 첨부하려면 먼저 잃어버린 장소를 입력하고 선택해 주세요.";
+    setMessages(current => {
+      const last = current.at(-1);
+      if (last && "author" in last && last.author === "agent" && last.text === text) return current;
+      return [...current, { author: "agent", text }];
+    });
+    input.current?.focus();
+  }
+
+  function choosePhotos() {
+    if (!canAttachPhotos) {
+      explainPhotoPlaceRequirement();
+      return;
+    }
+    photoInput.current?.click();
+  }
+
+  function addDraftPhotos(files: File[]) {
+    if (!canAttachPhotos) {
+      explainPhotoPlaceRequirement();
+      return;
+    }
+    if (!busy && !addingPhotos) void addPhotos(files);
+  }
+
+  function pastePhotos(event: ClipboardEvent<HTMLFormElement>) {
+    const files = Array.from(event.clipboardData.items)
+      .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+      .flatMap(item => { const file = item.getAsFile(); return file ? [file] : []; });
+    if (!files.length) return;
+    event.preventDefault();
+    addDraftPhotos(files);
   }
 
   function toggleResults() {
@@ -382,6 +518,9 @@ export function AgentSearchApp() {
   }
 
   function openDetail(item: AgentItem) {
+    // PRD 4.3-C · 4.4 — 물품에 연결된 기관 ID의 검증된 좌표로만 이동한다.
+    const institution = institutionIndex.get(item.institution_id);
+    setFocusedInstitution(institution ? { ...institution } : null);
     setOpenItem(item);
     void navigate(location.pathname + location.search, { state: { agentItemId: item.item_id } });
   }
@@ -409,19 +548,6 @@ export function AgentSearchApp() {
   const daangnSearch = response?.matches && conditions?.place && conditions.item_query
     ? `https://www.daangn.com/kr/search/community/?${new URLSearchParams({ q: `${conditions.place.name} ${conditions.item_query}` })}`
     : null;
-  // PRD 4.2 — 검색 뒤 반경을 바꾸는 버튼은 보고 있는 결과 하단에 둔다.
-  const radiusActions = currentPlace && response?.matches && (previousRadius !== null || nextRadius !== null) && (
-    <div className="item-search-followup agent-radius-footer" aria-label="검색 범위 다시 살펴보기">
-      <div className="item-radius-actions">
-        {previousRadius !== null && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: previousRadius })}>
-          {radiusKilometersLabel(previousRadius)}로 돌아가기
-        </button>}
-        {nextRadius !== null && <button type="button" disabled={busy} onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>
-          {radiusKilometersLabel(nextRadius)}로 넓혀보기
-        </button>}
-      </div>
-    </div>
-  );
   const requestStatus = (progress || paging || error) && <div className={`agent-status${error ? " agent-status-error" : ""}`} role="status">
     <span>{error || (cancelling ? "검색을 취소하고 있어요." : progress) || "다음 결과를 불러오고 있어요."}</span>
     {progress && <button type="button" onClick={() => void cancel()} disabled={!activeRun || cancelling}>취소</button>}
@@ -440,7 +566,7 @@ export function AgentSearchApp() {
     </header>
     <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
       <section className={`agent-panel${drawerOpen ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
-        {(conditions?.item_query || currentPlace || pagePlaces.length > 0) && <dl className="agent-summary">
+        {(conditions?.item_query || currentPlace || pagePlaces.length > 0 || placeChanging) && <dl className="agent-summary">
           <div><dt>장소</dt><dd>{currentPlace?.name || "선택 대기 중"}</dd>
             {currentPlace && <button type="button" disabled={busy} onClick={startPlaceChange}>장소 변경</button>}
             {placeChanging && <button type="button" disabled={busy} onClick={() => setPlaceChanging(false)}>취소</button>}</div>
@@ -448,7 +574,7 @@ export function AgentSearchApp() {
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
-        <div ref={feed} className="agent-feed">
+        <div ref={feed} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
           {messages.length === 0 && <>
             <h2 className="agent-welcome-title">이용 방법</h2>
             <ol className="agent-welcome-steps" aria-label="이용 순서">
@@ -465,63 +591,102 @@ export function AgentSearchApp() {
               <strong>{message.confirmedPlace.name}</strong>
               {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
             </div>
-            : <p key={index} className={`agent-bubble agent-bubble-${message.author}`}>{message.text}</p>)}
-          {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates">
-            {pagePlaces.map(({ id, place, number }) => <li key={id} id={`agent-place-${id}`}>
+            : <div key={index} className={`agent-bubble agent-bubble-${message.author}${message.photos?.length ? " agent-bubble-with-photos" : ""}`}>
+              {Boolean(message.photos?.length) && <>
+                <div className="agent-message-photos">{message.photos?.map((photo, photoIndex) =>
+                  <img key={photo.id} src={photo.url} alt={`첨부한 사진 ${photoIndex + 1}: ${photo.name}`} />)}</div>
+                <small className="agent-photo-caption">사진 첨부 · 사진 검색은 준비 중이에요</small>
+              </>}
+              {message.text && <p className="agent-message-text">{message.text}</p>}
+            </div>)}
+          {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates" aria-label="장소 후보" start={placePage * PLACE_PAGE_SIZE + 1}>
+            {pagePlaces.map(({ id, place, number }) => <li className={`agent-place-card${id === selectedCandidate ? " is-selected" : ""}`} key={id} id={`agent-place-${id}`}>
               <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
                 disabled={busy} onClick={() => setSelectedCandidate(id)}>
-                <span>{number}</span><span><strong>{place.name}</strong><small>{place.address}</small></span>
+                <span>{number}</span><span><strong title={place.name}>{place.name}</strong><small title={place.address}>{place.address}</small></span>
               </button>
-              {id === selectedCandidate && <button type="button" className="agent-place-confirm" disabled={busy}
-                onClick={() => void submit({ type: "select_place", candidate_id: id })}>이 위치 선택하기</button>}
+              <div className="agent-place-card-action">
+                {id === selectedCandidate && <button type="button" className="agent-place-confirm" disabled={busy}
+                  onClick={() => void submit({ type: "select_place", candidate_id: id })}>이 장소 선택하기</button>}
+              </div>
             </li>)}
           </ol>}
-          {numberedPlaces.length > PLACE_PAGE_SIZE && !confirmingPlace && <nav className="agent-pagination" aria-label="장소 후보 페이지">
-            {Array.from({ length: Math.ceil(numberedPlaces.length / PLACE_PAGE_SIZE) }, (_, page) =>
-              <button key={page} type="button" disabled={busy} aria-current={page === placePage ? "page" : undefined}
-                onClick={() => { setPlacePage(page); setSelectedCandidate(null); }}>{page + 1}</button>)}
+          {numberedPlaces.length > PLACE_PAGE_SIZE && !confirmingPlace && <nav className="agent-place-replies" aria-label="장소 후보 더 살펴보기">
+            {placePage > 0 && <button type="button" className="agent-action-chip" disabled={busy}
+              onClick={() => changePlaceCandidates(placePage - 1)}>이전 장소 보기</button>}
+            {(placePage + 1) * PLACE_PAGE_SIZE < numberedPlaces.length && <button type="button" className="agent-action-chip agent-place-next" disabled={busy}
+              onClick={() => changePlaceCandidates(placePage + 1)}>다른 장소 살펴보기</button>}
           </nav>}
-          {response?.matches && currentPlace && <div className="agent-result-actions">
-            <button type="button" className="agent-action-chip" onClick={openAlerts}><BellIcon />비슷한 물건 알림 받기</button>
+          {followupVisible && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
+            <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
+              ? "찾으시는 물건이 없나요? 반경을 넓혀보거나, 비슷한 물건 알림을 받아보세요."
+              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>
+            <div className="agent-place-replies agent-result-actions">
+              {nextRadius !== null && <button type="button" className="agent-action-chip" disabled={busy}
+                  onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>
+                  반경 넓혀보기
+                </button>}
+            <button type="button" className="agent-action-chip" onClick={openAlerts}>비슷한 물건 알림 받기</button>
             {daangnSearch && <a className="agent-action-chip" href={daangnSearch} target="_blank" rel="noopener noreferrer">
-              <SearchIcon />당근에서 찾아보기
+              당근에서 찾아보기
             </a>}
+            </div>
           </div>}
         </div>
-        {!drawerOpen && radiusActions}
         {!drawerOpen && requestStatus}
-        <form className="agent-compose" onSubmit={send}>
+        <form className="agent-compose" onSubmit={send} onPaste={pastePhotos}>
+          {canAttachPhotos && (photos.length > 0 || addingPhotos || photoError) && <div className="agent-photo-draft">
+            {photos.length > 0 && <ul className="agent-photo-previews" aria-label="보낼 사진">
+              {photos.map((photo, index) => <li key={photo.id}>
+                <img src={photo.url} alt={`첨부 예정 사진 ${index + 1}: ${photo.name}`} />
+                <button type="button" aria-label={`사진 ${index + 1} 삭제`} onClick={() => { removePhoto(photo.id); input.current?.focus(); }}>×</button>
+              </li>)}
+            </ul>}
+            {photos.length > 0 && <p className="agent-photo-note">사진 검색은 준비 중이에요. 첨부한 사진은 현재 대화에서만 볼 수 있어요.</p>}
+            {addingPhotos && <p className="agent-photo-note" role="status">사진을 불러오고 있어요.</p>}
+            {photoError && <p className="agent-photo-error" role="alert">{photoError}</p>}
+          </div>}
+          <div className="agent-compose-row">
           <label className="sr-only" htmlFor="agent-input">메시지</label>
-          <button type="button" className="agent-photo" aria-label="사진 추가" title="사진 검색은 준비 중이에요">
+          <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden aria-label="사진 파일 선택"
+            onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; if (files.length) addDraftPhotos(files); }} />
+          <button type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos}
+            onClick={choosePhotos}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1-1.5h5.8l1 1.5h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.2" /></svg>
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
             maxLength={1000} placeholder={composePlaceholder} />
-          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || !draft.trim()}>
+          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
+          </div>
         </form>
       </section>
 
       {drawerOpen && <aside className="agent-drawer" aria-label="전체 검색 결과">
         <div className="agent-drawer-head">
-          <strong>결과 {matchCount.toLocaleString("ko-KR")}건</strong>
+          <strong>{groupIds ? institutionMatchCount === null ? "기관 결과 확인 중" : `결과 ${institutionMatchCount.toLocaleString("ko-KR")}건` : `결과 ${matchCount.toLocaleString("ko-KR")}건`}</strong>
+        </div>
+        <div className="agent-drawer-scope">
+          <div>
+            <strong title={groupNames || "전체 보관기관"}>{groupNames || "전체 보관기관"}</strong>
+          </div>
+          {groupIds && <button type="button" onClick={showFullScope}>전체 기관 보기</button>}
         </div>
         <div className="agent-drawer-body">
           {groupIds && submittedQuery
             ? <AgentInstitutionResults key={`${submittedQuery}:${groupIds}`} ids={groupIds}
-              query={submittedQuery} name={groupNames} institutions={institutionIndex} onOpen={openDetail} onClear={showFullScope} onVisibleItems={setInstitutionItemIds} />
+              pageSize={itemPageSize} query={submittedQuery} institutions={institutionIndex} onOpen={openDetail} onVisibleItems={setInstitutionItemIds} onTotalChange={setInstitutionMatchCount} />
             : matchCount === 0 ? <p className="agent-bubble">일치하는 습득물을 찾지 못했어요.</p> : <>
-              <AgentResultList items={items.slice(itemPage * ITEM_PAGE_SIZE, (itemPage + 1) * ITEM_PAGE_SIZE)} institutions={institutionIndex} onOpen={openDetail} />
-              {pageCount > 1 && <nav className="agent-pagination" aria-label="습득물 결과 페이지">
-                {itemPageNumbers(itemPage, pageCount).map((page: number) =>
+              <AgentResultList pageSize={itemPageSize} items={items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize)} institutions={institutionIndex} onOpen={openDetail} />
+              <nav className="agent-pagination" aria-label="습득물 결과 페이지">
+                {pageCount <= 1 ? <button type="button" aria-label="1페이지" aria-current="page" disabled={busy}>1</button> : itemPageNumbers(itemPage, pageCount).map((page: number) =>
                   <button type="button" key={page} aria-label={`${page + 1}페이지`} aria-current={page === itemPage ? "page" : undefined}
                     disabled={busy} onClick={() => void changePage(page)}>{page + 1}</button>)}
-              </nav>}
+              </nav>
             </>}
         </div>
         {requestStatus}
-        {radiusActions}
       </aside>}
 
       {response?.matches && matchCount > 0 && !placeChanging && <button type="button" className="agent-handle" aria-expanded={drawerOpen}
@@ -530,7 +695,7 @@ export function AgentSearchApp() {
         {!drawerOpen && <span className="agent-handle-badge" aria-hidden="true">{matchCount > 999 ? "999+" : matchCount}</span>}
       </button>}
 
-      <KakaoMap themeKey="retriever-blue" institutions={institutions} institutionsLoaded={institutionsLoaded}
+      <KakaoMap themeKey="retriever-blue" focusedInstitution={focusedInstitution} institutions={institutions} institutionsLoaded={institutionsLoaded}
         institutionError={institutionError} countsAvailable={countsAvailable} places={mapPlaces} placeNumbers={placeNumbers}
         selectedPlace={selectedPlace} searchCenters={searchCenters} previewPlace={previewPlace} radiusMeters={mappedRadius}
         leftInset={mapInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={mapBadge}

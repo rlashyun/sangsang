@@ -54,6 +54,8 @@ interface KakaoMapProps {
   showInstitutionCounts?: boolean;
   /** 지도 왼쪽을 가린 패널의 폭(px). 선택한 지점을 가려지지 않은 영역의 가운데에 둔다. */
   leftInset?: number;
+  /** 물품의 검증된 보관기관 위치. 검색 중심·범위는 바꾸지 않고 지도만 이동한다. */
+  focusedInstitution?: Institution | null;
   /** 장소 확정 후 반경 맞춤을 부드럽게 이동한다. 끄면 기존처럼 바로 맞춘다. */
   animateRadiusFit?: boolean;
   /** 보관기관 핀을 더블클릭해 고른 위치. 없으면 더블클릭 선택과 안내를 쓰지 않는다. */
@@ -189,6 +191,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   mapBadge,
   showInstitutionCounts = true,
   leftInset = 0,
+  focusedInstitution = null,
   animateRadiusFit = false,
   onPointSelect,
   onPlaceSelect,
@@ -529,6 +532,37 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     }
     return cancelMove;
   }, [leftInset, mapColors, mapReady, onPlaceSelect, places, placeNumbers, previewPlace, selectedPlace]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !focusedInstitution) return;
+    const { latitude, longitude } = focusedInstitution;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+      || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
+    const kakao = window.kakao;
+    let marker: any = null;
+    // PRD 4.3-C · 4.4 — 기관 핀을 강조하고, 패널이 가리지 않는 지도 중앙에 맞춘다.
+    const cancelMove = whenMapSettled(map, () => {
+      const target = new kakao.maps.LatLng(latitude, longitude);
+      map.setLevel(3, { animate: false });
+      if (leftInset) {
+        const projection = map.getProjection();
+        const point = projection.containerPointFromCoords(target);
+        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+      } else {
+        map.setCenter(target);
+      }
+      marker = new kakao.maps.Marker({
+        map, position: target, title: focusedInstitution.name,
+        image: compactMarkerImage(kakao, mapColors, focusedInstitution.source, true),
+        zIndex: 10, clickable: false,
+      });
+    });
+    return () => {
+      cancelMove();
+      marker?.setMap(null);
+    };
+  }, [focusedInstitution, leftInset, mapColors, mapReady]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;

@@ -412,6 +412,8 @@ def create_agent_router(
                             if event.get("type") == "scope.updated":
                                 previous_radius = radius
                                 scope, radius = tuple(event["institution_ids"]), event["radius_m"]
+                                if event.get("expansion_reason") == "no_matches":
+                                    manual_radius = radius
                                 if previous_radius is not None:
                                     event["previous_radius_m"] = previous_radius
                             if "type" in event:
