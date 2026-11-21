@@ -666,18 +666,18 @@ async (page) => {
   });
   await guideLink.click();
   await guide.waitFor();
-  // PRD 2.2, 4.4 — 2026-11-17 전체 물품 확대: 6개 한정 문구 대신 전체 물품과 자주 찾는 예시를 안내한다.
-  check(await page.locator(".usage-guide-categories li").count() === 10, "자주 찾는 물품 예시 10개를 안내해야 한다");
-  check(!(await page.locator(".usage-guide-categories").innerText()).includes("6개"), "6개 물품군 한정 문구를 남기지 않아야 한다");
+  // PRD 4.4 — 2026-11-22 전체 물품은 소개 문구로 안내하고 카테고리 영역은 생략한다.
+  check(await page.locator(".usage-guide-categories").count() === 0, "카테고리 영역을 표시하지 않아야 한다");
+  check((await page.locator(".usage-guide-intro").innerText()).includes("종류와 상관없이"), "전체 습득물 검색을 안내해야 한다");
   const survey = page.getByRole("link", { name: "설문조사 참여하기" });
   const feedback = page.locator(".app-header-actions a[target='_blank']");
   const searchFromGuide = page.getByRole("link", { name: "물건 찾으러 가기" });
   check(await searchFromGuide.evaluate(link => {
     const searchCard = link.closest(".usage-guide-action");
-    return searchCard?.parentElement?.previousElementSibling?.classList.contains("usage-guide-categories") &&
+    return searchCard?.parentElement?.previousElementSibling?.classList.contains("usage-guide-steps") &&
       searchCard.nextElementSibling?.getAttribute("aria-labelledby") === "usage-survey-title";
   }),
-  "검색 버튼은 지원 물품 안내와 설문 참여 사이에 표시해야 한다");
+  "검색 버튼과 설문 참여는 이용 방법 안내 다음에 표시해야 한다");
   check(await page.locator(".usage-guide-note").evaluateAll(notes => {
     const [findNote, alertNote] = notes.map(note => note.getBoundingClientRect());
     return findNote.top === alertNote.top && findNote.height === alertNote.height;

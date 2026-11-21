@@ -1,9 +1,6 @@
 import { useEffect, useRef, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
-// PRD 2.2, 4.4 — 2026-11-17 전체 물품 확대. 경찰청 분류 전체를 다루며, 아래는 자주 찾는 예시다.
-const categories = ["지갑", "카드", "휴대폰", "가방", "의류", "전자기기", "현금", "신분증·면허증", "귀금속", "안경"];
-
 type UsageGuideProps = {
   searchPath: string;
   surveyUrl: string;
@@ -47,7 +44,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
         </button>
       </header>
       <div className="usage-guide-content">
-        <p className="usage-guide-intro">잃어버린 장소에서부터 찾아보세요. 주변 보관기관과 그곳에 등록된 습득물을 한눈에 볼 수 있어요.</p>
+        <p className="usage-guide-intro">잃어버린 장소에서부터 찾아보세요. 주변 보관기관에 등록된 습득물을 종류와 상관없이 찾아볼 수 있어요.</p>
 
         <div className="usage-guide-steps">
           {variant === "chat" ? (
@@ -55,7 +52,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
             <h2 id="usage-find-title">물건 찾기</h2>
             <ol>
               <li>대화창에 물건을 잃어버린 장소를 말해 주세요. 지도에서 보관기관 핀을 두 번 눌러 고를 수도 있어요.</li>
-              <li>후보 장소를 확인하고 ‘이 장소 선택하기’를 눌러요. 틀리면 ‘장소 변경’으로 다시 고를 수 있어요.</li>
+              <li>후보 장소를 확인하고 ‘장소선택’을 눌러요. 다른 장소도 대화로 알려주면 최대 3곳까지 선택할 수 있어요.</li>
               <li>‘검은색 반지갑’, ‘빨간 케이스를 낀 삼성 휴대폰’처럼 물건의 이름이나 특징을 알려주세요. 사진을 첨부하거나 붙여넣을 수도 있어요.</li>
               <li>일치하는 물건이 없으면 1km → 1.5km → 2km까지 자동으로 넓혀 찾아요.</li>
               <li>결과 목록에서 물품을 눌러 보관 위치와 상세 정보를 확인해요.</li>
@@ -101,14 +98,6 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
             </section>}
           </section>
         </div>
-
-        <section className="usage-guide-card usage-guide-categories" aria-labelledby="usage-categories-title">
-          <h2 id="usage-categories-title">찾을 수 있는 물품</h2>
-          <p>경찰청에 등록된 다양한 습득물을 검색할 수 있어요. 자주 찾는 물품은 이런 것들이에요.</p>
-          <ul>
-            {categories.map(category => <li key={category}>{category}</li>)}
-          </ul>
-        </section>
 
         <div className="usage-guide-actions">
           <section className="usage-guide-action" aria-labelledby="usage-search-title">

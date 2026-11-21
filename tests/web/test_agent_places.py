@@ -1,5 +1,6 @@
 """PRD 4.3-A — Multiple confirmed places share one scoped search and session."""
 import json
+import pytest
 from dataclasses import asdict, replace
 from unittest.mock import Mock
 
@@ -90,6 +91,49 @@ def test_add_mixed_item_then_remove_and_replace_across_instances():
     assert done["conditions"]["institution_ids"] == []
     assert done["conditions"]["place"] is None
     assert done["matches"] is None
+
+
+@pytest.mark.parametrize("with_item", [False, True])
+def test_remove_at_limit_restores_capacity_for_conversational_add(with_item):
+    chat = Chat()
+    chat.start()
+    for place in PLACES[1:]:
+        chat.turn(text=place.name, proposal=decision("add_place", place.name))
+        chat.choose(place)
+    if with_item:
+        chat.turn(text="검은 지갑", proposal=decision(item="검은 지갑"))
+    assert len(chat.last["conditions"]["places"]) == 3
+
+    removed = chat.turn(type="remove_place", place_target=2)
+    assert [p["name"] for p in removed["conditions"]["places"]] == ["서울역", "강남역"]
+    assert removed["conditions"]["place_operation"] is None
+    chat.client = chat.new_client()
+    pending = chat.turn(text="서울숲도 갔어요", proposal=decision("add_place", "서울숲"))
+    context = chat.model.call_args.args[1]
+    assert context["selected_place_count"] == 2
+    assert context["remaining_place_slots"] == 1
+    assert [p["name"] for p in context["selected_places"]] == ["서울역", "강남역"]
+    assert any("서울숲" in answer and "제거" in answer for _, answer in context["recent"])
+    assert pending["status"] == "awaiting_place_selection"
+    assert len(pending["conditions"]["places"]) == 2
+    restored = chat.choose(PLACES[1])
+    assert [p["name"] for p in restored["conditions"]["places"]] == ["서울역", "강남역", "서울숲"]
+    assert restored["conditions"]["item_query"] == ("검은 지갑" if with_item else None)
+    assert len({(p["latitude"], p["longitude"]) for p in restored["conditions"]["places"]}) == 3
+
+
+def test_removing_last_place_allows_a_new_place_from_zero():
+    chat = Chat()
+    chat.start()
+    removed = chat.turn(type="remove_place", place_target=1)
+    assert removed["conditions"]["places"] == []
+    assert removed["conditions"]["place"] is None
+    chat.turn(text="서울숲", proposal=decision("add_place", "서울숲"))
+    context = chat.model.call_args.args[1]
+    assert context["selected_place_count"] == 0
+    assert context["remaining_place_slots"] == 3
+    chosen = chat.choose(PLACES[1])
+    assert [p["name"] for p in chosen["conditions"]["places"]] == ["서울숲"]
 
 
 def test_ui_add_cancel_and_limit_preserve_places():

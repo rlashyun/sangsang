@@ -330,6 +330,17 @@ export function AgentSearchApp() {
         // PRD 4.3-A — Show the confirmed location before asking for item details.
         replies.push({ confirmedPlace: result.conditions.place });
       }
+      const confirmedPlaces = result.conditions.places ?? (result.conditions.place ? [result.conditions.place] : []);
+      const removedPlace = turn.type === "remove_place" ? selectedPlaces[(turn.place_target ?? 1) - 1] : null;
+      if (result.status !== "cancelled" && removedPlace && !confirmedPlaces.some(place =>
+        place.latitude === removedPlace.latitude && place.longitude === removedPlace.longitude)) {
+        replies.push({ author: "agent", text: `‘${removedPlace.name}’ 장소를 제거했어요.` });
+      }
+      // PRD 4.3-A — 세 번째 장소 확정 시에만 안내하고 이후 물품 정정 때는 반복하지 않는다.
+      if (result.status !== "cancelled" && !result.conditions.place_operation
+        && selectedPlaces.length < 3 && confirmedPlaces.length === 3) {
+        replies.push({ author: "agent", text: "장소는 최대 3곳까지 선택할 수 있어요." });
+      }
       const completedSearch = (result.status === "results" || result.status === "no_matches") && result.matches !== null;
       const message = result.status === "results" && (result.matches?.total_count ?? 0) > 0
         ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
@@ -434,10 +445,6 @@ export function AgentSearchApp() {
   function fill(text: string) {
     setDraft(text);
     input.current?.focus();
-  }
-
-  function startPlaceChange(placeTarget = selectedPlaces.length) {
-    void submit({ type: "replace_place", place_target: placeTarget });
   }
 
   function send(event: FormEvent) {
@@ -568,19 +575,13 @@ export function AgentSearchApp() {
             {selectedPlaces.length ? <ul className="agent-selected-places" aria-label="선택한 장소">
               {selectedPlaces.map((place, index) => <li key={`${place.latitude}:${place.longitude}`}>
                 <span title={place.address}>{place.name}</span>
-                <button type="button" disabled={busy} aria-label={`${place.name} 변경`} onClick={() => startPlaceChange(index + 1)}>변경</button>
-                <button type="button" disabled={busy} aria-label={`${place.name} 제거`}
-                  onClick={() => void submit({ type: "remove_place", place_target: index + 1 })}>제거</button>
+                <button type="button" className="agent-place-remove" disabled={busy} aria-label={`${place.name} 제거`} title={`${place.name} 제거`}
+                  onClick={() => void submit({ type: "remove_place", place_target: index + 1 })}>×</button>
               </li>)}
             </ul> : "선택 대기 중"}
-            {selectedPlaces.length > 0 && selectedPlaces.length < 3 && !conditions?.place_operation &&
-              <button type="button" disabled={busy} onClick={() => void submit({ type: "add_place" })}>장소 추가</button>}
             {conditions?.place_operation && <>
               <p className="agent-place-queue" role="status">{conditions.selecting_place_query && `확인 중 · ${conditions.selecting_place_query}`}
                 {Boolean(conditions.pending_place_queries?.length) && ` · 다음 ${conditions.pending_place_queries?.join(", ")}`}</p>
-              <button type="button" disabled={busy} onClick={() => void submit({ type: "skip_place" })}>이 장소 건너뛰기</button>
-              <button type="button" disabled={busy}
-                onClick={() => void submit({ type: "cancel_place_selection" })}>장소 선택 취소</button>
             </>}
           </dd></div>
           <div><dt>물건</dt><dd>{conditions?.item_query || "입력 대기 중"}</dd>
@@ -620,7 +621,7 @@ export function AgentSearchApp() {
               </button>
               <div className="agent-place-card-action">
                 {id === selectedCandidate && <button type="button" className="agent-place-confirm" disabled={busy}
-                  onClick={() => void submit({ type: "select_place", candidate_id: id })}>이 장소 선택하기</button>}
+                  onClick={() => void submit({ type: "select_place", candidate_id: id })}>장소선택</button>}
               </div>
             </li>)}
           </ol>}
