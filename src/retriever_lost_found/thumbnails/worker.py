@@ -45,7 +45,7 @@ def run_pass(store, storage, *, limit=60, deadline_seconds=220, clock=time.monot
         store.rpc("thumbnail_finish", {"p_item_id": task["item_id"], "p_key": task["object_key"],
                                       "p_token": task["lease_token"], "p_success": success})
         # PRD 5 — 원천 서버와 DB에 일괄 요청을 집중하지 않는다.
-        sleep(3)
+        sleep(0.5)
     return {"status": "completed", "processed": completed, "failed": failed,
             "backfill_complete": bool(backfill_complete)}
 
