@@ -5,7 +5,8 @@
 --   - 같은 값을 다시 넣으면 TOAST 포인터가 그대로 남으므로 vector로 바꿨다가 halfvec으로 돌린다(값 손실 없음).
 --   - pg_column_toast_chunk_id(PG17)가 NULL이 아닌 행만 고치므로 중간에 멈춰도 다시 실행하면 이어서 한다.
 --   - UPDATE마다 embeddings_sync_search 트리거가 돌지만 1비트 값이 같으면 쓰지 않는다(refresh_search_vector).
--- 예상: 61만 행 → 힙 약 1.6GB로 늘고, 끝난 뒤 VACUUM이 비어 있는 TOAST를 잘라 약 1.6GB를 돌려준다.
+-- 2026-11-21 실행 결과: 벡터는 모두 행 안으로 옮겼지만 행이 약 2.26KB라 content_hash·embedded_input이 대신 TOAST로 밀려
+-- TOAST 파일(1.49GB)은 줄지 않았다(docs/measurements.md). 줄이려면 toast_tuple_target을 높이고 두 글자 열도 다시 써야 한다.
 
 -- 0) 시작 전·구간마다 확인: 수집·임베딩 실행 중이 아니고, WAL이 3GB 아래이고, 아카이브 실패가 없을 것.
 select (select count(*) from public.ingestion_runs where status = 'running') ingestion_running,
