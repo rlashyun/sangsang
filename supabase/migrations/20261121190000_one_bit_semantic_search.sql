@@ -6,7 +6,7 @@
 --   - 검색용 원본 사본 found_item_search_vectors(1,753MB)는 더 쓰지 않는다. 재채점은 원본 테이블에서 읽는다.
 --     2비트 표와 실험 함수(exp_*)도 지운다. 앱은 키워드 상위 200건 벡터 재정렬(keyword_rerank_vectors)을 더 부르지 않는다.
 --   - 최종 점수(앱): 0.75·BM25 + 0.25·(cos−0.60)/0.40. 원본 벡터 열은 storage plain으로 바꾼다.
--- 적용: GitHub 연동(Deploy to production)으로 main 병합 시 적용된다. 운영 최신 버전 20261121120000 뒤 번호다.
+-- 적용: GitHub 연동(Deploy to production)으로 main 병합 시 적용된다. 운영 최신 버전 20261121180000(found_item_thumbnails) 뒤 번호다.
 -- 일일 동기화: 임베딩이 저장되거나(embeddings_sync_search) 물품 위치가 바뀌면(found_items_sync_search)
 --   refresh_search_vector가 1비트 표를 채우고 지운다. 원본 사본 대신 1비트 표만 유지한다.
 -- 되돌리기: supabase/rollbacks/ 아래 같은 버전·이름의 SQL을 수동 실행한다(원본 사본은 다시 채워야 한다).

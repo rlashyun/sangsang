@@ -500,7 +500,7 @@ class SchemaMigrationTests(unittest.TestCase):
         # 원본 사본·2비트·실험 함수는 지우고, 동기화는 1비트 표만 유지한다.
         [path] = MIGRATIONS.glob("*_one_bit_semantic_search.sql")
         # GitHub 연동은 운영 최신 버전보다 뒤 번호만 순서대로 적용한다.
-        self.assertGreater(path.name.split("_", 1)[0], "20261121120000")
+        self.assertGreater(path.name.split("_", 1)[0], "20261121180000")
         migration = self._squashed(path.name)
         self.assertIn("alter table public.found_item_embeddings_bge_m3 alter column embedding set storage plain;",
                       migration)
