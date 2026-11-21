@@ -475,6 +475,31 @@ class CategoryResolutionTests(unittest.TestCase):
         self.assertEqual({row["category_id"] for row in store.upserted}, {8, 4})
         self.assertEqual(store.finished[0]["metadata"]["category_fallback_count"], 1)
 
+    @patch.object(daily_ingestion, "collect_selected_rows")
+    @patch.object(daily_ingestion, "create_source_client")
+    def test_masked_count_is_audited(self, create_client, collect_rows) -> None:
+        # PRD 3.3 · Q5 — 출력 때 가려지는 물품 수만 남긴다. 합성 번호이며 원문 저장은 그대로다(절대 규칙 3).
+        store = FakeStore()
+        store.load_category_ids = lambda source_code: dict(self.IDS)
+        card = category_row("지갑 > 남성용 지갑", "C1")
+        card["description"] = "카드번호 1111-5678-9012-2222"
+        collect_rows.return_value = (
+            [card, selected_row(atc_id="C2")],
+            {
+                "fetched_count": 2, "selected_count": 2, "invalid_count": 0,
+                "outside_range_count": 0, "api_total_count": 2,
+            },
+        )
+
+        result = daily_ingestion._sync_source(store, source="partner", today=date(2026, 8, 27))
+
+        self.assertEqual(result["status"], "succeeded")
+        # 1건만 센다 — 0건이 아니고(감지), 2건도 아니다(일반 물품은 세지 않음)
+        self.assertEqual(store.finished[0]["metadata"]["masked_count"], 1)
+        stored = {row["atc_id"]: row for row in store.upserted}
+        self.assertEqual(stored["C1"]["description"], "카드번호 1111-5678-9012-2222")
+        self.assertNotIn("5678", json.dumps(store.finished[0]["metadata"], ensure_ascii=False))
+
 
 def fetch_summary(count: int) -> dict[str, int]:
     return {"fetched_count": count, "selected_count": count, "invalid_count": 0,

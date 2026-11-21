@@ -26,6 +26,7 @@ from .collector import (
     retention_start,
 )
 from ..errors import safe_error as _safe_error
+from ..privacy.masking import row_needs_masking
 from .categories import FALLBACK_CATEGORY, category_key, category_parent
 from .store import LocationReference, RunAlreadyActive, SupabaseIngestionStore
 from .overseas import is_overseas_custody
@@ -457,6 +458,9 @@ def _sync_source(
                 database_rows, source_code=source_code, service_key=client.service_key,
                 mappings=mappings, deadline=detail_deadline,
             )
+        # PRD 3.3 · Q5 — 이번에 저장할 물품 중 출력할 때 가려지는 물품 수(건수만, 텍스트는 남기지 않는다).
+        # 평소 값과 크게 다르면 마스킹 회귀나 원천 데이터 형식 변화를 의심한다.
+        result["masked"] = sum(row_needs_masking(row) for row in database_rows)
         incoming = {(row["atc_id"], row["found_sequence"]) for row in database_rows}
         if existing is None:
             existing = store.existing_identities(source_code, incoming)
@@ -524,6 +528,8 @@ def _audit_values(
     if "category_fallback" in result:
         # PRD 4.5 — 상위분류가 목록에 없어 기타물품으로 저장한 건수. 0이 아니면 분류 목록을 늘린다.
         metadata["category_fallback_count"] = result["category_fallback"]
+    if "masked" in result:
+        metadata["masked_count"] = result["masked"]
     if "skipped_existing" in result:
         # 백필에서 이미 DB에 있어 다시 쓰지 않은 물품 수.
         metadata["skipped_existing_count"] = result["skipped_existing"]

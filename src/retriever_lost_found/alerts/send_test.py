@@ -1,4 +1,4 @@
-"""설계 10.3-2 — DB 없이 메일 한 통만 보내 발송 설정(Gmail SMTP 또는 Resend)과 스팸함 분류를 확인한다.
+"""설계 10.3-2 — DB 없이 메일 한 통만 보내 발송 설정(Gmail SMTP)과 스팸함 분류를 확인한다.
 
 실행: uv run python -m retriever_lost_found.alerts.send_test --to <받을 주소>
 실제 메일이 나가므로 받는 주소를 확인받은 뒤 실행한다. 받는 주소는 어디에도 저장하지 않는다.
@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = load_alert_settings()
     if settings is None:
-        print("메일 설정(MAIL_PROVIDER·MAIL_FROM·RESEND_API_KEY 또는 MAIL_SMTP_*, PUBLIC_BASE_URL, ALERT_SECRET)이 .env에 없습니다.")
+        print("메일 설정(MAIL_FROM, MAIL_SMTP_*, PUBLIC_BASE_URL, ALERT_SECRET)이 .env에 없습니다.")
         return 1
     email = OutgoingEmail(
         to=normalize_email(args.to),

@@ -71,7 +71,7 @@ GET /api/found-items?location_ids=...[&cursor=등록일:id]   ← q가 없을 �
 
 **2026-11-21 김성현 결정(PRD 4.5)** — 서비스 분류 21개는 고정이며 더 늘리지 않는다. 검색어 정리는 전처리·동의어만 하고 자동 오타 보정은 같은 날 후속 결정으로 뺐다(오타는 따로 잡지 않는다). 동의어 사전은 기존 6개 분류 밖 3만 건 표본으로 확대한다. 키워드 후보 조회는 범위 필터와 포함 검사를 유지하고 종류 비트(`kind_mask`) 필터는 쓰지 않는다. 포함 검사는 BM25가 0점을 줄 물품을 DB에서 미리 빼는 속도용 단계라서 빼지 않는다. 포함 검사의 단어가 BM25 단어보다 좁아 BM25가 점수를 줄 물품을 먼저 버리는 일이 없게 한다. 물건 종류 목록은 동의어 사전과 분리한 `search/item_kinds.json`이며 Supabase 분류 21개·하위분류를 따른다. 종류가 잡히면 포함 검사와 BM25 모두 그 종류 기준으로 판단한다.
 
-**2026-11-21 텍스트 검색 확정(PRD 4.5)** — 질의 임베딩 뒤 `semantic_found_item_candidates`가 반경 안 전체 물품을 1비트 벡터(`found_item_search_vectors_1bit`) 해밍 거리로 비교해 500건을 고르고, 원본 `found_item_embeddings_bge_m3` half 벡터로 코사인을 다시 계산해 0.60 이상 상위 200건을 준다. 의미 점수는 이 결과에서만 나오며, 키워드 상위 200건 벡터를 따로 읽어 서버에서 재정렬하는 단계는 없앴다(`keyword_rerank_vectors`는 배포 전환 호환용으로만 남기고 다음 마이그레이션에서 지운다). 최종 점수는 `0.75×BM25 + 0.25×(cos−0.60)/0.40`. 키워드 결과는 모두 유지하고 의미 결과도 종류 충돌 검사를 거친다. 검색용 원본 사본 `found_item_search_vectors`는 지웠고, 원본 임베딩 열은 TOAST 대신 행 안에 저장한다(`storage plain`, 기존 행은 `supabase/maintenance/inline_embedding_storage.sql`로 나눠 옮긴다). 임베딩 저장·물품 위치 변경 때 `refresh_search_vector`가 1비트 표를 갱신한다. 원본 임베딩 테이블 이름은 바꾸지 않는다(함수 본문이 이름으로 참조한다).
+**2026-11-21 텍스트 검색 확정(PRD 4.5)** — 질의 임베딩 뒤 `semantic_found_item_candidates`가 반경 안 전체 물품을 1비트 벡터(`found_item_search_vectors_1bit`) 해밍 거리로 비교해 500건을 고르고, 원본 `found_item_embeddings_bge_m3` half 벡터로 코사인을 다시 계산해 0.60 이상 상위 200건을 준다. 의미 점수는 이 결과에서만 나오며, 키워드 상위 200건 벡터를 따로 읽어 서버에서 재정렬하는 단계는 없앴다(`keyword_rerank_vectors`는 `20261121200000`에서 지웠다). 최종 점수는 `0.75×BM25 + 0.25×(cos−0.60)/0.40`. 키워드 결과는 모두 유지하고 의미 결과도 종류 충돌 검사를 거친다. 검색용 원본 사본 `found_item_search_vectors`는 지웠고, 원본 임베딩 열은 TOAST 대신 행 안에 저장한다(`storage plain`, 기존 행은 `supabase/maintenance/inline_embedding_storage.sql`로 나눠 옮긴다). 벡터를 행 안에 두면 행이 약 2.26KB라 짧은 글자 열이 TOAST로 밀려나므로 `toast_tuple_target = 4000`으로 행 전체를 행 안에 둔다(`20261121200000`). 임베딩 저장·물품 위치 변경 때 `refresh_search_vector`가 1비트 표를 갱신한다. 원본 임베딩 테이블 이름은 바꾸지 않는다(함수 본문이 이름으로 참조한다).
 
 ### 보관기관 매칭 (수집 시)
 
@@ -114,7 +114,7 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 | **감사 로그** — 모든 실행이 `ingestion_runs`에 `status`·`unmatched_count`와 함께 남는다. 로그가 없으면 지표 측정 자체가 불가능하다 | PRD 3.1-8 |
 | **원문 보존** — API 원본은 `raw_payload`에 그대로 남는다 | PRD 3.3 |
 | **키 격리** — 브라우저에 나가는 것은 카카오 JS 키뿐. REST 키·Supabase secret 키·`CRON_SECRET`은 서버 전용 | PRD 5 |
-| **개인정보는 출력에서 가린다** — 습득물 원문은 저장 그대로 두고, 응답·LLM 입력·알림 메일·임베딩 API 입력은 `privacy/masking.py`의 `mask_item_row`/`mask_text`를 거친다. 카드·주민·전화번호 형태 검색어는 거절한다 | PRD 3.3 · Q5 |
+| **개인정보는 출력에서 가린다** — 습득물 원문은 저장 그대로 두고, 응답·LLM 입력·알림 메일·임베딩 API 입력은 `privacy/masking.py`의 `mask_item_row`/`mask_text`를 거친다. 검색 문서 `search_text`는 번호만 가린다(SQL `mask_search_numbers`는 Python 정규식과 글자까지 같아야 한다, 이름은 본인 검색을 위해 남긴다). 카드·주민·전화번호 형태 검색어는 거절한다 | PRD 3.3 · Q5 |
 | **실패 응답은 한국어** — 400 `ValueError`(입력 오류) / 502 `RuntimeError`(외부 장애) / 503(Supabase 미설정) / 500(정적 파일 누락)으로 구분해 반환한다 | PRD 4.5 |
 
 ---
@@ -282,7 +282,7 @@ src/retriever_lost_found/
 ├─ config.py                 환경 변수 로딩
 ├─ ingestion/                카테고리 선별 · 수집 · 저장 · 동기화 · 기관 매칭
 ├─ integrations/             Kakao · Supabase · 경찰청 API 연동
-├─ privacy/                  개인정보 출력 마스킹(masking.py) · 기존 정규화 칸 재마스킹 배치(remask.py)
+├─ privacy/                  개인정보 출력 마스킹(masking.py) · 기존 정규화 칸 재마스킹 배치(remask.py) · 원문 기반 벡터 재생성 배치(reembed.py)
 ├─ search/hybrid.py          BM25 후보 + 반경 전체 1비트 의미 검색 가중합
 └─ web/                      FastAPI 라우트 · 크론 · Vite 빌드 결과 제공
 supabase/migrations/         운영 적용 이력과 새 변경 SQL
@@ -426,6 +426,7 @@ PRD 7.1의 마일스톤은 순서와 완료 조건을 정의한다. 2026-11-17�
 
 | 날짜 | 변경 내용 |
 | --- | --- |
+| 2026-11-21 | 개인정보 마스킹 유지(PR #77 닫음) — 4장 불변식에 검색 문서 번호 마스킹(이름은 남김)을 추가하고 8장 코드 지도에 `reembed.py` 추가(PRD 3.3 · Q5) |
 | 2026-11-21 | 검색 후속 — 자동 오타 보정 제거, 물건 종류 목록을 `item_kinds.json`(분류 21개 기준 41종)으로 분리(3장, PRD 4.5) |
 | 2026-11-21 | 전체 물품 검색 대응 — 3장에 분류 21개 고정, 검색어 정리·키워드 후보 조회 유지/제거 항목과 동의어 확대 방향 추가(PRD 4.5) |
 | 2026-11-20 | 개인정보 마스킹 — 4장 불변식에 "개인정보는 출력에서 가린다" 추가, 7장 테스트 영역에 `privacy/`, 8장 코드 지도에 `privacy/` 추가(PRD 3.3 · Q5) |

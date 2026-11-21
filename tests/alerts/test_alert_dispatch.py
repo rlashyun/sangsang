@@ -75,13 +75,6 @@ class SendPassTests(unittest.TestCase):
         self.assertIn("시청 근처 · 11월 6일 등록 · 보관: 시청 유실물센터", email.text)
         self.assertIn("서울역 근처 · 11월 6일 등록 · 보관: 서울역 유실물센터", email.text)
 
-    def test_every_mail_carries_an_idempotency_key_for_its_queue_row(self) -> None:
-        _, message_id = self.reservation_with_alert("a@example.com")
-
-        self.run_pass()
-
-        self.assertTrue(self.sender.sent[0].idempotency_key.startswith(f"alert-{message_id}-"))
-
     def test_daily_cap_counts_the_last_24_hours_only(self) -> None:
         self.store.add_sent_messages(449, sent_at=self.store.now - timedelta(hours=1))
         for index in range(3):

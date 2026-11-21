@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
 
@@ -21,14 +22,7 @@ def run_pass(store, storage, *, limit=60, deadline_seconds=220, clock=time.monot
     # 백필은 수집·검색에 긴 잠금을 걸지 않도록 작은 페이지로 진행한다.
     backfill_complete = store.rpc("thumbnail_backfill_next", {"p_limit": 500})
     completed = failed = 0
-    for _ in range(limit):
-        if clock() - start >= deadline_seconds:
-            break
-        rows = store.rpc("thumbnail_claim", {})
-        if not rows:
-            break
-        task = rows[0]
-        success = False
+    def process(task):
         try:
             if task["deleted_at"] is not None:
                 storage.delete(task["object_key"])
@@ -36,16 +30,35 @@ def run_pass(store, storage, *, limit=60, deadline_seconds=220, clock=time.monot
                 key = storage.create(int(task["item_id"]), task["source_url"])
                 if key != task["object_key"]:
                     raise ValueError("축소 사진 경로가 일치하지 않습니다.")
-            success = True
-            completed += 1
+            return True
         except Exception:
             # 주소, 사진 및 비밀값을 로그에 남기지 않는다.
-            failed += 1
             logging.getLogger(__name__).warning("thumbnail task failed")
-        store.rpc("thumbnail_finish", {"p_item_id": task["item_id"], "p_key": task["object_key"],
-                                      "p_token": task["lease_token"], "p_success": success})
-        # PRD 5 — 원천 서버와 DB에 일괄 요청을 집중하지 않는다.
-        sleep(3)
+            return False
+
+    # PRD 3.2-2 · 5 — 전체 작업 잠금은 유지하며 최대 두 장을 동시에 처리한다.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claimed = 0
+        while claimed < limit and clock() - start < deadline_seconds:
+            tasks = []
+            for _ in range(min(2, limit - claimed)):
+                if clock() - start >= deadline_seconds:
+                    break
+                rows = store.rpc("thumbnail_claim", {})
+                if not rows:
+                    break
+                tasks.append((rows[0], pool.submit(process, rows[0])))
+                claimed += 1
+                # 요청 시작 간격을 유지한다.
+                sleep(0.5)
+            if not tasks:
+                break
+            for task, future in tasks:
+                success = future.result()
+                completed += int(success)
+                failed += int(not success)
+                store.rpc("thumbnail_finish", {"p_item_id": task["item_id"], "p_key": task["object_key"],
+                                              "p_token": task["lease_token"], "p_success": success})
     return {"status": "completed", "processed": completed, "failed": failed,
             "backfill_complete": bool(backfill_complete)}
 
