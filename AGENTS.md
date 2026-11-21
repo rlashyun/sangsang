@@ -114,7 +114,7 @@ NULL인 건은 지도·검색 어디에도 나타나지 않는다.
 | **감사 로그** — 모든 실행이 `ingestion_runs`에 `status`·`unmatched_count`와 함께 남는다. 로그가 없으면 지표 측정 자체가 불가능하다 | PRD 3.1-8 |
 | **원문 보존** — API 원본은 `raw_payload`에 그대로 남는다 | PRD 3.3 |
 | **키 격리** — 브라우저에 나가는 것은 카카오 JS 키뿐. REST 키·Supabase secret 키·`CRON_SECRET`은 서버 전용 | PRD 5 |
-| **개인정보는 출력에서 가린다** — 습득물 원문은 저장 그대로 두고, 응답·LLM 입력·알림 메일·임베딩 API 입력은 `privacy/masking.py`의 `mask_item_row`/`mask_text`를 거친다. 카드·주민·전화번호 형태 검색어는 거절한다 | PRD 3.3 · Q5 |
+| **개인정보는 출력에서 가린다** — 습득물 원문은 저장 그대로 두고, 응답·LLM 입력·알림 메일·임베딩 API 입력은 `privacy/masking.py`의 `mask_item_row`/`mask_text`를 거친다. 검색 문서 `search_text`는 번호만 가린다(SQL `mask_search_numbers`는 Python 정규식과 글자까지 같아야 한다, 이름은 본인 검색을 위해 남긴다). 카드·주민·전화번호 형태 검색어는 거절한다 | PRD 3.3 · Q5 |
 | **실패 응답은 한국어** — 400 `ValueError`(입력 오류) / 502 `RuntimeError`(외부 장애) / 503(Supabase 미설정) / 500(정적 파일 누락)으로 구분해 반환한다 | PRD 4.5 |
 
 ---
@@ -282,7 +282,7 @@ src/retriever_lost_found/
 ├─ config.py                 환경 변수 로딩
 ├─ ingestion/                카테고리 선별 · 수집 · 저장 · 동기화 · 기관 매칭
 ├─ integrations/             Kakao · Supabase · 경찰청 API 연동
-├─ privacy/                  개인정보 출력 마스킹(masking.py) · 기존 정규화 칸 재마스킹 배치(remask.py)
+├─ privacy/                  개인정보 출력 마스킹(masking.py) · 기존 정규화 칸 재마스킹 배치(remask.py) · 원문 기반 벡터 재생성 배치(reembed.py)
 ├─ search/hybrid.py          BM25 후보 + 반경 전체 1비트 의미 검색 가중합
 └─ web/                      FastAPI 라우트 · 크론 · Vite 빌드 결과 제공
 supabase/migrations/         운영 적용 이력과 새 변경 SQL
@@ -426,6 +426,7 @@ PRD 7.1의 마일스톤은 순서와 완료 조건을 정의한다. 2026-11-17�
 
 | 날짜 | 변경 내용 |
 | --- | --- |
+| 2026-11-21 | 개인정보 마스킹 유지(PR #77 닫음) — 4장 불변식에 검색 문서 번호 마스킹(이름은 남김)을 추가하고 8장 코드 지도에 `reembed.py` 추가(PRD 3.3 · Q5) |
 | 2026-11-21 | 검색 후속 — 자동 오타 보정 제거, 물건 종류 목록을 `item_kinds.json`(분류 21개 기준 41종)으로 분리(3장, PRD 4.5) |
 | 2026-11-21 | 전체 물품 검색 대응 — 3장에 분류 21개 고정, 검색어 정리·키워드 후보 조회 유지/제거 항목과 동의어 확대 방향 추가(PRD 4.5) |
 | 2026-11-20 | 개인정보 마스킹 — 4장 불변식에 "개인정보는 출력에서 가린다" 추가, 7장 테스트 영역에 `privacy/`, 8장 코드 지도에 `privacy/` 추가(PRD 3.3 · Q5) |
