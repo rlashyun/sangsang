@@ -308,37 +308,27 @@ uv run python scripts/search_storage_location_kakao.py 5052
   출처별 매칭(120초 안) → 마지막 날 종료 안내 → 발송 → 정리 순서입니다. 수집 크론은 알림을 건드리지 않습니다.
 - 유사 판정은 운영 검색의 키워드 단계(동의어·BM25)와 같습니다. 같은 검색어로 같은 반경을 검색했을 때
   결과에 나오는 새 물품을 알립니다(`alerts/judge.py`).
-- 최근 24시간 동안 하루 발송 상한(Resend 기본 100통, Gmail SMTP 기본 450통)까지 보냅니다.
+- 최근 24시간 동안 하루 발송 상한(기본 450통)까지 보냅니다.
 - 메일 속 링크는 `/alerts/confirm`·`/alerts/extend`·`/alerts/cancel` 화면을 엽니다.
 - 운영 DB에는 `supabase db push`로 `20261115090000_create_alert_scheduler.sql`을 적용합니다.
 - 메일 설정이 하나라도 없으면 알림 예약 API(`/api/alerts*`)는 503을 돌려줍니다.
   Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
 
-발신 수단은 **Gmail 앱 비밀번호(SMTP)** 입니다. 도메인을 사면 `MAIL_PROVIDER=resend`로
-Resend 무료 플랜에 옮길 수 있고, 코드는 고치지 않아도 됩니다.
+발신 수단은 **Google 메일(Gmail 앱 비밀번호, SMTP)** 로 확정했습니다(2026-11-22).
+Resend는 쓰지 않습니다. 코드에 남아 있는 Resend 발송기는 사용하지 않는 예비이며, 아래 Resend 변수는 비워 둡니다.
 
 서버 전용 환경 변수입니다. 브라우저로 전달하지 않습니다.
 
-- `MAIL_PROVIDER` — `smtp`(기본, 비워도 됨) 또는 `resend`
-- `RESEND_API_KEY` — Resend API 키(`MAIL_PROVIDER=resend`일 때 필수)
-- `MAIL_FROM` — 보내는 주소. Resend는 **인증한 도메인의 주소**여야 합니다. 예: `리트리버 <alert@우리도메인>`
-- `MAIL_SMTP_HOST` — `smtp.gmail.com` (`MAIL_PROVIDER=smtp`일 때)
+- `MAIL_PROVIDER` — `smtp`(기본, 비워도 됨). `resend`는 쓰지 않습니다
+- `RESEND_API_KEY` — 사용하지 않음. 비워 둡니다
+- `MAIL_FROM` — 보내는 주소. 서비스 전용 Gmail 주소와 같게 씁니다. 예: `리트리버 <서비스 Gmail 주소>`
+- `MAIL_SMTP_HOST` — `smtp.gmail.com`
 - `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS) (〃)
 - `MAIL_SMTP_USERNAME` — 서비스 전용 Gmail 주소 (〃)
 - `MAIL_SMTP_PASSWORD` — 그 계정의 앱 비밀번호 16자리, 공백 없이 (〃)
 - `PUBLIC_BASE_URL` — 메일 속 링크 주소의 앞부분. 로컬은 `http://127.0.0.1:8000`
 - `ALERT_SECRET` — 링크 토큰과 IP 해시에 쓰는 무작위 문자열
-- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본은 Resend 100, SMTP 450
-
-**나중에 Resend로 옮길 때** — Resend 무료 플랜은 하루 100통·월 3,000통이고(하루는 UTC 기준),
-**도메인을 사서 인증하지 않으면 계정 주인 주소로만 보낼 수 있습니다.**
-
-1. Resend 대시보드 Domains에서 도메인을 추가하고, 안내하는 DNS 레코드(SPF·DKIM)를 도메인 관리 화면에 등록합니다.
-2. 인증이 끝나면(보통 몇 분~몇 시간) API Keys에서 발송 권한 키를 만들어 `RESEND_API_KEY`에 넣습니다.
-3. `MAIL_FROM`을 그 도메인 주소로 바꿉니다.
-
-메일마다 대기열 id와 내용으로 만든 `Idempotency-Key`를 붙여, 같은 메일을 다시 보내도
-Resend가 24시간 동안 한 번만 보냅니다(Gmail SMTP에는 이 기능이 없습니다).
+- `ALERT_DAILY_SEND_LIMIT` — 선택. 기본 450
 
 **Gmail 준비** — 서비스 전용 Gmail 계정에 2단계 인증을 켠 뒤 https://myaccount.google.com/apppasswords
 에서 앱 비밀번호를 만듭니다. 계정 비밀번호를 바꾸면 앱 비밀번호가 무효가 되어 메일이 멈춥니다.
