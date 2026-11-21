@@ -22,6 +22,8 @@ IDENTIFIER_MESSAGE = (
 INSTRUCTIONS = """리트리버 습득물 검색을 위한 한국어 대화다.
 이전 대화와 현재 조건을 참고해 사용자가 정정하거나 새로 말한 장소와 물품 조건을 반영한다.
 확정 장소는 최대 3곳이다. “서울숲도 갔어요”, “추가로 강남역”은 add_place다.
+현재 장소 개수와 추가 가능 개수는 selected_places, selected_place_count, remaining_place_slots를 기준으로 판단한다. 이전 대화에 장소가 더 많았더라도 이미 제거한 장소는 세지 않는다.
+장소를 제거한 뒤에는 남은 자리에 새 장소를 추가할 수 있다. 확정 장소가 있고 여유가 있을 때 새로운 장소만 말하면 add_place로 해석한다. “아니”, “말고”, “바꿔”처럼 기존 장소 정정이 명시된 경우에는 replace_place다.
 한 발화에 여러 장소가 있으면 지명·상호·주소별로 분리해 place_queries 배열에 말한 순서대로 모두 넣는다.
 장소 검색어 자체에 들어 있는 쉼표나 주소의 구성 요소를 별도 장소로 나누지 않는다.
 “A와 B로 설정해”, “A, B, C에서 찾아줘”는 전체 목록을 지정하는 set_places다. A·B·C는 임의의 장소다.
@@ -245,15 +247,19 @@ def edit_places(state: Conversation, action: str, target: int | None = None) -> 
                        pending_place_queries=(), batch_places=(),
                        awaiting_answer="place", last_search_message=None)
     remaining = tuple(place for index, place in enumerate(places, 1) if index != target)
+    # PRD 4.3-A — 버튼 제거도 모델 대화에 남겨 오래된 장소 목록을 다시 세지 않게 한다.
+    removed = places[target - 1]
+    recent = (*state.recent, (f"‘{removed.name}’ 장소 제거",
+                             f"‘{removed.name}’ 장소를 제거했어요. 현재 선택한 장소는 {len(remaining)}곳이고 {3 - len(remaining)}곳을 더 선택할 수 있어요."))[-4:]
     if state.place_operation in {"add", "set"}:
         updates = {"batch_places" if state.place_operation == "set" else "places": remaining}
         return replace(state, **updates, confirmed=remaining[-1] if remaining else None,
-                       last_search_message=None, awaiting_answer="place")
+                       last_search_message=None, awaiting_answer="place", recent=recent)
     return replace(state, places=remaining, confirmed=remaining[-1] if remaining else None,
                    place_query=remaining[-1].name if remaining else None, candidates=(),
                    place_operation=None, place_target=None, last_search_message=None,
                    pending_place_queries=(), batch_places=(),
-                   awaiting_answer=None if remaining and state.item_query else "item" if remaining else "place")
+                   awaiting_answer=None if remaining and state.item_query else "item" if remaining else "place", recent=recent)
 
 
 
@@ -294,6 +300,8 @@ def respond_to_message(
             "confirmed_place": state.confirmed.name if state.confirmed else None,
             "selected_places": [{"number": i, "name": p.name, "address": p.address}
                                 for i, p in enumerate(state.selected_places(), 1)],
+            "selected_place_count": len(state.selected_places()),
+            "remaining_place_slots": max(0, 3 - len(state.selected_places())),
             "place_operation": state.place_operation,
             "pending_place_queries": list(state.pending_place_queries),
             "item_query": state.item_query,

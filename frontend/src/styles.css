@@ -102,10 +102,12 @@
   background: var(--color-bg-page);
 }
 
-/* PRD 4.3-A — 확정 장소별 변경·제거와 최대 세 곳 추가. */
+/* PRD 4.3-A — 장소 추가·변경은 대화로, 상단에는 제거만 둔다. */
 .agent-selected-places { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
-.agent-selected-places li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.agent-selected-places li { display: flex; align-items: center; gap: 4px; }
 .agent-selected-places li > span { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
+.agent-selected-places .agent-place-remove { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--color-text-secondary); font-size: 18px; line-height: 1; }
+.agent-selected-places .agent-place-remove:hover { color: var(--color-action-text); }
 .agent-place-queue { margin: 4px 0; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 
 :root[data-theme="warm-ivory"] {
@@ -1428,7 +1430,20 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 
 /* PRD 4.4 — 지도 위에서 이용안내를 열고 안내창 안에서만 스크롤한다. */
 .usage-guide {
-  --guide-blue-tint: color-mix(in srgb, var(--color-brand-primary) 9%, var(--color-bg-surface));
+  /* PRD 4.4 — 이용안내는 파란 강조 없이 중립색으로 표시한다. */
+  --color-bg-surface: #fff;
+  --color-text-primary: #343940;
+  --color-text-description: #687078;
+  --color-brand-heading: #343940;
+  --color-action-text-strong: #343940;
+  --color-action-hover-strong: #20252b;
+  --color-border-panel: #e4e5e7;
+  --color-border-card: #e4e5e7;
+  --color-border-control: #dedfe2;
+  --color-border-section: #ebedef;
+  --color-border-separator: #ebedef;
+  --color-focus: #687078;
+  --guide-note-background: #f6f7f8;
   width: min(1160px, calc(100vw - 48px));
   max-width: none;
   max-height: calc(100dvh - 36px);
@@ -1436,16 +1451,16 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--color-border-panel);
-  border-radius: 28px;
+  border-radius: 20px;
   background: var(--color-bg-surface);
-  box-shadow: 0 24px 72px rgb(37 57 86 / 20%);
+  box-shadow: 0 24px 72px rgb(0 0 0 / 14%);
   color: var(--color-text-primary);
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
 .usage-guide[open] { display: flex; flex-direction: column; }
 .usage-guide::backdrop {
-  background: rgba(69, 86, 110, .27);
+  background: rgb(0 0 0 / 22%);
   backdrop-filter: blur(8px);
 }
 .usage-guide-header {
@@ -1486,15 +1501,14 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .usage-guide h1, .usage-guide h2, .usage-guide p { margin: 0; }
 .usage-guide h1 {
-  position: relative;
-  top: 3px;
   color: var(--color-action-text-strong);
-  font-size: clamp(22px, 3vw, 28px);
+  font-size: 22px;
+  font-weight: 600;
   line-height: 1.2;
   letter-spacing: -.04em;
 }
 .usage-guide h1:focus { outline: none; }
-.usage-guide h2 { font-size: 19px; line-height: 1.35; letter-spacing: -.025em; }
+.usage-guide h2 { font-size: 16px; font-weight: 600; line-height: 1.4; letter-spacing: -.025em; }
 .usage-guide p, .usage-guide li { font-size: 14px; line-height: 1.55; }
 .usage-guide .usage-guide-intro { color: var(--color-text-description); font-size: 16px; }
 .usage-guide-button {
@@ -1506,14 +1520,15 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   min-height: 44px;
   padding: 8px 16px;
   border-radius: 10px;
-  background: var(--color-action-text-strong);
-  color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-control);
+  background: var(--color-bg-surface);
+  color: var(--color-text-primary);
   font-size: 14px;
   font-weight: 700;
   text-align: center;
   text-decoration: none;
 }
-.usage-guide-button:hover { background: var(--color-action-hover-strong); }
+.usage-guide-button:hover { background: #edeef0; }
 .usage-guide-button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
 .usage-guide-steps, .usage-guide-actions {
   display: grid;
@@ -1524,16 +1539,16 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   min-width: 0;
   padding: 18px 24px;
   border: 1px solid var(--color-border-card);
-  border-radius: 18px;
+  border-radius: 12px;
   background: var(--color-bg-surface);
 }
 .usage-guide-card h2 { color: var(--color-brand-heading); }
 .usage-guide-card ol { display: grid; gap: 4px; margin: 10px 0 12px; padding-left: 22px; }
-.usage-guide-card li::marker { color: var(--color-action-text-strong); font-weight: 700; }
+.usage-guide-card li::marker { color: var(--color-text-description); font-weight: 400; }
 .usage-guide-card .usage-guide-note {
   padding: 10px 14px;
   border-radius: 10px;
-  background: var(--guide-blue-tint);
+  background: var(--guide-note-background);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1541,15 +1556,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .usage-guide-note p { font-size: inherit; }
 .usage-guide-daangn { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--color-border-separator); }
 .usage-guide-daangn p { margin-top: 6px; }
-.usage-guide-categories p { margin-top: 6px; }
-.usage-guide-categories ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
-.usage-guide-categories li {
-  padding: 4px 11px;
-  border-radius: 999px;
-  background: var(--guide-blue-tint);
-  color: var(--color-action-text-strong);
-  font-weight: 600;
-}
 .usage-guide-action {
   display: flex;
   flex-direction: column;
@@ -1557,8 +1563,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   gap: 8px;
   padding: 15px 24px;
   border: 1px solid var(--color-border-control);
-  border-radius: 18px;
-  background: var(--guide-blue-tint);
+  border-radius: 12px;
+  background: var(--color-bg-surface);
 }
 .usage-guide-action h2 { color: var(--color-action-text-strong); }
 .usage-guide-action .usage-guide-button { margin-top: auto; }
@@ -1585,7 +1591,6 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .usage-guide-content { gap: 12px; padding-block: 14px 6px; }
   .usage-guide-card { padding-block: 12px; }
   .usage-guide-action { padding-block: 10px; }
-  .usage-guide-categories ul { margin-top: 8px; }
 }
 @media (max-width: 760px) {
   .usage-guide { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 22px; }
@@ -1594,13 +1599,11 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .usage-guide h1 { font-size: 20px; }
   .usage-guide h2 { font-size: 14px; }
   .usage-guide p, .usage-guide li, .usage-guide .usage-guide-intro { font-size: 13px; line-height: 1.4; }
-  .usage-guide-steps, .usage-guide-actions { gap: 8px; }
+  .usage-guide-steps, .usage-guide-actions { grid-template-columns: 1fr; gap: 8px; }
   .usage-guide-card, .usage-guide-action { padding: 8px 10px; border-radius: 12px; }
       .usage-guide-card ol { gap: 3px; margin: 6px 0 7px; padding-left: 16px; }
   .usage-guide-card .usage-guide-note { padding: 6px 7px; font-size: 12px; line-height: 1.4; }
   .usage-guide-note p { font-size: inherit; }
-  .usage-guide-categories ul { margin-top: 7px; gap: 4px; }
-  .usage-guide-categories li { padding: 3px 7px; }
   .usage-guide-action { gap: 5px; }
   .usage-guide-action p { margin-bottom: 2px; }
   .usage-guide-button { justify-content: space-between; align-self: stretch; gap: 4px; padding: 6px 8px; font-size: 12px; }
@@ -2041,8 +2044,9 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   color: var(--color-text-primary);
   font-size: 13px;
 }
-.agent-summary { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--color-bg-hover); }
-.agent-summary > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+.agent-summary { display: grid; gap: 4px; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--color-bg-hover); }
+.agent-summary > div { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; line-height: 24px; }
+.agent-summary > div + div { border-top: 1px solid var(--color-border-card); padding-top: 4px; }
 .agent-summary dt { flex: 0 0 68px; color: var(--color-text-secondary); }
 .agent-summary dd { flex: 1 1 95px; overflow-wrap: anywhere; margin: 0; font-weight: 700; }
 .agent-summary button, .agent-list-heading button, .agent-status button {
@@ -2121,11 +2125,11 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-candidates .agent-place-card { display: grid; grid-template-columns: minmax(0, 1fr) 112px; height: 60px; overflow: hidden; border: 1px solid var(--color-border-card); border-radius: 12px; background: var(--color-bg-surface); }
 .agent-place-card.is-selected { border-color: var(--color-action); background: var(--color-bg-selected); }
 .agent-candidates .agent-place-card:hover, .agent-candidates .agent-place-card:focus-within { background: var(--color-bg-selected); }
-.agent-place-card .agent-candidate { min-width: 0; padding-block: 8px; border: 0; border-radius: 0; background: transparent; }
+.agent-place-card .agent-candidate { grid-area: 1 / 1 / 2 / -1; min-width: 0; padding-block: 8px; padding-right: 112px; border: 0; border-radius: 0; background: transparent; }
 .agent-place-card .agent-candidate > span:last-child { min-width: 0; }
 .agent-place-card .agent-candidate :is(strong, small) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.agent-place-card-action { display: flex; justify-content: flex-end; align-items: center; padding-right: 8px; }
-.agent-place-card-action .agent-place-confirm { min-height: 30px; padding: 5px 8px; font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.agent-place-card-action { grid-area: 1 / 1 / 2 / -1; display: flex; justify-content: flex-end; align-items: center; padding-right: 8px; pointer-events: none; }
+.agent-place-card-action .agent-place-confirm { pointer-events: auto; min-height: 30px; padding: 5px 8px; font-size: 12px; line-height: 1.4; white-space: nowrap; }
 .agent-place-replies { display: flex; align-self: flex-start; flex-wrap: wrap; gap: 6px; padding-block: 3px; }
 /* PRD 4.3-A — 챗봇 답안처럼 내용 길이에 맞춘 둥근 테두리 버튼. */
 .agent-place-replies .agent-action-chip {
