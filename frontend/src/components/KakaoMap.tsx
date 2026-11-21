@@ -483,29 +483,12 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       map.setBounds(bounds, ...padding);
       return;
     }
-    // PRD 4.3 · 4.4, 스프린트 6번 — 확정·반경 변경·경유지 추가 때 순간이동 대신 이어지는 이동을 보여 준다.
-    const cancelFlight = flyMapToBounds(kakao, map, bounds, padding, {
+    // PRD 4.3 · 4.4, 스프린트 6번 — 확정·반경 변경·경유지 추가 때 가까우면 순간이동 대신 부드럽게 확대·축소한다.
+    // 카카오 애니메이션 한 번만 쓰므로 사용자가 도중에 지도를 움직이면 카카오가 그대로 처리한다.
+    return flyMapToBounds(kakao, map, bounds, padding, {
       viewport: { width: container.clientWidth, height: container.clientHeight },
       reduceMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
     });
-    // 사용자가 지도를 직접 움직이면(드래그·휠·두 손가락·더블클릭 확대) 남은 이동을 멈춰 조작을 가로채지 않는다.
-    // 핀·클러스터를 한 번 누르는 것은 이동이 아니므로 멈추지 않는다. 캡처 단계로 받아 SDK가 전파를 막아도 놓치지 않는다.
-    const stop = () => cancelFlight();
-    const stopOnPinch = (event: TouchEvent) => {
-      if (event.touches.length > 1) cancelFlight();
-    };
-    const listenerOptions = { capture: true, passive: true };
-    kakao.maps.event.addListener(map, "dragstart", stop);
-    container.addEventListener("wheel", stop, listenerOptions);
-    container.addEventListener("dblclick", stop, listenerOptions);
-    container.addEventListener("touchstart", stopOnPinch, listenerOptions);
-    return () => {
-      cancelFlight();
-      kakao.maps.event.removeListener(map, "dragstart", stop);
-      container.removeEventListener("wheel", stop, listenerOptions);
-      container.removeEventListener("dblclick", stop, listenerOptions);
-      container.removeEventListener("touchstart", stopOnPinch, listenerOptions);
-    };
   }, [animateRadiusFit, leftInset, mapReady, radiusMeters, searchCenters, selectedPlace]);
 
   useEffect(() => {
