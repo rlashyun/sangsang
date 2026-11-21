@@ -75,6 +75,7 @@ def resolve_institution_scope(
     *,
     get_institutions: Callable[[], Sequence[Institution]],
     radius_m: int | None = None,
+    search_centers: Sequence[PlaceCandidate] = (),
 ) -> Iterator[dict[str, Any]]:
     yield {"type": "tool.started", "tool": "institutions"}
     try:
@@ -86,7 +87,7 @@ def resolve_institution_scope(
 
     # PRD 4.1·4.5 — Establish a scope before searching. Only zero institutions
     # can trigger radius expansion.
-    distances = [(row.institution_id, _distance_meters(place, row)) for row in institutions]
+    distances = [(row.institution_id, min(_distance_meters(center, row) for center in (search_centers or (place,)))) for row in institutions]
     radii = (radius_m,) if radius_m is not None else (1000, 1500, 2000)
     for radius in radii:
         scope = tuple(sorted({institution_id for institution_id, distance in distances if distance <= radius}))
@@ -103,6 +104,7 @@ def search_confirmed_place(
     search_items: Callable[[tuple[int, ...], str], SearchPage],
     rewrite_query: Callable[[str], str | None],
     radius_m: int | None = None,
+    search_centers: Sequence[PlaceCandidate] = (),
 ) -> Iterator[dict[str, Any]]:
     """Yield tool events and a result for a candidate from the pending selection."""
     selected = next((place for place in pending.candidates if place.candidate_id == candidate_id), None)
@@ -118,7 +120,7 @@ def search_confirmed_place(
     yield {"type": "tool.completed", "tool": "institutions"}
 
     # PRD 4.1·4.5 — 2026-11-21 사용자 승인: 물품도 0건이면 다음 반경으로 확장한다.
-    distances = [(row.institution_id, _distance_meters(selected, row)) for row in institutions]
+    distances = [(row.institution_id, min(_distance_meters(center, row) for center in (search_centers or (selected,)))) for row in institutions]
     if radius_m is not None and radius_m not in (1000, 1500, 2000):
         raise ValueError("검색 반경은 1km, 1.5km, 2km 중에서 정해 주세요.")
     radii = tuple(radius for radius in (1000, 1500, 2000) if radius >= (radius_m or 1000))

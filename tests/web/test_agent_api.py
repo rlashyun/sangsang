@@ -303,7 +303,7 @@ def test_place_only_message_can_confirm_before_the_item_question():
     locations.assert_not_called()
     confirmed = turn("2", first, type="select_place", candidate_id="p1")
     assert confirmed["status"] == "awaiting_clarification"
-    assert confirmed["message"] == "어떤 물품을 잃어버렸어요?"
+    assert confirmed["message"] == "어떤 물품을 잃어버렸어요? 들렀던 장소가 더 있다면 함께 알려주세요."
     assert confirmed["conditions"]["place"]["name"] == "강남역"
     assert confirmed["place_candidates"] == []
     locations.assert_called_once_with()
