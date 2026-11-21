@@ -124,6 +124,28 @@ def test_chat_api_confirms_map_point_before_and_after_item():
     assert client.post("/api/search-chat/turns", json=outside).status_code == 400
 
 
+def test_chat_searches_known_item_instead_of_asking_for_optional_features():
+    model = Mock(return_value={
+        "action": "clarify", "message": "지갑의 색상이나 브랜드, 특징을 알려주실 수 있나요?",
+        "place_query": None, "item_query": None, "clear_item_query": False,
+        "asks_for": "item", "item_changes": {"kind": "지갑", "color": None, "brand": None, "features": None},
+        "target": None,
+    })
+    search = Mock(return_value=SearchPage(({"item_id": 1, "institution_id": 42},), 1))
+    router = create_agent_router(model=model, find_places=lambda _: [],
+        get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search)
+    client = TestClient(create_app(Mock(), "dummy", agent_router=router))
+    point = {"type": "select_point", "request_id": "point", "latitude": 37.5, "longitude": 127.03, "name": "강남역"}
+    initial = json.loads(client.post("/api/search-chat/turns", json=point).text.splitlines()[-1])["response"]
+    reply = {"type": "message", "request_id": "wallet", "text": "지갑",
+             "session_id": initial["session_id"], "revision": initial["revision"]}
+    result = json.loads(client.post("/api/search-chat/turns", json=reply).text.splitlines()[-1])["response"]
+    assert result["status"] == "results"
+    assert result["matches"]["total_count"] == 1
+    assert "브랜드" not in result["message"]
+    search.assert_called_once_with((42,), "지갑", None)
+
+
 def test_luna_openrouter_request():
     model = OpenRouterAgentModel("dummy")
     with patch("retriever_lost_found.integrations.agent_model.build_opener") as opener:
