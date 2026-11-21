@@ -225,3 +225,9 @@ def mask_item_row(row: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, str):
             masked[field] = mask_text(value, high_risk=high_risk)
     return masked
+
+
+def row_needs_masking(row: dict[str, Any]) -> bool:
+    """출력할 때 `mask_item_row`가 무언가를 가리는 행인지. 수집 감사 로그의 `masked_count`에 씁니다."""
+    masked = mask_item_row(row)
+    return any(masked.get(field) != row.get(field) for field in MASKED_ROW_FIELDS)

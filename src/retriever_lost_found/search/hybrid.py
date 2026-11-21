@@ -10,6 +10,7 @@ import math
 from time import monotonic
 from typing import Any
 
+from ..privacy.masking import mask_numbers
 from . import synonyms
 from .synonyms import ALIASES
 
@@ -162,9 +163,11 @@ def keyword_scores(items: list[dict[str, Any]], query: str, *, timings: dict | N
     # Small, reviewed kind synonyms also retrieve descriptive phrases such as cash storage.
     for name in kinds:
         terms.update(tokenize(" ".join(synonyms.KIND_TERMS[name])))
-    texts = [search_text(item.get("search_text") or " ".join(
+    # PRD 3.3 · Q5 — DB search_text는 번호가 이미 가려져 있다(20261121150000). 칸을 직접 이어 붙이는
+    # 대체 경로도 같은 번호 마스킹을 거쳐, 가린 번호를 검색어로 맞혀 보는 길을 막는다.
+    texts = [search_text(item.get("search_text") or mask_numbers(" ".join(
         str(item.get(field) or "") for field in ("item_name", "raw_category_name", "color_name", "description")
-    )) for item in items]
+    ))) for item in items]
     docs = [Counter(_tokens(text)) for text in texts]
     lengths = [sum(doc.values()) for doc in docs]
     average = sum(lengths)/max(1,len(docs)) or 1
