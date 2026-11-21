@@ -86,9 +86,39 @@ begin
  return new;
 end $$;
 
+-- 검색 문서를 처음 채우는 seed 함수도 같은 search_text를 쓴다(20261113061646 본문에서 search_text 한 곳만 바꿈).
+-- 그대로 두면 이 함수로 채운 문서만 번호가 원문으로 남는다.
+create or replace function public.seed_found_item_search(p_after bigint,p_limit integer default 2000)
+returns jsonb language plpgsql security invoker set search_path='' set statement_timeout='45s' as $$
+declare f public.found_items; last_id bigint:=p_after; n integer:=0;
+begin
+ for f in select * from public.found_items where id>p_after order by id
+  limit least(greatest(p_limit,1),5000) for share loop
+  if f.location_match_status='matched' and f.storage_location_id is not null then
+   insert into public.found_item_search_documents(item_id,storage_location_id,content_hash,search_text,detail)
+   values(f.id,f.storage_location_id,encode(extensions.digest(public.bge_m3_input(f.normalized_search_text,f.item_name),'sha256'),'hex'),
+    -- PRD 3.3 · Q5 — 트리거와 같은 규칙
+    lower(public.mask_search_numbers(concat_ws(' ',f.item_name,f.raw_category_name,f.color_name,f.description))),
+    public.search_document(f))
+   on conflict do nothing;
+  end if;
+  perform public.refresh_search_vector(f.id);
+  last_id:=f.id; n:=n+1;
+ end loop;
+ return jsonb_build_object('last_id',last_id,'read',n);
+end $$;
+
 -- 기존 검색 문서 중 결과가 달라지는 행만 고친다. 숫자가 없는 행은 함수 호출 없이 건너뛴다(구분자·별표가
 -- 섞인 번호도 있어 더 좁은 사전 필터는 쓰지 않는다). found_items를 건드리지 않아 트리거·updated_at이 돌지 않는다.
+-- 함수는 행마다 한 번만 계산한다(로컬 PostgreSQL 16에서 호출당 약 62µs). 수집 트리거와 잠금이 겹치면
+-- 오래 기다리지 않고 실패하게 해 다음 시도로 넘긴다.
+set local lock_timeout = '5s';
 update public.found_item_search_documents d
-set search_text = public.mask_search_numbers(d.search_text)
-where d.search_text ~ '\d'
-  and public.mask_search_numbers(d.search_text) is distinct from d.search_text;
+set search_text = m.masked
+from (
+  select item_id, public.mask_search_numbers(search_text) as masked
+  from public.found_item_search_documents
+  where search_text ~ '\d'
+) m
+where d.item_id = m.item_id
+  and m.masked is distinct from d.search_text;

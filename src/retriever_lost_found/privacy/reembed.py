@@ -102,7 +102,10 @@ def run_reembed(
 ) -> dict[str, Any]:
     if not 1 <= page_size <= PAGE_SIZE:
         raise ValueError(f"page_size는 1~{PAGE_SIZE} 범위여야 합니다.")
-    datetime.fromisoformat(embedded_before)  # 형식 오류는 DB에 닿기 전에 ValueError로 막는다
+    # 형식 오류는 DB에 닿기 전에 ValueError로 막는다. 시간대가 없으면 DB가 세션 시간대(UTC)로 읽어
+    # 기준 시각이 9시간 어긋나므로 함수 단에서도 거절한다.
+    if datetime.fromisoformat(embedded_before).tzinfo is None:
+        raise ValueError("embedded_before에는 시간대를 넣어야 합니다(예: +09:00).")
     if apply and client is None:
         raise ValueError("--apply에는 임베딩 API 키가 필요합니다.")
     summary = {"mode": "apply" if apply else "dry_run", "scanned": 0, "candidates": 0,

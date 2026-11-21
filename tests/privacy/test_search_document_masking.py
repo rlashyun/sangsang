@@ -89,6 +89,12 @@ def test_trigger_masks_search_text_only_and_function_is_service_role_only() -> N
     )
     # detail(응답용)·content_hash(임베딩 기준)는 그대로다. 응답은 앱의 mask_item_row가 가린다.
     assert "public.search_document(new))" in sql
+    # seed 함수도 같은 규칙으로 search_text를 만든다 — 원문 번호가 남는 다른 쓰기 경로가 없어야 한다
+    assert (
+        "lower(public.mask_search_numbers(concat_ws(' ',f.item_name,f.raw_category_name,"
+        "f.color_name,f.description)))" in sql
+    )
+    assert "lower(concat_ws(" not in sql
     assert "bge_m3_input(new.normalized_search_text,new.item_name)" in sql
     # 절대 규칙 6
     assert "revoke all on function public.mask_search_numbers(text) from public,anon,authenticated" in sql
@@ -130,5 +136,13 @@ def test_visible_text_and_names_stay_searchable(query, item_id) -> None:
 def test_db_search_text_is_used_as_is() -> None:
     # 운영 경로: DB가 돌려준 search_text(이미 번호를 가림)를 그대로 쓴다.
     stored = {**CARD_ITEM, "search_text": masking.mask_numbers("신한카드 카드번호 1111-5678-9012-2222").lower()}
+    assert 1 not in keyword_scores([stored], "5678")
+    assert 1 in keyword_scores([stored], "신한카드")
+
+
+def test_full_width_digits_left_by_sql_are_masked_before_bm25() -> None:
+    # PostgreSQL `\d`는 ASCII 숫자만 가리므로 전각 카드번호는 DB search_text에 그대로 남을 수 있다.
+    # NFKC가 이를 ASCII로 바꿔도 가운데 자리가 BM25 조각이 되지 않아야 한다.
+    stored = {**CARD_ITEM, "search_text": "신한카드 １１１１５６７８９０１２２２２２"}
     assert 1 not in keyword_scores([stored], "5678")
     assert 1 in keyword_scores([stored], "신한카드")

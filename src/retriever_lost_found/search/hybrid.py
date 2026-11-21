@@ -127,7 +127,7 @@ def _standalone(text: str, word: str) -> bool:
 
 
 def candidate_matches(text: str, terms: set[str], words: set[str]) -> bool:
-    """keyword_found_item_candidates(20261121120000)와 같은 포함 판정. text는 DB search_text(소문자 원문)다."""
+    """keyword_found_item_candidates(20261121120000)와 같은 포함 판정. text는 DB search_text(번호만 가린 소문자 원문)다."""
     return any(term in text for term in terms) or any(_standalone(text, word) for word in words)
 
 
@@ -165,7 +165,10 @@ def keyword_scores(items: list[dict[str, Any]], query: str, *, timings: dict | N
         terms.update(tokenize(" ".join(synonyms.KIND_TERMS[name])))
     # PRD 3.3 · Q5 — DB search_text는 번호가 이미 가려져 있다(20261121150000). 칸을 직접 이어 붙이는
     # 대체 경로도 같은 번호 마스킹을 거쳐, 가린 번호를 검색어로 맞혀 보는 길을 막는다.
-    texts = [search_text(item.get("search_text") or mask_numbers(" ".join(
+    # DB 값에도 한 번 더 적용한다: PostgreSQL `\d`는 ASCII 숫자만 보지만 Python `\d`는 전각 숫자(１２…)도
+    # 보고, 아래 search_text()의 NFKC가 전각 숫자를 ASCII로 바꿔 BM25 조각이 되기 때문이다. 이미 가린
+    # 값에는 결과가 같다(멱등).
+    texts = [search_text(mask_numbers(item.get("search_text") or " ".join(
         str(item.get(field) or "") for field in ("item_name", "raw_category_name", "color_name", "description")
     ))) for item in items]
     docs = [Counter(_tokens(text)) for text in texts]

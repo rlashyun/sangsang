@@ -90,6 +90,10 @@ def test_apply_without_key_and_bad_cutoff_fail_before_db() -> None:
         run_reembed(FakeStore(), None, embedded_before=CUTOFF, apply=True)
     with pytest.raises(ValueError):
         run_reembed(FakeStore(), FakeClient(), embedded_before="어제", apply=False)
+    store = FakeStore()
+    with pytest.raises(ValueError):
+        run_reembed(store, None, embedded_before="2026-11-20T18:50:00", apply=False)  # 시간대 없음
+    assert store.cutoffs == set()  # DB에 닿기 전에 막는다
 
 
 def test_replace_rpc_only_updates_unchanged_old_vectors_and_is_service_role_only() -> None:
