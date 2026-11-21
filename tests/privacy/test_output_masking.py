@@ -60,9 +60,6 @@ class FakeFoundItemClient:
     def fetch_items(self, location_ids):
         return self.rows
 
-    def fetch_rerank_items(self, location_ids, item_ids, **kwargs):
-        return [{"item_id": row["id"], "detail": row, "vector": None} for row in self.rows if row["id"] in item_ids]
-
 
 def _client(found_item_client: FakeFoundItemClient) -> TestClient:
     return TestClient(create_app(

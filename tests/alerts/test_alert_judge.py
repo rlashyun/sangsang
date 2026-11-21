@@ -51,12 +51,6 @@ class SameAsSearchClient:
         ]
         return {"items": items, "candidate_count": len(ITEMS)}
 
-    def fetch_rerank_items(self, location_ids, item_ids, *, timeout):
-        return [
-            {"item_id": item["id"], "detail": {**item, "storage_location_id": LOCATION_ID}, "vector": None}
-            for item in ITEMS if item["id"] in item_ids
-        ]
-
 
 def search_ids(query: str) -> set[int]:
     rows, _, _ = search_found_items(SameAsSearchClient(), query, [LOCATION_ID])
