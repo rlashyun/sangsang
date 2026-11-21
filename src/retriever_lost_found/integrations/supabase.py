@@ -188,16 +188,16 @@ class SupabaseFoundItemClient:
         return payload
 
     def fetch_semantic_items(self, location_ids: list[int], vector, *, timeout: float,
-                             min_similarity: float = 0.6, limit: int = 200, rescore: int = 500):
-        """PRD 4.1, 4.5 — 반경 전체 의미 검색(마이그레이션 one_bit_semantic_search).
+                             min_similarity: float = 0.525, limit: int = 200, rescore: int = 500):
+        """PRD 4.1, 4.5 — 반경 전체 의미 검색(Gemini Embedding 2, 마이그레이션 gemini2_embeddings).
 
-        DB가 1비트 해밍 거리로 rescore건을 고르고 원본 halfvec 코사인으로 다시 매겨
-        min_similarity 이상 상위 limit건만 돌려준다. 점수는 원본 코사인 그대로다.
+        DB가 Gemini 1비트 표의 해밍 거리로 rescore건을 고르고 Gemini halfvec 코사인으로 다시 매겨
+        min_similarity 이상 상위 limit건만 돌려준다. 점수는 코사인 그대로다.
         """
         values = [float(value) for value in vector]
         if len(values) != 1024 or not all(math.isfinite(value) for value in values):
             raise ValueError("질의 벡터 형식이 올바르지 않습니다.")
-        rows = self._search_rpc("semantic_found_item_candidates", {
+        rows = self._search_rpc("semantic_found_item_candidates_gemini2", {
             "p_location_ids": _unique_location_ids(location_ids),
             "p_query": "[" + ",".join(f"{value:.6g}" for value in values) + "]",
             "p_min": min_similarity, "p_limit": limit, "p_rescore": rescore}, timeout)

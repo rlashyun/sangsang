@@ -567,8 +567,11 @@ class SchemaMigrationTests(unittest.TestCase):
         for table in ("found_item_embeddings_gemini2", "found_item_search_vectors_gemini2_1bit"):
             self.assertIn(f"alter table public.{table} enable row level security;", migration)
         self.assertIn("from public, anon, authenticated;", migration)
-        source = "\n".join(p.read_text(encoding="utf-8") for p in (MIGRATIONS.parents[1] / "src").rglob("*.py"))
-        self.assertNotIn("gemini2", source)  # 검색 전환 전까지 앱은 Gemini 표를 읽지 않는다.
+        # 검색 전환 뒤 앱은 Gemini 의미 검색 함수만 부르고, 일일 동기화(크론)는 여전히 BGE 표만 채운다.
+        src = MIGRATIONS.parents[1] / "src" / "retriever_lost_found"
+        self.assertIn("semantic_found_item_candidates_gemini2",
+                      (src / "integrations" / "supabase.py").read_text(encoding="utf-8"))
+        self.assertNotIn("gemini", (src / "embedding" / "orchestration.py").read_text(encoding="utf-8").lower())
         rollback = self._squashed(f"../rollbacks/{path.name}")
         self.assertIn("drop trigger if exists found_items_sync_gemini2_vector on public.found_items;", rollback)
         self.assertIn("drop table if exists public.found_item_embeddings_gemini2;", rollback)

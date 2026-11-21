@@ -1,4 +1,4 @@
-"""Server-only BGE-M3 client; same model/provider as stored item vectors."""
+"""Server-only embedding clients: BGE-M3 for the daily item sync, Gemini Embedding 2 for search queries."""
 from __future__ import annotations
 
 import json
@@ -86,6 +86,76 @@ class BgeM3Client:
                 delay = 0
             raise EmbeddingRequestError("HTTP_" + str(error.code),
                 retryable=error.code in (408, 429) or error.code >= 500, retry_after=delay) from None
+        except (URLError, OSError, HTTPException):
+            raise EmbeddingRequestError("network", retryable=True) from None
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            raise EmbeddingRequestError("invalid_response") from None
+
+
+class GeminiQueryClient:
+    """PRD 4.5 — 검색어 전용 Gemini Embedding 2 클라이언트(2026-11-22 전환).
+
+    물품 벡터(found_item_embeddings_gemini2)와 같은 모델·경로·차원이다. 검색어는 Google 권장 검색 형식
+    'task: search result | query: …'로 감싼다. 물품 임베딩(일일 동기화)은 이 클래스를 쓰지 않는다.
+    """
+    MODEL = "google/gemini-embedding-2"
+    PROVIDER = "Google AI Studio"
+    QUERY_FORMAT = "task: search result | query: {}"
+
+    def __init__(self, api_key: str, *, timeout: float = 5):
+        self.api_key = api_key
+        self.timeout = timeout
+        self._cache = OrderedDict()
+        self._cache_lock = Lock()
+
+    def embed(self, text: str, *, timeout: float | None = None) -> list[float]:
+        # Query vectors only: no caching of found-item responses or failures.
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("검색어가 비어 있습니다.")
+        with self._cache_lock:
+            cached = self._cache.get(text)
+            if cached is not None and monotonic()-cached[0] < 3600:
+                self._cache.move_to_end(text)
+                return list(cached[1])
+        try:
+            vector = self._request(text, min(self.timeout, timeout) if timeout is not None else self.timeout)
+        except EmbeddingRequestError:
+            raise RuntimeError("의미 검색용 임베딩을 생성하지 못했습니다.") from None
+        with self._cache_lock:
+            self._cache[text] = (monotonic(), tuple(vector))
+            self._cache.move_to_end(text)
+            if len(self._cache)>128:
+                self._cache.popitem(last=False)
+        return vector
+
+    def _request(self, text: str, timeout: float) -> list[float]:
+        request = Request(
+            "https://openrouter.ai/api/v1/embeddings",
+            data=json.dumps({"model": self.MODEL, "input": [self.QUERY_FORMAT.format(text)], "dimensions": 1024,
+                             "encoding_format": "float",
+                             "provider": {"only": [self.PROVIDER], "allow_fallbacks": False,
+                                          "data_collection": "deny"}}).encode(),
+            headers={"Authorization": "Bearer " + self.api_key, "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with build_opener(NoRedirect()).open(request, timeout=timeout) as response:
+                payload = json.load(response)
+            records = payload["data"]
+            model = str(payload.get("model", "gemini-embedding-2")).lower()
+            if (model not in ("gemini-embedding-2", "google/gemini-embedding-2", "models/gemini-embedding-2")
+                or str(payload.get("provider", self.PROVIDER)).lower() != self.PROVIDER.lower()
+                or not isinstance(records, list) or len(records) != 1 or records[0].get("index") != 0):
+                raise ValueError
+            vector = records[0]["embedding"]
+            if (not isinstance(vector, list) or len(vector) != 1024
+                    or not all(type(x) in (int, float) and math.isfinite(x) and abs(x) <= 65504 for x in vector)
+                    or not any(vector)):
+                raise ValueError
+            return vector
+        except HTTPError as error:
+            raise EmbeddingRequestError("HTTP_" + str(error.code),
+                retryable=error.code in (408, 429) or error.code >= 500) from None
         except (URLError, OSError, HTTPException):
             raise EmbeddingRequestError("network", retryable=True) from None
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):

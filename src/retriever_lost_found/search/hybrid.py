@@ -16,8 +16,10 @@ from .synonyms import ALIASES
 
 # PRD 4.5 — 2026-11-21 확정안. 의미 점수는 반경 전체 1비트 의미 검색 한 곳에서만 온다
 # (키워드 상위 200건 벡터 재정렬은 김성현 결정으로 없앴다).
-SEMANTIC_MIN_SIMILARITY = 0.60  # 이 값 이상만 의미 점수를 준다(키워드에 없는 물품도 이 값 이상이면 추가).
-SEMANTIC_LIMIT = 200            # 의미 검색 결과 상한(코사인 0.60 이상 상위 200건)
+# 2026-11-22 Gemini Embedding 2 전환: 검색어는 'task: search result | query: …', 물품은 'title: none | text: …'.
+# 임계값 0.525는 사용자 실험(질의 100개, 보정 50에서 선택)의 Gemini TASK 값이다. 가중치는 75/25 그대로.
+SEMANTIC_MIN_SIMILARITY = 0.525  # 이 값 이상만 의미 점수를 준다(키워드에 없는 물품도 이 값 이상이면 추가).
+SEMANTIC_LIMIT = 200             # 의미 검색 결과 상한(코사인 0.525 이상 상위 200건)
 SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 후보 수(원본 상위 200과 98.0% 일치)
 KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25
 SEMANTIC_BUDGET_SECONDS = 4.0
