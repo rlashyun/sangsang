@@ -51,10 +51,6 @@ class FakeResponse:
 
 
 class FakeFoundItemClient:
-    def fetch_rerank_items(self, location_ids, item_ids, **kwargs):
-        return [{"item_id": row["id"], "detail": row, "vector": None}
-                for row in self.fetch_items(location_ids) if row["id"] in item_ids]
-
     def __init__(self, *, page_has_more: bool = False) -> None:
         self.page_has_more = page_has_more
         self.fetch_items_calls: list[list[int]] = []
@@ -600,7 +596,7 @@ class KakaoLocalClientTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(found_item_client.fetch_items_calls, [[77], [77]])
+        self.assertEqual(found_item_client.fetch_items_calls, [[77]])
         self.assertEqual(found_item_client.page_calls, [])
         self.assertIsNone(response.json()["next_cursor"])
 

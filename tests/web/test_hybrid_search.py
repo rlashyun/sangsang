@@ -1,6 +1,4 @@
 import json
-import base64
-import struct
 import threading
 from unittest.mock import patch
 
@@ -25,11 +23,10 @@ class FakeItems:
         assert ids == [7]
         return ITEMS
 
-    def fetch_rerank_items(self, ids, item_ids, **kwargs):
-        assert ids == [7]
-        scores = {1: 0.9, 2: 0.85}
-        return [{"item_id":row["id"],"detail":row,"vector":(1.0,)*1024}
-                for row in self.fetch_items(ids) if row["id"] in item_ids]
+    def fetch_semantic_items(self, ids, vector, **kwargs):
+        # PRD 4.5 — radius-wide 1-bit semantic RPC (cos ≥ 0.60, top 200). Every in-scope row is close.
+        assert ids == [7] and len(vector) == 1024
+        return [{"item_id": row["id"], "similarity": 0.9, "detail": row} for row in self.fetch_items(ids)]
 
 
 class FakeEmbedding:
@@ -61,7 +58,7 @@ def test_keyword_candidates_include_wallet():
     assert keyword_scores(ITEMS,"지갑")
 
 
-def test_reranking_combines_keyword_candidates_without_mutating_items():
+def test_semantic_scores_combine_with_keyword_candidates_without_mutating_items():
     results,count,status=search_found_items(FakeItems(),"지갑",[7],FakeEmbedding())
     assert count==3 and status=="ok" and {r["id"] for r in results}=={1,2}
     assert results==sorted(results,key=lambda r:(-r["match_score"],-r["id"]))
@@ -97,14 +94,15 @@ def test_semantic_budget_returns_without_waiting_for_blocked_worker():
         assert finished.wait(2)
 
 
-def test_rerank_rechecks_location_scope():
+def test_semantic_rows_outside_the_scope_neither_add_nor_score():
     class Items(FakeItems):
-        def fetch_rerank_items(self,ids,item_ids,**kwargs):
-            assert set(item_ids)=={1,2}
-            return [{"item_id":1,"vector":(1.0,)*1024,"detail":{**ITEMS[0],"description":"상세 보존"}},
-                    {"item_id":2,"vector":(1.0,)*1024,"detail":{**ITEMS[1],"storage_location_id":999}}]
+        def fetch_semantic_items(self,ids,vector,**kwargs):
+            return [{"item_id":1,"similarity":0.9,"detail":{**ITEMS[0],"description":"상세 보존"}},
+                    {"item_id":2,"similarity":0.9,"detail":{**ITEMS[1],"storage_location_id":999}}]
     rows,count,_=search_found_items(Items(),"지갑",[7],FakeEmbedding())
-    assert count==3 and len(rows)==1 and rows[0]["description"]=="상세 보존"
+    by_id={row["id"]:row for row in rows}
+    assert count==3 and set(by_id)=={1,2} and by_id[1]["description"]=="상세 보존"
+    assert by_id[2]["match_score"]==pytest.approx(0.75*keyword_scores(ITEMS,"지갑")[2],abs=1e-6)
 
 
 def test_search_projection_and_keyset_pagination_keep_scope():
@@ -142,7 +140,7 @@ def test_keyword_candidate_rpc_sends_scope_and_terms_without_kind_mask_argument(
     assert json.loads(request.data) == {"p_location_ids": [7], "p_terms": ["가방", "백팩"]}
 
 
-def test_rerank_cannot_add_a_wrong_kind_outside_keyword_candidates():
+def test_semantic_results_cannot_add_a_wrong_kind():
     class Items(FakeItems):
         def fetch_items(self,ids):
             return [{"id":1,"storage_location_id":7,"item_name":"모자"},
@@ -160,18 +158,6 @@ def test_description_can_support_kind_when_source_name_is_vague():
     assert 1 in keyword_scores([item], "지갑")
 
 
-def test_rerank_cannot_expand_keyword_pool():
-    class Items(FakeItems):
-        def fetch_candidate_bundle(self,ids,terms,**kwargs):
-            return {"items":[ITEMS[0]],"candidate_count":100}
-        def fetch_rerank_items(self,ids,item_ids,**kwargs):
-            assert item_ids==[1]
-            return [{"item_id":1,"detail":ITEMS[0],"vector":(1.0,)*1024},
-                    {"item_id":2,"detail":ITEMS[1],"vector":(1.0,)*10249}]
-    rows,count,status=search_found_items(Items(),"지갑",[7],FakeEmbedding())
-    assert count==100 and status=="ok" and [r["id"] for r in rows]==[1]
-
-
 def test_search_pagination_exposes_total_without_dropping_remaining_matches():
     class Items(FakeItems):
         def fetch_items(self, ids):
@@ -185,23 +171,14 @@ def test_search_pagination_exposes_total_without_dropping_remaining_matches():
     assert not ({r["id"] for r in first["items"]} & {r["id"] for r in second["items"]})
 
 
-def test_only_200_vectors_but_every_keyword_match_is_preserved():
+def test_every_keyword_match_is_preserved_without_semantic_scores():
     class Items(FakeItems):
         def fetch_items(self, ids):
             return [{"id": i,"storage_location_id":7,"item_name":"지갑"} for i in range(1,251)]
-        def fetch_rerank_items(self, ids, item_ids, **kwargs):
-            assert len(item_ids)==200
-            return super().fetch_rerank_items(ids,item_ids,**kwargs)
+        def fetch_semantic_items(self, ids, vector, **kwargs):
+            return super().fetch_semantic_items(ids,vector,**kwargs)[:200]
     rows,_,status=search_found_items(Items(),"지갑",[7],FakeEmbedding())
     assert status=="ok" and {row["id"] for row in rows}==set(range(1,251))
-
-
-@pytest.mark.parametrize("raw", [b"short",struct.pack("!hh1024f",1023,0,*([1.0]*1024))])
-def test_candidate_vectors_reject_malformed_binary(raw):
-    payload=[{"item_id":1,"detail":ITEMS[0],"vector":base64.b64encode(raw).decode()}]
-    with patch("retriever_lost_found.integrations.supabase._request_json",return_value=payload):
-        with pytest.raises(RuntimeError,match="벡터"):
-            SupabaseFoundItemClient("https://test.supabase.co","test-key").fetch_rerank_items([7],[1],timeout=1)
 
 
 def test_supabase_compressed_json_is_decoded():
@@ -280,22 +257,13 @@ def test_endpoint_maintains_response_and_does_not_expose_vectors():
     assert "embedding" not in response.text
 
 
-def test_rerank_rpc_contains_both_scope_and_candidate_ids():
-    payload=[{"item_id":1,"detail":ITEMS[0],"vector":base64.b64encode(struct.pack("!hh1024f",1024,0,*([1.0]*1024))).decode()}]
-    with patch("retriever_lost_found.integrations.supabase._request_json",return_value=payload) as call:
-        rows=SupabaseFoundItemClient("https://test.supabase.co","test-key").fetch_rerank_items([7],[1],timeout=1)
-    assert rows==payload
-    args=json.loads(call.call_args.args[0].data)
-    assert args["p_location_ids"]==[7] and args["p_item_ids"]==[1]
-
-
-def test_database_rerank_failure_is_explicit():
+def test_database_semantic_failure_falls_back_to_keywords():
     class Items(FakeItems):
-        def fetch_rerank_items(self,ids,item_ids,**kwargs):
-            return SupabaseFoundItemClient("https://test.supabase.co","test-key").fetch_rerank_items(ids,item_ids,timeout=1)
+        def fetch_semantic_items(self,ids,vector,**kwargs):
+            return SupabaseFoundItemClient("https://test.supabase.co","test-key").fetch_semantic_items(ids,vector,timeout=1)
     with patch("retriever_lost_found.integrations.supabase._request_json",side_effect=TimeoutError):
-        with pytest.raises(RuntimeError,match="검색"):
-            search_found_items(Items(),"지갑",[7],FakeEmbedding())
+        rows,_,status=search_found_items(Items(),"지갑",[7],FakeEmbedding())
+    assert status=="unavailable" and {r["id"] for r in rows}=={1,2}
 
 
 def test_unrelated_query_has_no_keyword_results():
@@ -352,6 +320,7 @@ def test_semantic_search_adds_items_the_keyword_step_missed():
     rows, _, status = search_found_items(client, "지갑", [7], FakeEmbedding())
     assert status == "ok" and {r["id"] for r in rows} == {1, 2, 9}
     assert client.calls[0]["min_similarity"] == 0.6 and client.calls[0]["rescore"] == 500
+    assert client.calls[0]["limit"] == 200
     semantic_only = next(r for r in rows if r["id"] == 9)
     assert semantic_only["match_score"] == pytest.approx(0.25 * (0.8 - 0.6) / 0.4)
 
@@ -371,9 +340,11 @@ def test_semantic_search_runs_even_without_keyword_matches():
     assert status == "ok" and [r["id"] for r in rows] == [9]
 
 
-def test_semantic_rpc_failure_keeps_keyword_rerank():
+def test_semantic_rpc_failure_keeps_keyword_scores_only():
     rows, _, status = search_found_items(SemanticItems(error=RuntimeError("db")), "지갑", [7], FakeEmbedding())
-    assert status == "ok" and {r["id"] for r in rows} == {1, 2}
+    lexical = keyword_scores(ITEMS, "지갑")
+    assert status == "unavailable" and {r["id"]: r["match_score"] for r in rows} == {
+        i: pytest.approx(score, abs=1e-6) for i, score in lexical.items()}
 
 
 def test_semantic_rpc_sends_scope_vector_and_rescore_count():
@@ -385,7 +356,7 @@ def test_semantic_rpc_sends_scope_vector_and_rescore_count():
     request = call.call_args.args[0]
     body = json.loads(request.data)
     assert request.full_url.endswith("/rest/v1/rpc/semantic_found_item_candidates")
-    assert body["p_location_ids"] == [7] and body["p_rescore"] == 500 and body["p_limit"] == 100
+    assert body["p_location_ids"] == [7] and body["p_rescore"] == 500 and body["p_limit"] == 200
     assert body["p_min"] == 0.6 and body["p_query"].startswith("[0.5,") and rows[0]["similarity"] == 0.7
     with patch("retriever_lost_found.integrations.supabase._request_json",
                return_value=[{"item_id": 1, "similarity": 0.7, "detail": {**detail, "storage_location_id": 9}}]):

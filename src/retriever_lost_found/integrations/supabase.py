@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import base64
-import struct
 import gzip
 import math
 from http.client import HTTPException
@@ -164,35 +162,8 @@ class SupabaseFoundItemClient:
             raise RuntimeError("검색 후보 응답 형식이 올바르지 않습니다.")
         return payload
 
-    def fetch_rerank_items(self, location_ids: list[int], item_ids: list[int], *, timeout: float):
-        ids = sorted(set(int(item_id) for item_id in item_ids))
-        if not ids:
-            return []
-        if len(ids)>200 or any(item_id<=0 for item_id in ids):
-            raise ValueError("재정렬 후보는 최대 200건입니다.")
-        rows = self._search_rpc("keyword_rerank_vectors", {
-            "p_location_ids": _unique_location_ids(location_ids), "p_item_ids": ids}, timeout)
-        try:
-            if not isinstance(rows,list):
-                raise ValueError
-            for row in rows:
-                detail = row["detail"]
-                if (int(row["item_id"]) not in ids or int(detail["id"])!=int(row["item_id"])
-                    or detail.get("storage_location_id") not in location_ids):
-                    raise ValueError
-                if row["vector"] is not None:
-                    raw = base64.b64decode(row["vector"].replace("\n",""),validate=True)
-                    values = struct.unpack("!hh1024f",raw)
-                    vector = values[2:]
-                    if values[:2]!=(1024,0) or not all(math.isfinite(v) for v in vector) or not any(vector):
-                        raise ValueError
-                    row["vector"] = vector
-        except (KeyError,TypeError,ValueError,AttributeError,struct.error):
-            raise RuntimeError("검색 벡터 응답 형식이 올바르지 않습니다.") from None
-        return rows
-
     def fetch_semantic_items(self, location_ids: list[int], vector, *, timeout: float,
-                             min_similarity: float = 0.6, limit: int = 100, rescore: int = 500):
+                             min_similarity: float = 0.6, limit: int = 200, rescore: int = 500):
         """PRD 4.1, 4.5 — 반경 전체 의미 검색(마이그레이션 one_bit_semantic_search).
 
         DB가 1비트 해밍 거리로 rescore건을 고르고 원본 halfvec 코사인으로 다시 매겨

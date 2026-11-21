@@ -1,10 +1,10 @@
 -- PRD 4.1 / 4.5 / 5 — 2026-11-21 김성현 결정: 텍스트 검색 확정안(1비트 후보 → 원본 재채점 + BM25 가중합).
 -- 근거 실험은 docs/measurements.md "반경 전체 의미 검색 — 1·2비트 양자화 속도와 디스크 사고" 절.
 --   - 반경 안 전체 물품을 1비트(부호) 벡터의 해밍 거리로 비교해 가까운 500건만 남기고,
---     그 500건만 원본 halfvec(found_item_embeddings_bge_m3)으로 코사인을 다시 계산한다.
---     원본 정확 검색 상위 100건과 99.95% 같고, 서울역 1km 정답 Recall@30도 같았다.
---   - 검색용 원본 사본 found_item_search_vectors(1,753MB)는 더 쓰지 않는다. 재채점·키워드 재정렬은
---     원본 테이블에서 읽는다. 2비트 표와 실험 함수(exp_*)도 지운다.
+--     그 500건만 원본 halfvec(found_item_embeddings_bge_m3)으로 코사인을 다시 계산해 0.60 이상 상위 200건을 준다.
+--     원본 정확 검색 상위 200건과 98.0% 같다(로컬 재현). 의미 점수는 이 함수 한 곳에서만 나온다.
+--   - 검색용 원본 사본 found_item_search_vectors(1,753MB)는 더 쓰지 않는다. 재채점은 원본 테이블에서 읽는다.
+--     2비트 표와 실험 함수(exp_*)도 지운다. 앱은 키워드 상위 200건 벡터 재정렬(keyword_rerank_vectors)을 더 부르지 않는다.
 --   - 최종 점수(앱): 0.75·BM25 + 0.25·(cos−0.60)/0.40. 원본 벡터 열은 storage plain으로 바꾼다.
 -- 적용: GitHub 연동(Deploy to production)으로 main 병합 시 적용된다. 운영 최신 버전 20261121120000 뒤 번호다.
 -- 일일 동기화: 임베딩이 저장되거나(embeddings_sync_search) 물품 위치가 바뀌면(found_items_sync_search)
@@ -48,7 +48,8 @@ begin
  end if;
 end $$;
 
--- 4) 키워드 상위 200건 재정렬: 원본 임베딩에서 읽는다. 1비트 행이 있어야(위치 일치·현재 버전) 벡터를 준다.
+-- 4) keyword_rerank_vectors: 새 앱은 부르지 않는다. main 병합 때 DB 적용과 Vercel 배포가 거의 동시라
+--    그 사이 이전 앱이 사본 삭제로 깨지지 않게 원본에서 읽도록만 바꿔 둔다. 다음 마이그레이션에서 삭제한다.
 create or replace function public.keyword_rerank_vectors(p_location_ids bigint[], p_item_ids bigint[])
 returns table(item_id bigint, detail jsonb, vector text)
 language sql stable security invoker set search_path = '' set jit = 'off' set statement_timeout = '1500ms' as $$
@@ -63,7 +64,7 @@ $$;
 
 -- 5) 반경 전체 의미 검색: 1비트 해밍 상위 p_rescore건 → 원본 코사인 재채점 → p_min 이상 상위 p_limit건.
 create function public.semantic_found_item_candidates(p_location_ids bigint[], p_query extensions.halfvec,
-  p_min float8 default 0.6, p_limit int default 100, p_rescore int default 500)
+  p_min float8 default 0.6, p_limit int default 200, p_rescore int default 500)
 returns table(item_id bigint, similarity float8, detail jsonb)
 language plpgsql stable security invoker set search_path = '' set jit = 'off' set statement_timeout = '2500ms' as $$
 declare q bit(1024);

@@ -13,12 +13,12 @@ from typing import Any
 from . import synonyms
 from .synonyms import ALIASES
 
-RERANK_LIMIT = 200
-# PRD 4.5 — 2026-11-21 확정안. 반경 전체 의미 검색은 1비트 후보 500건을 원본 코사인으로 다시 매긴다.
+# PRD 4.5 — 2026-11-21 확정안. 의미 점수는 반경 전체 1비트 의미 검색 한 곳에서만 온다
+# (키워드 상위 200건 벡터 재정렬은 김성현 결정으로 없앴다).
 SEMANTIC_MIN_SIMILARITY = 0.60  # 이 값 이상만 의미 점수를 준다(키워드에 없는 물품도 이 값 이상이면 추가).
-SEMANTIC_LIMIT = 100            # 의미 검색으로 추가하는 물품 상한
-SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 후보 수(원본 상위 100과 99.95% 일치)
-KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25  # 2026-11-21 김성현 측정: Recall@10 0.773·@30 0.777
+SEMANTIC_LIMIT = 200            # 의미 검색 결과 상한(코사인 0.60 이상 상위 200건)
+SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 후보 수(원본 상위 200과 98.0% 일치)
+KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25
 SEMANTIC_BUDGET_SECONDS = 4.0
 SEARCH_BUDGET_SECONDS = 4.4  # HTTP/JSON 전송 여유를 포함해 5초 목표를 검증한다.
 _semantic_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="semantic")
@@ -236,24 +236,18 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         count = len(items)
     timings = {"keyword_fetch_ms":round((monotonic()-started)*1000,2)}
     lexical = keyword_scores(items,query,timings=timings)
-    # Rerank only the top 200 keyword matches with stored vectors; keep every keyword match below them.
-    # Semantic-only matches come from the radius-wide 1-bit search (PRD 4.5, 2026-11-21).
-    ids = sorted(lexical,key=lambda item_id:(-lexical[item_id],-item_id))[:RERANK_LIMIT]
     timings["keyword_total_ms"] = round((monotonic()-started)*1000,2)
-    if not ids and vector_future is None:
+    if not lexical and vector_future is None:
         return [],count,"disabled" if embedding_client is None else "skipped"
-    rerank_started = monotonic()
-    # Load the small item matrix while the query embedding is still being generated.
-    rows = client.fetch_rerank_items(location_ids,ids,timeout=max(0,deadline-monotonic())) if ids else []
-    vector = semantic_rows = None
+    merge_started = monotonic()
+    semantic_rows = None
     status = "disabled" if embedding_client is None else "unavailable"
     if vector_future is not None:
         try:
-            vector,semantic_rows,semantic_error = vector_future.result(
+            _,semantic_rows,semantic_error = vector_future.result(
                 timeout=max(0,min(started+semantic_budget,deadline-0.1)-monotonic()))
-            status = "ok"
             if semantic_error is not None:
-                # PRD 5 — keyword + 200-vector rerank still works; only semantic-only additions are missing.
+                # PRD 5 — keyword results still work; only semantic scores are missing.
                 from ..agent_diagnostics import record
                 record("semantic.fallback", error=semantic_error, stage="semantic_search", final_status="fallback")
         except (RuntimeError,TimeoutError) as error:
@@ -264,41 +258,31 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     if embedding_client is not None and vector_future is None:
         from ..agent_diagnostics import record
         record("embedding.fallback", stage="embedding", reason="busy", final_status="fallback")
-    query_norm = math.sqrt(math.sumprod(vector,vector)) if vector is not None else 0
+    if semantic_rows is not None:
+        status = "ok"
     by_id = {int(item["id"]):item for item in items if int(item["id"]) in lexical}
     scored = {}
-    for item_id in ids:
-        by_id.pop(item_id,None)  # deleted/moved rows must not survive the live scope lookup
-    for row in rows:
-        item,item_vector=row["detail"],row["vector"]
+    # Radius-wide semantic results (1-bit → half rescore, cos ≥ 0.60, top 200) score keyword matches
+    # and add items the keyword step missed, behind the same kind gate as BM25.
+    for row in semantic_rows or ():
+        item=row["detail"]
         item_id=int(item["id"])
-        if item_id in ids and item.get("storage_location_id") in location_ids and supports_kind(item,kinds,query):
+        if item.get("storage_location_id") not in location_ids or not supports_kind(item,kinds,query):
+            continue
+        if item_id in by_id:
+            by_id[item_id]={**by_id[item_id],**item}  # keyword row has only search fields
+        elif semantic_score(row["similarity"])>0:
             by_id[item_id]=item
-            if vector is not None and item_vector is not None:
-                scored[item_id]=math.sumprod(vector,item_vector)/(query_norm*math.sqrt(math.sumprod(item_vector,item_vector)))
-    if vector is not None:
-        # Radius-wide semantic matches add items the keyword step missed, behind the same kind gate as BM25.
-        for row in semantic_rows or ():
-            item=row["detail"]
-            item_id=int(item["id"])
-            if item.get("storage_location_id") not in location_ids or not supports_kind(item,kinds,query):
-                continue
-            if item_id in lexical and item_id not in by_id:
-                continue  # a keyword match the live scope lookup dropped stays dropped
-            by_id.setdefault(item_id,item)
-            scored.setdefault(item_id,row["similarity"])
+        else:
+            continue
+        scored[item_id]=row["similarity"]
     ranked=[]
     for item_id,item in by_id.items():
-        # PRD 4.5 — 0.75·BM25 + 0.25·(cos−0.60)/0.40. Keyword matches always stay; semantic-only need cos ≥ 0.60.
-        if vector is None:
+        # PRD 4.5 — 0.75·BM25 + 0.25·(cos−0.60)/0.40. Keyword matches always stay.
+        score=KEYWORD_WEIGHT*lexical.get(item_id,0)+SEMANTIC_WEIGHT*semantic_score(scored.get(item_id))
+        if semantic_rows is None:
             score=lexical[item_id]
-        else:
-            score=KEYWORD_WEIGHT*lexical.get(item_id,0)+SEMANTIC_WEIGHT*semantic_score(scored.get(item_id))
-            if item_id not in lexical and score<=0:
-                continue
         ranked.append({**item,"match_score":round(score,6)})
-    if vector is not None and not scored:
-        status="unavailable"
     ranked.sort(key=lambda item:(-item["match_score"],-int(item["id"])))
     # Keep every keyword match. Only the visible page needs full display fields.
     page=ranked[offset:offset+50]
@@ -310,7 +294,7 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
             if int(item["id"]) in details:
                 score=item["match_score"]
                 item.update(details[int(item["id"])]);item["match_score"]=score
-    timings["rerank_ms"]=round((monotonic()-rerank_started)*1000,2)
-    logging.getLogger(__name__).info("search timings=%s pool=%d shortlist=%d semantic_rows=%d semantic=%s",
-                                     timings,len(items),len(ids),len(semantic_rows or ()),status)
+    timings["merge_ms"]=round((monotonic()-merge_started)*1000,2)
+    logging.getLogger(__name__).info("search timings=%s pool=%d keyword=%d semantic_rows=%d semantic=%s",
+                                     timings,len(items),len(lexical),len(semantic_rows or ()),status)
     return ranked,count,status

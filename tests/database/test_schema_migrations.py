@@ -517,7 +517,7 @@ class SchemaMigrationTests(unittest.TestCase):
         semantic = migration.split("create function public.semantic_found_item_candidates", 1)[1]
         self.assertIn("order by bit_count(b.embedding # q), b.item_id desc limit p_rescore", semantic)
         self.assertIn("join public.found_item_embeddings_bge_m3 e on e.item_id = c.item_id", semantic)
-        self.assertIn("p_min float8 default 0.6, p_limit int default 100, p_rescore int default 500", semantic)
+        self.assertIn("p_min float8 default 0.6, p_limit int default 200, p_rescore int default 500", semantic)
         self.assertIn("security invoker", semantic)
         signature = "public.semantic_found_item_candidates(bigint[], extensions.halfvec, float8, int, int)"
         self.assertIn(f"revoke all on function {signature} from public, anon, authenticated", migration)
