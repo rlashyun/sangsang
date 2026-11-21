@@ -17,7 +17,6 @@ from .sender import (
     PermanentSendError,
     SendError,
     TemporarySendError,
-    with_idempotency_key,
 )
 from .settings import AlertSettings
 from .store import AlertStore
@@ -131,7 +130,6 @@ def _send_pending(
                 except Exception:
                     _release_quietly(store, batch[index:], counts)
                     raise
-                email = with_idempotency_key(email, message_id)
                 if session is None:
                     try:
                         session = sender.open()

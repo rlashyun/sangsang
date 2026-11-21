@@ -315,12 +315,9 @@ uv run python scripts/search_storage_location_kakao.py 5052
   Preview 환경에는 메일 설정을 넣지 않아 실제 메일이 나가지 않게 합니다.
 
 발신 수단은 **Google 메일(Gmail 앱 비밀번호, SMTP)** 로 확정했습니다(2026-11-22).
-Resend는 쓰지 않습니다. 코드에 남아 있는 Resend 발송기는 사용하지 않는 예비이며, 아래 Resend 변수는 비워 둡니다.
 
 서버 전용 환경 변수입니다. 브라우저로 전달하지 않습니다.
 
-- `MAIL_PROVIDER` — `smtp`(기본, 비워도 됨). `resend`는 쓰지 않습니다
-- `RESEND_API_KEY` — 사용하지 않음. 비워 둡니다
 - `MAIL_FROM` — 보내는 주소. 서비스 전용 Gmail 주소와 같게 씁니다. 예: `리트리버 <서비스 Gmail 주소>`
 - `MAIL_SMTP_HOST` — `smtp.gmail.com`
 - `MAIL_SMTP_PORT` — `465`(SSL) 또는 `587`(STARTTLS) (〃)

@@ -17,7 +17,7 @@ class SendTestCommandTests(unittest.TestCase):
             self.assertEqual(send_test.main(["--to", "Me@Example.com"]), 0)
 
         self.assertEqual([email.to for email in fake.sent], ["me@example.com"])
-        # MAIL_PROVIDER에 맞는 발송기(Gmail SMTP 또는 Resend)로 보낸다.
+        # Gmail SMTP 발송기로 보낸다.
         factory.assert_called_once_with(TEST_SETTINGS.mail)
 
     def test_missing_settings_sends_nothing(self) -> None:

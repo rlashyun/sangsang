@@ -19,7 +19,7 @@ from .links import (
     token_matches,
     token_reservation_id,
 )
-from .sender import EmailSender, with_idempotency_key
+from .sender import EmailSender
 from .settings import AlertSettings
 from .store import AlertPlace, AlertStore
 from .templates import alert_period, confirmation_email, format_day
@@ -170,10 +170,7 @@ class AlertService:
             reservation = self.store.get_reservation(reservation_id)
             if reservation is None:
                 raise RuntimeError("예약을 다시 읽지 못했습니다.")
-            message = with_idempotency_key(
-                confirmation_email(email, reservation, mail_links(self.settings, reservation, now)),
-                message_id,
-            )
+            message = confirmation_email(email, reservation, mail_links(self.settings, reservation, now))
             # 설계 14장 — 보냄 기록을 먼저 남긴다. 보낸 뒤 기록에 실패하면 발송 크론이 같은 확인 메일을
             # 다시 보내게 되기 때문이다. 발송이 실패하면 예약째 지우므로 450통 계산에서도 빠진다.
             self.store.finish_message(message_id, "sent")
