@@ -527,5 +527,19 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn(f"drop function if exists {signature};", rollback)
 
 
+    def test_embedding_rows_stay_inline_and_unused_rerank_rpc_is_dropped(self) -> None:
+        # PRD 4.5, 5 — 벡터를 plain으로 두면 행이 약 2.26KB라 짧은 글자 열이 TOAST로 밀린다. 4000 이하 행은 그대로 둔다.
+        [path] = MIGRATIONS.glob("*_inline_embedding_rows.sql")
+        self.assertGreater(path.name.split("_", 1)[0], "20261121190000")
+        migration = self._squashed(path.name)
+        self.assertIn("alter table public.found_item_embeddings_bge_m3 set (toast_tuple_target = 4000);", migration)
+        self.assertIn("drop function if exists public.keyword_rerank_vectors(bigint[], bigint[]);", migration)
+        self.assertNotIn("drop table", migration)
+        source = "\n".join(p.read_text(encoding="utf-8") for p in (MIGRATIONS.parents[1] / "src").rglob("*.py"))
+        self.assertNotIn("keyword_rerank_vectors", source)
+        rollback = self._squashed(f"../rollbacks/{path.name}")
+        self.assertIn("reset (toast_tuple_target)", rollback)
+        self.assertIn("create or replace function public.keyword_rerank_vectors", rollback)
+
 if __name__ == "__main__":
     unittest.main()

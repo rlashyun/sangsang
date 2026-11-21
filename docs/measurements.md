@@ -38,7 +38,18 @@
 - **원본 벡터 행 안 저장.** 사본 `found_item_search_vectors`가 빨랐던 이유는 `storage plain`이었다. 마이그레이션이 원본 열을 `storage plain`으로 바꾸고, 기존 61만 행은 `supabase/maintenance/inline_embedding_storage.sql`로 item_id 구간마다 하나씩 옮긴다(WAL 확인 후 진행).
   - 사전 확인(10:3x UTC): DB 5,407MB, WAL 1,952MB(125파일), max_wal_size 4GB, 아카이브 실패 없음.
   - 임시 테이블에서 vector→halfvec 변환 후 plain 저장 시 TOAST 청크 없이 2,056바이트, 값 동일(3건).
-  - 예상: 사본·2비트 삭제로 약 2.07GB 감소 → 행 안 이동으로 힙 약 1.6GB 증가 → 마지막 VACUUM으로 빈 TOAST 약 1.6GB 반환. 실행 결과는 적용 후 추가한다.
+  - 예상: 사본·2비트 삭제로 약 2.07GB 감소 → 행 안 이동으로 힙 약 1.6GB 증가 → 마지막 VACUUM으로 빈 TOAST 약 1.6GB 반환.
+  - **적용 결과(11:01~11:12 UTC).** PR #89 병합(10:51 UTC)으로 마이그레이션 `20261121190000`이 GitHub 연동으로 적용됐다(Supabase Preview 체크 10:52 완료). 적용 직후 DB 5,407MB → 3,333MB.
+    - 12구간(첫 구간 4만 id, 이후 6만 id, 마지막 661001~)에 616,318행을 옮겼다. 첫 구간은 20,546행에 WAL 111MB(행당 약 5.4KB), 15초였다. 구간당 15~30초 걸렸다.
+    - WAL 폴더는 1,664MB로 유지되다가, 중간 VACUUM 두 번 뒤 2,512MB → 2,832MB(180파일)로 늘었다. 이후 구간에서는 재사용 파일로 돌아 늘지 않았다. 아카이브 실패는 0, 수집·임베딩 실행 중 0이었다. `CHECKPOINT`는 권한(pg_checkpoint)이 없어 실행하지 못했고, WAL 3GB 근처에서 4분 기다렸다.
+    - 끝난 뒤 TOAST에 남은 벡터는 0행이다. 힙 1,664MB, TOAST 1,494MB, 표 전체 3,286MB, DB 4,780MB였다.
+    - **TOAST가 줄지 않은 이유.** 벡터를 행 안에 넣으면 행이 약 2,258바이트로 TOAST 기준(약 2KB)을 넘는다. 그래서 PostgreSQL이 작은 글자 열을 대신 밖으로 뺐다. `content_hash` 616,318행 전부와 `embedded_input` 293,304행이 TOAST로 옮겨졌다(청크 909,622개, 값마다 1청크). 살아 있는 작은 청크가 파일 곳곳에 남아 VACUUM이 파일을 자르지 못한다. 벡터 읽기는 영향이 없다. 임베딩 크론이 `embedded_input`·`content_hash`를 읽을 때만 TOAST를 거친다.
+  - **속도(EXPLAIN ANALYZE BUFFERS, 운영, 1회, 서울역 1km 27,794건, 질의는 물품 700001 벡터, 상세 200건).** 행 이동 직후라 캐시가 대부분 비어 있었다.
+    - 1비트 상위 500건: 259ms(read 3,830).
+    - 원본 500건 재채점: 약 326ms(read 938, TOAST 없음).
+    - 상세 200건: 약 136ms(read 293).
+    - 합계 728ms(read 5,065). 이전 TOAST 저장 때 같은 형태(상세 500건) 쿼리는 1,116ms(read 5,212)였다.
+    - 바로 다시 실제 함수 `semantic_found_item_candidates`로 부르면 50ms(hit 7,898, read 8).
 - **원본 임베딩 테이블 이름 변경 사고(운영, 마이그레이션 밖).** `found_item_embeddings_bge_m3`가 `original_embeddings`로 이름이 바뀌어 있었다(10:01 UTC 발견). 함수 본문은 이름으로 참조하므로 `refresh_search_vector`가 컴파일 오류(42704)를 냈다. 이 함수를 부르는 `found_items` 트리거 때문에 물품 INSERT/UPDATE가 모두 실패하는 상태였다. 사용자 요청으로 원래 이름으로 되돌렸고(`alter table ... rename`) 함수가 다시 컴파일되는 것을 확인했다. 오전 임베딩 실행(00:37~00:38 UTC, 3,252건)은 변경 전이라 정상이었다. 변경 시각과 그 사이 실패한 쓰기는 확인하지 못했다.
 
 ## 반경 전체 의미 검색 — 1·2비트 양자화 속도와 디스크 사고 — 2026-11-21 KST
