@@ -346,6 +346,45 @@ def test_semantic_search_runs_even_without_keyword_matches():
     assert status == "ok" and [r["id"] for r in rows] == [9]
 
 
+class KeywordTimeoutItems(SemanticItems):
+    """PRD 5 — 키워드 후보 RPC가 DB statement_timeout으로 실패하는 경우."""
+
+    def fetch_candidate_bundle(self, ids, terms, **kwargs):
+        raise RuntimeError("검색 요청을 완료하지 못했습니다. 다시 검색해주세요.")
+
+
+def test_keyword_rpc_failure_answers_with_semantic_results():
+    rows = [{"item_id": 9, "similarity": 0.8, "detail": {"id": 9, "storage_location_id": 7, "item_name": "반지갑"}},
+            {"item_id": 10, "similarity": 0.7, "detail": {"id": 10, "storage_location_id": 7, "item_name": "카드지갑"}},
+            # 대체 경로에서도 종류 검사·기관 범위·임계값은 그대로다.
+            {"item_id": 11, "similarity": 0.9, "detail": {"id": 11, "storage_location_id": 7, "item_name": "검정 우산"}},
+            {"item_id": 12, "similarity": 0.9, "detail": {"id": 12, "storage_location_id": 999, "item_name": "지갑"}},
+            {"item_id": 13, "similarity": 0.52, "detail": {"id": 13, "storage_location_id": 7, "item_name": "장지갑"}}]
+    results, count, status = search_found_items(KeywordTimeoutItems(rows), "지갑", [7], FakeEmbedding())
+    assert status == "ok" and count is None
+    assert [r["id"] for r in results] == [9, 10]
+
+
+def test_keyword_rpc_failure_without_semantic_results_is_still_an_error():
+    # 둘 다 실패하면 '0건'으로 숨기지 않는다 — 사용자가 물건이 없다고 오인한다(PRD 6).
+    with pytest.raises(RuntimeError, match="검색 요청을 완료하지 못했습니다"):
+        search_found_items(KeywordTimeoutItems(error=RuntimeError("db")), "지갑", [7], FakeEmbedding())
+    with pytest.raises(RuntimeError, match="검색 요청을 완료하지 못했습니다"):
+        search_found_items(KeywordTimeoutItems(), "지갑", [7])
+
+
+def test_endpoint_keyword_timeout_is_200_with_semantic_and_502_without():
+    extra = {"id": 9, "storage_location_id": 7, "item_name": "반지갑"}
+    ok = create_app(object(), "test-js", found_item_client=KeywordTimeoutItems(
+        [{"item_id": 9, "similarity": 0.8, "detail": extra}]), embedding_client=FakeEmbedding())
+    response = TestClient(ok).get("/api/found-items", params={"location_ids": "7", "q": "지갑"})
+    assert response.status_code == 200 and [r["id"] for r in response.json()["items"]] == [9]
+    broken = create_app(object(), "test-js", found_item_client=KeywordTimeoutItems(error=RuntimeError("db")),
+                        embedding_client=FakeEmbedding())
+    response = TestClient(broken).get("/api/found-items", params={"location_ids": "7", "q": "지갑"})
+    assert response.status_code == 502 and "다시 검색" in response.json()["error"]
+
+
 def test_semantic_rpc_failure_keeps_keyword_scores_only():
     rows, _, status = search_found_items(SemanticItems(error=RuntimeError("db")), "지갑", [7], FakeEmbedding())
     lexical = keyword_scores(ITEMS, "지갑")

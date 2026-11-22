@@ -239,9 +239,20 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     # expressions from synonyms.json do the kind gate, including aliases the
     # mask never knew. Attribute-only hits cannot widen it.
     terms, words = candidate_terms(query)
+    keyword_error = None
     if hasattr(client,"fetch_candidate_bundle"):
-        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
-        items,count = bundle["items"],bundle.get("candidate_count")
+        try:
+            bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
+            items,count = bundle["items"],bundle.get("candidate_count")
+        except RuntimeError as error:
+            # PRD 5 — 키워드 후보 RPC가 DB 시간 제한(57014)에 걸려도 의미 검색이 돌고 있으면 그 결과로 답한다.
+            # 의미 검색이 없거나 함께 실패하면 아래에서 이 오류를 그대로 올린다(빈 결과로 숨기지 않는다 — PRD 6).
+            if vector_future is None:
+                raise
+            keyword_error = error
+            items,count = [],None
+            from ..agent_diagnostics import record
+            record("keyword.fallback", error=error, stage="keyword_candidates", final_status="fallback")
     else:
         items = client.fetch_items(location_ids)
         count = len(items)
@@ -269,9 +280,11 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     if embedding_client is not None and vector_future is None:
         from ..agent_diagnostics import record
         record("embedding.fallback", stage="embedding", reason="busy", final_status="fallback")
+    if keyword_error is not None and semantic_rows is None:
+        raise keyword_error
     if semantic_rows is not None:
         status = "ok"
-    by_id = {int(item["id"]):item for item in items if int(item["id"]) in lexical}
+    by_id ={int(item["id"]):item for item in items if int(item["id"]) in lexical}
     scored = {}
     # Radius-wide semantic results (1-bit → half rescore, cos ≥ 0.60, top 200) score keyword matches
     # and add items the keyword step missed, behind the same kind gate as BM25.
