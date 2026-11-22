@@ -18,7 +18,7 @@ from ..alerts.sender import create_email_sender
 from ..alerts.settings import load_alert_settings
 from ..alerts.store import SupabaseAlertStore
 from ..config import read_env_value, read_optional_env_value
-from ..integrations.embeddings import BgeM3Client
+from ..integrations.embeddings import GeminiQueryClient
 from ..integrations.kakao import KakaoLocalClient, kakao_sdk_url
 from ..integrations.supabase import (
     SupabaseFoundItemClient,
@@ -43,7 +43,7 @@ def create_app(
     institutions: list[dict[str, Any]] | None = None,
     map_location_client: SupabaseMapLocationClient | None = None,
     found_item_client: SupabaseFoundItemClient | None = None,
-    embedding_client: BgeM3Client | None = None,
+    embedding_client: GeminiQueryClient | None = None,
     agent_router: APIRouter | None = None,
     alert_service: AlertService | None = None,
 ) -> FastAPI:
@@ -244,7 +244,7 @@ def ranked_item_page(
     found_item_client: SupabaseFoundItemClient,
     query: str,
     location_ids: list[int],
-    embedding_client: BgeM3Client | None,
+    embedding_client: GeminiQueryClient | None,
     cursor: str = "",
 ) -> dict[str, Any]:
     offset = 0
@@ -291,7 +291,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     map_location_client = SupabaseMapLocationClient(supabase_url, supabase_secret_key)
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
     embedding_key = read_optional_env_value("OPENROUTER_API_KEY")
-    embedding_client = BgeM3Client(embedding_key) if embedding_key else None
+    embedding_client = GeminiQueryClient(embedding_key) if embedding_key else None
     kakao_client = KakaoLocalClient(rest_api_key)
     agent_router = None
     if agent_search:

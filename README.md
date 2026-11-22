@@ -108,7 +108,7 @@ FastAPI `app`을 진입점으로 사용합니다.
 - 검색 결과가 여러 개면 목록에서 기준 위치를 변경하고 `전체 기관 보기`로 필터 해제
 - 위치 검색 직후 반경 1km 기관들이 보관 중인 습득물 전체 목록 표시
 - 개별 기관 핀을 누르면 해당 기관 물품만 다시 조회
-- 위치 검색 후 동의어·BM25·BGE-M3 혼합 검색 활성화
+- 위치 검색 후 동의어·BM25·Gemini Embedding 2 혼합 검색 활성화
 
 카카오 REST API 키와 Supabase secret 키는 브라우저로 전달되지 않고 Python 서버에서만 사용됩니다.
 지도 위치와 기관별 물품 수는 `map_locations_with_item_counts_json` Supabase RPC로 한 번에 읽습니다.
@@ -143,14 +143,16 @@ OpenRouter의 GPT-6 Luna로 대화를 처리하고 카카오 장소 조회 및 �
 목록 사진의 축소본은 `20261121180000_found_item_thumbnails.sql` 적용 후 전용 공개 Storage 버킷에 저장한다. 상세 사진은 원본을 사용하고, 축소본 조회나 로딩에 실패하면 원본으로 돌아간다. 수집 완료 시 기존 `CRON_SECRET`으로 별도 작업을 시작하며, Vercel이 제공하는 `VERCEL_ENV=production`과 `VERCEL_PROJECT_PRODUCTION_URL`이 있을 때만 운영 작업을 호출한다. 로컬·Preview는 운영 작업을 호출하지 않는다. 한 번에 제한된 수만 처리하고 임대를 사용하므로 중단 뒤 다음 수집 때 재개할 수 있다. 원본 URL 변경은 새 축소본을 만들고 물품 삭제가 확인된 뒤 축소본을 정리한다. 작업 기록이 실패해도 수집은 계속하며, 하루 간격으로 시작하는 대조가 누락된 생성·삭제를 다시 확인한다. 작업 스위치 `thumbnail_worker_guard.enabled`는 마이그레이션 직후 꺼져 있다. 디스크·Storage 여유와 수집 부하, 소량 처리·복구를 확인한 후 켜며 끄면 새 작업 임대를 중단한다. 이미 실행 중인 작업은 끝날 수 있다.
 사용 흐름과 API 예시는 [대화형 검색 에이전트](docs/agent-search.md)를 참고한다. Vercel 진입점은 기본으로 대화형 검색을 켠다. Vercel 환경 변수 `AGENT_SEARCH=0`을 넣거나 `OPENROUTER_API_KEY`가 없으면 기존 검색 화면으로 돌아간다.
 
-### 검색: 키워드 후보 BM25 + 반경 전체 1비트 의미 검색
+### 검색: 키워드 후보 BM25 + 반경 전체 1비트 의미 검색(Gemini Embedding 2)
 
 검색은 기관 범위의 `keyword_found_item_candidates`로 작은 검색 필드만 읽고 BM25를 계산합니다.
 종류는 서버가 동의어 사전(`synonyms.json`)의 종류 표현을 후보 단어로 넘겨 거르며, DB `kind_mask` 필터는 쓰지 않습니다(마이그레이션 `20261120120000`).
 반복 정규화·전체 상세 JSON 조립·전체 범위 건수 조회는 제거했습니다.
-이와 병렬로 OpenRouter → DeepInfra BGE-M3 질의 벡터를 생성합니다. 질의 벡터가 나오면 `semantic_found_item_candidates`가 반경 안 전체 물품을 1비트 벡터 해밍 거리로 비교해 500건을 고르고,
-그 500건만 원본 half 벡터로 코사인을 다시 계산해 0.60 이상 상위 200건을 돌려줍니다. 의미 점수는 이 결과에서만 나옵니다(키워드에 없던 물품도 찾음).
-최종 점수는 `0.75 × BM25/(BM25+1) + 0.25 × max(0, (cosine − 0.60) / 0.40)`이며, 키워드 결과는 모두 유지합니다.
+이와 병렬로 OpenRouter → Google AI Studio Gemini Embedding 2 질의 벡터(`task: search result | query: …`, 1024차원)를 생성합니다.
+질의 벡터가 나오면 `semantic_found_item_candidates_gemini2`가 반경 안 전체 물품을 Gemini 1비트 벡터 해밍 거리로 비교해 500건을 고르고,
+그 500건만 Gemini half 벡터로 코사인을 다시 계산해 0.525 이상 상위 200건을 돌려줍니다. 의미 점수는 이 결과에서만 나옵니다(키워드에 없던 물품도 찾음).
+최종 점수는 `0.75 × BM25/(BM25+1) + 0.25 × max(0, (cosine − 0.525) / 0.475)`이며, 키워드 결과는 모두 유지합니다.
+물품 Gemini 벡터는 로컬 적재 도구로 채웠고, 일일 임베딩 크론도 Gemini Embedding 2(글만)로 새 물품을 채웁니다(2026-11-22, BGE-M3 표는 남겨 두되 더 채우지 않습니다).
 키워드 일치 결과의 개수·날짜 상한은 없습니다. 50건씩 `search:offset` 커서로 이어 받고 전체 결과 수를 제공합니다.
 초기 전체 기관 물품 수 `candidate_count`는 생략(null)합니다. 상세는 의미 검색 결과와 현재 표시할 페이지에 대해서만 읽습니다.
 고비용 물품별 퍼지와 자동 오타 보정은 제거하고(오타는 따로 잡지 않음) BM25 bigram을 유지합니다.
