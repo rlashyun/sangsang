@@ -69,12 +69,18 @@ async (page) => {
     await page.keyboard.down('Enter');
     check(requests.length===1,'Held Enter repeat does not submit a new draft');await page.keyboard.up('Enter');
     check(await input.inputValue()==='아직 보내지 않을 입력','Blocked submit preserves typed draft');await input.fill('');
+    // PRD 4.3-A · 5 — 답변 표시 잠금은 실행 환경의 속도와 무관하게 검증한다.
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
     await page.locator('.agent-candidate').click();
     await page.getByRole('button',{name:'장소선택',exact:true}).evaluate(button=>{for(let i=0;i<10;i++)button.click();});
+    await page.locator('.agent-confirmed-card').waitFor();
+    await page.clock.runFor(300);
     await page.getByText(complete,{exact:true}).waitFor();
     check(requests.length===2&&await userText("'서울역' 선택").count()===1,'Place confirmation is requested and recorded once');
     check(await page.getByText(complete,{exact:true}).count()===1,'Duplicate final events produce one completion reply');
     await input.fill('반복 검색');await burst();check(requests.length===2,'Fast final response does not unlock before reply presentation');
+    await page.clock.resume();
     await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);await burst();
     await page.waitForFunction(text=>Array.from(document.querySelectorAll('.agent-message-text')).filter(element=>element.textContent===text).length===2,complete);
     await page.locator('.agent-result-actions').waitFor();
@@ -107,4 +113,4 @@ async (page) => {
     console.log('PASS submission/IME/repeat/replayed events/retry/history: '+viewport.width);
   }
   check(errors.length===0,errors.join('\n'));
-};
+}
