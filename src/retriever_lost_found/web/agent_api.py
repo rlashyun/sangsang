@@ -362,7 +362,11 @@ def create_agent_router(
                             decision = reply.decision
                             target = decision.target or 0
                             # PRD 4.3 — Use only server-owned candidates, visible result IDs and allowed radii.
-                            if decision.action == "preview_place":
+                            if decision.action == "prepare_alert":
+                                # PRD 4.3-E — 실제 신청은 브라우저에서 동의 후 기존 알림 API로 보낸다.
+                                ready = bool(state.selected_places() and state.item_query and radius and not state.place_operation)
+                                result = {"status": "answered", "prepare_alert": ready, "message": "알림 조건을 확인하고 개인정보 이용에 동의한 뒤 이메일을 입력해 주세요." if ready else "먼저 장소를 확정하고 물품을 검색해 주세요."}
+                            elif decision.action == "preview_place":
                                 if not turn.changing_place and 1 <= target <= len(state.candidates):
                                     candidate = state.candidates[target - 1]
                                     result = {
