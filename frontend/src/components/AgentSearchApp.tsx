@@ -231,7 +231,7 @@ export function AgentSearchApp() {
     setFollowup("hidden");
   }
 
-  function revealReplies(replies: ChatMessage[], showFollowup = false) {
+  function revealReplies(replies: ChatMessage[], showFollowup = false, radius = mappedRadius) {
     // PRD 4.3-A — 도착한 답변은 순서대로 표시한 뒤 후속 안내를 보여준다.
     hideFollowup();
     const generation = replyGeneration.current;
@@ -260,7 +260,9 @@ export function AgentSearchApp() {
     if (showFollowup) {
       replyTimers.current.push(setTimeout(() => {
         if (generation !== replyGeneration.current) return;
-        setFollowup("actions");
+        // PRD 4.3-A — 검색 완료 뒤에는 후속 안내 문장과 선택지를 함께 보여준다.
+        followupPrompt.current = followupText(radius);
+        setFollowup("prompt");
       }, Math.max(1, messagesToReveal.length) * 300 + 700));
     }
   }
@@ -599,7 +601,7 @@ export function AgentSearchApp() {
           ? "비교할 후보 사진이 없어 글 검색 순서로 보여드려요."
           : "사진을 비교하지 못해 글 검색 순서로 보여드려요." });
       }
-      revealReplies(replies, completedSearch && !showAlertSetup);
+      revealReplies(replies, completedSearch && !showAlertSetup, result.conditions.radius_m ?? mappedRadius);
       if (result.status === "answered") {
         // PRD 4.3 — An informational turn advances the session without replacing results.
         setResponse(current => current ? { ...current, revision: result.revision,
@@ -1067,7 +1069,8 @@ export function AgentSearchApp() {
               </a>}
             </div>}
           </Fragment>)}
-          {alertDraft && alertAnchor !== null && alertAnchor >= messages.length && alertSetup}
+          {/* PRD 4.3-E — 위치가 정해지기 전 한 번의 렌더에서도 신청 안내가 사라지지 않게 맨 아래에 둔다. */}
+          {alertDraft && (alertAnchor === null || alertAnchor >= messages.length) && alertSetup}
           {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates" aria-label="장소 후보" start={placePage * PLACE_PAGE_SIZE + 1}>
             {pagePlaces.map(({ id, place, number }) => <li className={`agent-place-card${id === selectedCandidate ? " is-selected" : ""}`} key={id} id={`agent-place-${id}`}>
               <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
