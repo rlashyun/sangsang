@@ -129,11 +129,12 @@ export async function createAlertReservation(reservation: AlertReservation) {
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify(reservation),
   });
-  const payload = await response.json().catch(() => null) as { status?: string; error?: string } | null;
+  const payload = await response.json().catch(() => null) as { status?: string; error?: string; reservation_id?: number } | null;
   if (response.status !== 202 || payload?.status !== "pending") {
     const fallback = response.status === 429
       ? "알림 신청 한도에 도달했어요. 나중에 다시 시도해 주세요."
       : "지금은 알림을 신청할 수 없어요. 잠시 뒤 다시 시도해 주세요.";
     throw new Error(typeof payload?.error === "string" && payload.error ? payload.error : fallback);
   }
+  return payload.reservation_id;
 }

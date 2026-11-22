@@ -131,7 +131,7 @@ class AlertService:
     settings: AlertSettings
     clock: Callable[[], datetime] = utc_now
 
-    def create(self, payload: dict[str, Any], client_ip: str) -> dict[str, str]:
+    def create(self, payload: dict[str, Any], client_ip: str) -> dict[str, Any]:
         email = normalize_email(payload.get("email"))
         query = _query(payload.get("query"))
         places = _places(payload.get("places"))
@@ -190,7 +190,7 @@ class AlertService:
             # SendError가 아닌 예외도 같다. 남겨 두면 "보냄"으로 기록된 채 메일은 안 나가고 한도만 줄어든다.
             self._discard(reservation_id, client_ip_hash)
             raise RuntimeError("확인 메일을 보내지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from None
-        return {"status": "pending", "message": PENDING_MESSAGE}
+        return {"status": "pending", "message": PENDING_MESSAGE, "reservation_id": reservation_id}
 
     def _discard(self, reservation_id: int, client_ip_hash: str | None) -> None:
         """실패한 예약을 지운다. 지우기마저 실패하면 미확인 예약으로 남았다가 24시간 뒤 정리된다.
