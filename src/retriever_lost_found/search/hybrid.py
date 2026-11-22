@@ -25,6 +25,7 @@ SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 �
 KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25
 SEMANTIC_BUDGET_SECONDS = 4.0
 SEARCH_BUDGET_SECONDS = 4.4  # HTTP/JSON 전송 여유를 포함해 5초 목표를 검증한다.
+JEV_HYDRATE_RESERVE = 0.4    # Jev 뒤 첫 페이지 상세 조회에 남겨 두는 시간(2026-11-23 — Jev 포함 5초 이내).
 _semantic_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="semantic")
 _semantic_slots = BoundedSemaphore(4)
 _search_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="found-items")
@@ -148,7 +149,7 @@ class SearchBusy(SearchDeadlineExceeded):
 
 
 def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0,
-                         hydrate_page=True):
+                         hydrate_page=True, jev=None):
     """Bound the entire read pipeline, including slow body reads and ranking.
 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
@@ -156,7 +157,7 @@ def search_with_deadline(client, query, location_ids, embedding_client=None, *, 
     if not _search_slots.acquire(blocking=False):
         raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
     future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids,
-                                 embedding_client, offset=offset, hydrate_page=hydrate_page)
+                                 embedding_client, offset=offset, hydrate_page=hydrate_page, jev=jev)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -224,7 +225,8 @@ def _embed_and_search(client, embedding_client, query, location_ids, budget_end)
 
 
 def search_found_items(client, query: str, location_ids: list[int], embedding_client=None,
-                       *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True):
+                       *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True,
+                       jev=None):
     started = monotonic()
     query = query_text(query)
     deadline = started+SEARCH_BUDGET_SECONDS
@@ -313,6 +315,16 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         ranked.append({**item,"match_score":round(score,6)})
     ranked.sort(key=lambda item:(-item["match_score"],-int(item["id"])))
     ranked = ranked[:SEARCH_RESULT_LIMIT]
+    if jev is not None:
+        # 2026-11-23 사용자 결정 — 100건으로 자른 뒤 Jev가 명백히 다른 물건만 뺀다(search/jev_filter.py).
+        # 쪽마다 100건 전체를 다시 판정한다. 남은 시간이 부족하거나 실패하면 그대로 둔다.
+        jev_started = monotonic()
+        ranked, jev_status = jev.apply(query, ranked, budget=deadline-monotonic()-JEV_HYDRATE_RESERVE)
+        timings["jev_ms"] = round((monotonic()-jev_started)*1000,2)
+        timings["jev_status"] = jev_status
+        if jev_status in {"unavailable","skipped"}:
+            from ..agent_diagnostics import record
+            record("jev.fallback", stage="jev_filter", reason=jev_status, final_status="fallback")
     # Only the visible page needs full display fields.
     page=ranked[offset:offset+50] if hydrate_page else []
     missing=[int(item["id"]) for item in page if "image_url" not in item]

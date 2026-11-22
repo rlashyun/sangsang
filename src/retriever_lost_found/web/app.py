@@ -46,6 +46,7 @@ def create_app(
     embedding_client: GeminiQueryClient | None = None,
     agent_router: APIRouter | None = None,
     alert_service: AlertService | None = None,
+    jev_filter: Any | None = None,
 ) -> FastAPI:
     """로컬 Uvicorn과 Vercel이 함께 사용하는 FastAPI 애플리케이션을 만듭니다."""
     sdk_url = kakao_sdk_url(javascript_key)
@@ -227,7 +228,8 @@ def create_app(
                 }
             )
         try:
-            page = ranked_item_page(found_item_client, search_query, validated_ids, embedding_client, cursor)
+            page = ranked_item_page(found_item_client, search_query, validated_ids, embedding_client, cursor,
+                                    jev=jev_filter)
         except SearchDeadlineExceeded as error:
             return JSONResponse(status_code=504, content={"error": str(error)})
         return JSONResponse(content=page)
@@ -249,6 +251,7 @@ def ranked_item_page(
     location_ids: list[int],
     embedding_client: GeminiQueryClient | None,
     cursor: str = "",
+    jev=None,
 ) -> dict[str, Any]:
     offset = 0
     if cursor.strip():
@@ -259,7 +262,7 @@ def ranked_item_page(
         raise ValueError(IDENTIFIER_QUERY_ERROR)
     # PRD 4.1 · 4.5 — Both entry points use the same scoped search and paging.
     matched_items, candidate_count, semantic_status = search_with_deadline(
-        found_item_client, query, location_ids, embedding_client, offset=offset,
+        found_item_client, query, location_ids, embedding_client, offset=offset, jev=jev,
     )
     match_count = len(matched_items)
     next_offset = offset + FOUND_ITEM_PAGE_LIMIT
@@ -278,13 +281,16 @@ def ranked_item_page(
     }
 
 
-def photo_ranked_item_page(found_item_client, embedding_client, compare, location_ids, query, user_text, photos):
+def photo_ranked_item_page(found_item_client, embedding_client, compare, location_ids, query, user_text, photos,
+                           jev=None):
     from ..search.photo_rerank import rerank_photos
     from .agent_adapters import adapt_search_item
     from .agent_search import SearchPage
 
     location_ids = list(location_ids)
-    ranked, _, _ = search_with_deadline(found_item_client, query, location_ids, embedding_client, hydrate_page=False)
+    # 2026-11-23 — Jev 제외는 사진 비교(Luna) 전에 돈다.
+    ranked, _, _ = search_with_deadline(found_item_client, query, location_ids, embedding_client, hydrate_page=False,
+                                        jev=jev)
     ranked, status = rerank_photos(ranked, location_ids, user_text, photos,
                                     found_item_client.fetch_photo_candidates, compare)
     # PRD 4.5 — Hydrate the first page after reranking. Keep only the remaining IDs for the next page.
@@ -316,6 +322,12 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     found_item_client = SupabaseFoundItemClient(supabase_url, supabase_secret_key)
     embedding_key = read_optional_env_value("OPENROUTER_API_KEY")
     embedding_client = GeminiQueryClient(embedding_key) if embedding_key else None
+    # 2026-11-23 사용자 결정 — 일반·대화형 검색 모두 Jev 제외를 쓴다. 끄는 스위치는 없다(키가 없으면 건너뜀).
+    jev_filter = None
+    if embedding_key:
+        from ..integrations.jev import OpenRouterDecisions
+        from ..search.jev_filter import JevFilter
+        jev_filter = JevFilter(OpenRouterDecisions(embedding_key))
     kakao_client = KakaoLocalClient(rest_api_key)
     agent_router = None
     if agent_search:
@@ -328,7 +340,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
 
         def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None):
             ids = validate_location_ids(",".join(map(str, location_ids)))
-            page = ranked_item_page(found_item_client, query, ids, embedding_client, cursor or "")
+            page = ranked_item_page(found_item_client, query, ids, embedding_client, cursor or "", jev=jev_filter)
             return adapt_search_page(page)
 
         def find_items_by_id(scope, item_ids):
@@ -343,7 +355,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             search_items=search_items,
             find_items_by_id=find_items_by_id,
             search_photo_items=lambda ids, query, text, photos: photo_ranked_item_page(
-                found_item_client, embedding_client, photo_model.complete, ids, query, text, photos,
+                found_item_client, embedding_client, photo_model.complete, ids, query, text, photos, jev=jev_filter,
             ),
         )
     try:
@@ -367,6 +379,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
         embedding_client=embedding_client,
         agent_router=agent_router,
         alert_service=alert_service,
+        jev_filter=jev_filter,
     )
     app.state.location_source = "supabase"
     app.state.item_counts_available = True
