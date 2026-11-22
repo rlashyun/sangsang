@@ -19,10 +19,12 @@
 set local statement_timeout = '15min';
 set local maintenance_work_mem = '128MB';
 
+-- offset 0: 공백 제거를 행마다 한 번만 한다. 없으면 플래너가 하위 쿼리를 펼쳐 조각마다(행당 약 50번) 다시 계산한다.
+-- 운영 5% 표본(약 3.1만 행) 측정: 펼친 형태 17.8초(행당 588µs) → offset 0 4.6초(행당 147µs). docs/measurements.md.
 create function public.search_bigrams(p_text text)
 returns text[] language sql immutable strict parallel safe set search_path = '' as $$
   select coalesce(array_agg(distinct substr(s.t, i, 2)), '{}'::text[])
-  from (select regexp_replace(p_text, '[[:space:]]+', '', 'g') as t) s
+  from (select regexp_replace(p_text, '[[:space:]]+', '', 'g') as t offset 0) s
   cross join lateral generate_series(1, char_length(s.t) - 1) i
 $$;
 revoke all on function public.search_bigrams(text) from public, anon, authenticated;

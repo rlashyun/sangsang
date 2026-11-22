@@ -422,7 +422,8 @@ class SchemaMigrationTests(unittest.TestCase):
         # strpos 검사·1글자 독립 단어 검사·범위 필터·시간 제한은 그대로 둔다(결과 행이 바뀌지 않는다).
         migration = self._squashed("20261123090000_keyword_candidates_bigram_index.sql")
         self.assertIn("create function public.search_bigrams(p_text text) returns text[] language sql immutable strict", migration)
-        self.assertIn("regexp_replace(p_text, '[[:space:]]+', '', 'g')", migration)
+        # 공백 제거는 행마다 한 번만(offset 0 없이는 조각마다 다시 계산해 인덱스 생성이 4배 느렸다).
+        self.assertIn("(select regexp_replace(p_text, '[[:space:]]+', '', 'g') as t offset 0) s", migration)
         self.assertIn("revoke all on function public.search_bigrams(text) from public, anon, authenticated", migration)
         self.assertIn("on public.found_item_search_documents using gin (public.search_bigrams(search_text))", migration)
         body = migration.split("create or replace function public.keyword_found_item_candidates", 1)[1]
