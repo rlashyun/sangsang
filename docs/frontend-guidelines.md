@@ -144,6 +144,8 @@ uv run --with 'pytest>=8,<9' pytest -q
 
 ## 10. 완료 기준
 
+사진 첨부 회귀 검증은 `tests/web/agent_photo_attachment.browser.cjs`를 로컬 8000 서버와 Playwright에서 실행한다. API·지도 SDK는 모의 응답을 사용하며 파일 선택·이미지 붙여넣기, 장소 미확정 안내, 설명 없는 사진의 채팅 안내·초안 유지, 실패·취소·재시도, 전송 중 제한, 대화 사진 수명, 용량·개수 제한과 데스크톱·모바일 배치를 검사한다.
+
 - PRD와 UI 패턴의 해당 요구사항을 충족한다.
 - 기존 백엔드 계약과 제품 동작을 의도 없이 바꾸지 않는다.
 - TypeScript 오류와 빌드 오류가 없다.
@@ -169,3 +171,5 @@ uv run --with 'pytest>=8,<9' pytest -q
 개발용 전체 화면 비교(2026-11-08): `frontend/`에서 `npm run compare:prepare`로 8f701b0의 정적 파일을 무시 경로 `.tmp/ui-baseline/`에 준비한다. Vite 개발 서버만 기존 화면을 제공하며 운영 빌드에는 비교 UI와 스냅샷을 포함하지 않는다. 오른쪽 아래에서 기존/수정안을 전환하고 두 화면의 검색 상태는 독립적으로 유지한다. 두 화면 모두 현재 로컬 API를 사용하므로 과거 데이터 시점 복원은 아니다. 카카오 JS 키는 기존 방식으로 실행 시 주입하고 별도 파일에 저장하지 않는다.
 
 이미지 상세의 기본 로딩 안내(시간 경과와 무관하게 요청 계속 유지)와 실패 때만 제공하는 수동 재시도는 `tests/web/item_image_retry.browser.cjs`로 검증한다(Vite 127.0.0.1:5178, `playwright-cli run-code --filename tests/web/item_image_retry.browser.cjs`). 실제 상세 컴포넌트와 가짜 사진만 사용하며 API·외부 SDK를 호출하지 않는다. 가상 시계로 장기 대기 중 기본 안내 유지·실패 후 재시도·늦은 성공·닫기 정리를 확인하고 모바일/데스크톱의 고정 영역·키보드 복귀를 확인한다. 목록 지연 로딩은 기존 `item_detail.browser.cjs`가 검증한다.
+
+중복 전송·기록 회귀 검증은 tests/web/agent_submission.browser.cjs를 로컬 8000 서버와 Playwright에서 실행한다. API와 지도는 모의 응답이다. 한글 조합 Enter·길게 누른 Enter·동기 연속 전송·빠른 장소 확정·답변 표시 중 요청 잠금·중복 완료/반경 이벤트·실패 후 기존 결과와 입력 복구·동일 요청 ID 재시도·선택 및 과거 대화 보존을 검사한다.
