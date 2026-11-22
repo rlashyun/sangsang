@@ -13,6 +13,7 @@ async (page) => {
     class FakeObject {
       constructor(_, options) { this.center = options?.center || new LatLng(37.55, 126.97); }
       getCenter() { return this.center; }
+      getPosition() { return this.options?.position || this.center; }
       getProjection() { return {
         containerPointFromCoords: point => ({ x: point.getLng() * 1000, y: point.getLat() * 1000 }),
         coordsFromContainerPoint: point => new LatLng(point.y / 1000, point.x / 1000),
@@ -38,6 +39,11 @@ async (page) => {
     }
     window.kakao = { maps: {
       load: callback => callback(), LatLng, Map: FakeObject, AbstractOverlay: FakeOverlay,
+      CustomOverlay: class {
+        setContent(content) { this.content = content; }
+        setPosition() {}
+        setMap(map) { if (map) document.getElementById("map").append(this.content); else this.content?.remove(); }
+      },
       ZoomControl: FakeObject, MapTypeControl: FakeObject, InfoWindow: FakeObject,
       Marker: FakeObject, MarkerClusterer: FakeObject, MarkerImage: FakeObject,
       Size: FakeObject, Point: class { constructor(x, y) { this.x = x; this.y = y; } }, Circle: FakeObject, LatLngBounds: FakeObject,

@@ -10,7 +10,7 @@ import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Plac
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
-import { FoundItemDetail } from "./FoundItemDetail";
+import { AgentItemDetail } from "./AgentItemDetail";
 import { KakaoMap } from "./KakaoMap";
 import { NewItemAlert } from "./NewItemAlert";
 import { UsageGuide } from "./UsageGuide";
@@ -23,7 +23,8 @@ const TOOL_LABELS: Record<string, string> = {
   found_items: "습득물을 찾고 있어요.",
 };
 
-type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[] } | { confirmedPlace: AgentPlace };
+type ItemConversation = { id: string; item: AgentItem; institution?: Institution; answer: "yes" | "no"; acknowledged: boolean };
+type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[] } | { confirmedPlace: AgentPlace } | { itemConversation: ItemConversation };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
 
@@ -70,7 +71,7 @@ export function AgentSearchApp() {
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
   const [focusedInstitution, setFocusedInstitution] = useState<Institution | null>(null);
   const [mapInset, setMapInset] = useState(0);
-  // 장소 변경 중: 확정한 장소를 화면에서 비우고 처음처럼 입력·지도 더블클릭으로 고르게 한다.
+  // 장소 변경 중: 확정한 장소를 화면에서 비우고 입력 또는 지도 팝업의 버튼으로 고른다.
   const [placeChanging, setPlaceChanging] = useState(false);
   const searchPath = `${location.pathname}${location.search}`;
   const guideIsOpen = location.hash === GUIDE_HASH;
@@ -82,6 +83,10 @@ export function AgentSearchApp() {
   const recoveryRequired = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const feed = useRef<HTMLDivElement>(null);
+  const detailChatScroll = useRef(0);
+  const detailTrigger = useRef<HTMLElement | null>(null);
+  const wasDetailOpen = useRef(false);
+  const detailRejected = useRef(false);
   const [feedScrolling, setFeedScrolling] = useState(false);
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -221,6 +226,21 @@ export function AgentSearchApp() {
   const pageCount = Math.ceil((cursor ? matchCount : items.length) / itemPageSize);
   const busy = Boolean(progress) || paging || revealingReplies;
   const detail = openItem?.item_id === location.state?.agentItemId ? openItem : null;
+  useLayoutEffect(() => {
+    if (detail) {
+      const card = feed.current?.querySelector(".agent-chat-detail:not(.is-recorded)");
+      // 여유가 있으면 앞 대화도 보여 주고, 좁으면 상세와 확인 선택지를 우선 함께 보여 준다.
+      const previous = card?.previousElementSibling;
+      const combinedHeight = card && previous ? card.getBoundingClientRect().bottom - previous.getBoundingClientRect().top : Infinity;
+      (combinedHeight <= (feed.current?.clientHeight ?? 0) ? previous : card)?.scrollIntoView({ block: "start" });
+    } else if (wasDetailOpen.current) {
+      if (feed.current) feed.current.scrollTop = detailRejected.current ? feed.current.scrollHeight : detailChatScroll.current;
+      if (detailRejected.current) feed.current?.focus({ preventScroll: true });
+      else if (detailTrigger.current?.isConnected) detailTrigger.current.focus({ preventScroll: true });
+      detailRejected.current = false;
+    }
+    wasDetailOpen.current = Boolean(detail);
+  }, [detail]);
   const alertOpen = Boolean(location.state?.agentAlert);
   const nextRadius = nextSearchRadiusMeters(mappedRadius);
 
@@ -273,6 +293,10 @@ export function AgentSearchApp() {
       return;
     }
     const request = new AbortController();
+    setOpenItem(null);
+    if (detail) {
+      void navigate(searchPath, { replace: true, state: null });
+    }
     controller.current = request;
     hideFollowup();
     if (!retry || !retryRequest.current) {
@@ -522,15 +546,37 @@ export function AgentSearchApp() {
   }
 
   function openDetail(item: AgentItem) {
+    if (!detail) {
+      detailChatScroll.current = feed.current?.scrollTop ?? 0;
+      detailTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
     // PRD 4.3-C · 4.4 — 물품에 연결된 기관 ID의 검증된 좌표로만 이동한다.
     const institution = institutionIndex.get(item.institution_id);
     setFocusedInstitution(institution ? { ...institution } : null);
     setOpenItem(item);
-    void navigate(location.pathname + location.search, { state: { agentItemId: item.item_id } });
+    void navigate(location.pathname + location.search, { replace: Boolean(detail), state: { agentItemId: item.item_id } });
   }
 
   function openAlerts() {
     void navigate(location.pathname + location.search, { state: { agentAlert: true } });
+  }
+
+  function answerItem(answer: "yes" | "no") {
+    if (!detail) return;
+    const institution = institutionIndex.get(detail.institution_id);
+    setMessages(current => [...current, { itemConversation: {
+      id: crypto.randomUUID(), item: { ...detail }, institution: institution ? { ...institution } : undefined,
+      answer, acknowledged: false,
+    } }]);
+    detailRejected.current = true;
+    if (window.matchMedia("(max-width: 820px)").matches) setTab("chat");
+    setFollowupVisible(answer === "no");
+    void navigate(-1);
+  }
+
+  function acknowledgeItem(id: string) {
+    setMessages(current => current.map(message => "itemConversation" in message && message.itemConversation.id === id
+      ? { itemConversation: { ...message.itemConversation, acknowledged: true } } : message));
   }
 
   const drawerOpen = tab === "results" && Boolean(response?.matches) && !placeChanging;
@@ -571,7 +617,7 @@ export function AgentSearchApp() {
     <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
       <section className={`agent-panel${drawerOpen ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
         {(conditions?.item_query || conditions?.place_operation || selectedPlaces.length > 0 || currentPlace || pagePlaces.length > 0 || placeChanging) && <dl className="agent-summary">
-          <div><dt>장소</dt><dd>
+          <div><dt>장소</dt><dd className={selectedPlaces.length ? undefined : "agent-summary-pending"}>
             {selectedPlaces.length ? <ul className="agent-selected-places" aria-label="선택한 장소">
               {selectedPlaces.map((place, index) => <li key={`${place.latitude}:${place.longitude}`}>
                 <span title={place.address}>{place.name}</span>
@@ -584,22 +630,24 @@ export function AgentSearchApp() {
                 {Boolean(conditions.pending_place_queries?.length) && ` · 다음 ${conditions.pending_place_queries?.join(", ")}`}</p>
             </>}
           </dd></div>
-          <div><dt>물건</dt><dd>{conditions?.item_query || "입력 대기 중"}</dd>
+          <div><dt>물건</dt><dd className={conditions?.item_query ? undefined : "agent-summary-pending"}>{conditions?.item_query || "입력 대기 중"}</dd>
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
-        <div ref={feed} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
-          {messages.length === 0 && <>
+        <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
             <h2 className="agent-welcome-title">이용 방법</h2>
             <ol className="agent-welcome-steps" aria-label="이용 순서">
-              <li><span aria-hidden="true">1</span>잃어버린 장소를 적거나, 지도에서 보관기관 핀을 더블클릭하세요</li>
+              <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 보관기관 핀을 눌러 선택하세요</li>
               <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
             <hr className="agent-welcome-divider" />
-            <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>
-          </>}
-          {messages.map((message, index) => "confirmedPlace" in message
+            {messages.length === 0 && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
+          {messages.map((message, index) => "itemConversation" in message
+            ? <AgentItemDetail key={message.itemConversation.id} item={message.itemConversation.item}
+              institution={message.itemConversation.institution} answer={message.itemConversation.answer}
+              acknowledged={message.itemConversation.acknowledged} onAcknowledge={() => acknowledgeItem(message.itemConversation.id)} />
+            : "confirmedPlace" in message
             ? <div className="agent-confirmed-card" key={index}>
               <small>확정된 장소</small>
               <strong>{message.confirmedPlace.name}</strong>
@@ -646,6 +694,8 @@ export function AgentSearchApp() {
             </a>}
             </div>
           </div>}
+          {detail && <AgentItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)}
+            onBack={() => void navigate(-1)} onAccept={() => answerItem("yes")} onReject={() => answerItem("no")} />}
         </div>
         {!drawerOpen && requestStatus}
         <form className="agent-compose" onSubmit={send} onPaste={pastePhotos}>
@@ -690,9 +740,9 @@ export function AgentSearchApp() {
         <div className="agent-drawer-body">
           {groupIds && submittedQuery
             ? <AgentInstitutionResults key={`${submittedQuery}:${groupIds}`} ids={groupIds}
-              pageSize={itemPageSize} query={submittedQuery} institutions={institutionIndex} onOpen={openDetail} onVisibleItems={setInstitutionItemIds} onTotalChange={setInstitutionMatchCount} />
+              selectedItemId={openItem?.item_id} pageSize={itemPageSize} query={submittedQuery} institutions={institutionIndex} onOpen={openDetail} onVisibleItems={setInstitutionItemIds} onTotalChange={setInstitutionMatchCount} />
             : matchCount === 0 ? <p className="agent-bubble">일치하는 습득물을 찾지 못했어요.</p> : <>
-              <AgentResultList pageSize={itemPageSize} items={items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize)} institutions={institutionIndex} onOpen={openDetail} />
+              <AgentResultList selectedItemId={openItem?.item_id} pageSize={itemPageSize} items={items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize)} institutions={institutionIndex} onOpen={openDetail} />
               <nav className="agent-pagination" aria-label="습득물 결과 페이지">
                 {pageCount <= 1 ? <button type="button" aria-label="1페이지" aria-current="page" disabled={busy}>1</button> : itemPageNumbers(itemPage, pageCount).map((page: number) =>
                   <button type="button" key={page} aria-label={`${page + 1}페이지`} aria-current={page === itemPage ? "page" : undefined}
@@ -716,7 +766,6 @@ export function AgentSearchApp() {
         showInstitutionCounts={scopeReady} onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect}
         onResetRadius={selectedInstitution.length ? showFullScope : undefined} />
     </main>
-    {detail && <FoundItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)} onClose={() => void navigate(-1)} />}
     {guideIsOpen && <UsageGuide variant="chat" searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {
       if (location.state?.openedGuide) void navigate(-1);
       else void navigate(searchPath, { replace: true });

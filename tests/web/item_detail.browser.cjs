@@ -50,6 +50,7 @@ async (page) => {
     class FakeObject {
       constructor(_, options) { this.center = options?.center || new LatLng(37.55, 126.97); }
       getCenter() { return this.center; }
+      getPosition() { return this.center; }
       setCenter(value) { this.center = value; }
       getLevel() { return this.level ?? 8; }
       setMapTypeId(value) { this.mapTypeId = value; }
@@ -71,6 +72,11 @@ async (page) => {
     }
     window.kakao = { maps: {
       load: callback => callback(), LatLng, Map: FakeObject, AbstractOverlay: FakeOverlay,
+      CustomOverlay: class {
+        setContent(content) { this.content = content; }
+        setPosition() {}
+        setMap(map) { if (map) document.getElementById("map").append(this.content); else this.content?.remove(); }
+      },
       ZoomControl: FakeObject, MapTypeControl: FakeObject, InfoWindow: FakeObject,
       Marker: FakeObject, MarkerClusterer: FakeObject, MarkerImage: FakeObject,
       Size: FakeObject, Point: FakeObject, Circle: FakeObject, LatLngBounds: FakeObject,
@@ -436,7 +442,7 @@ async (page) => {
   await dialog.getByRole("img").waitFor({ state: "visible" });
   await checkDetailPhoto();
   check(await dialog.getByRole("img").evaluate(img => img.naturalWidth > img.naturalHeight), "가로 사진으로 확인해야 한다");
-  check(await dialog.getByText("원문 첫 줄\n둘째 줄 <script>원문</script>", { exact: true }).count() === 1, "원문은 안전한 텍스트로 표시해야 한다");
+  check(await dialog.locator(".item-detail-description").count() === 0, "물품 설명은 상세창에서도 생략한다");
   check(await dialog.locator("script").count() === 0, "설명의 HTML을 실행하면 안 된다");
   check(await dialog.getByRole("link", { name: "02-1234-5678" }).getAttribute("href") === "tel:0212345678", "기관 ID의 연락처를 연결해야 한다");
   check(!(await dialog.innerText()).includes("유사도"), "상세에는 내부 점수가 없어야 한다");
@@ -556,7 +562,7 @@ async (page) => {
   await dialog.waitFor();
   await dialog.getByText("등록된 사진이 없습니다.").waitFor();
   check(await dialog.getByRole("link").count() === 0, "동명 기관의 전화번호를 대신 쓰면 안 된다");
-  check(await dialog.getByText("정보 없음", { exact: true }).count() === 3, "누락 설명·주소·전화번호를 명시해야 한다");
+  check(await dialog.getByText("정보 없음", { exact: true }).count() === 2, "누락 주소·전화번호를 명시해야 한다");
   const bounds = await dialog.boundingBox();
   check(Math.abs(bounds.y + bounds.height - 844) < 2, "모바일 시트는 화면 하단에 붙어야 한다");
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "가로 스크롤이 없어야 한다");
