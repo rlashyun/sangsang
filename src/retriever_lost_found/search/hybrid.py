@@ -149,7 +149,7 @@ class SearchBusy(SearchDeadlineExceeded):
 
 
 def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0,
-                         hydrate_page=True, jev=None):
+                         hydrate_page=True, jev=None, jev_excluded=None, jev_out=None):
     """Bound the entire read pipeline, including slow body reads and ranking.
 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
@@ -157,7 +157,8 @@ def search_with_deadline(client, query, location_ids, embedding_client=None, *, 
     if not _search_slots.acquire(blocking=False):
         raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
     future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids,
-                                 embedding_client, offset=offset, hydrate_page=hydrate_page, jev=jev)
+                                 embedding_client, offset=offset, hydrate_page=hydrate_page, jev=jev,
+                                 jev_excluded=jev_excluded, jev_out=jev_out)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -226,7 +227,7 @@ def _embed_and_search(client, embedding_client, query, location_ids, budget_end)
 
 def search_found_items(client, query: str, location_ids: list[int], embedding_client=None,
                        *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True,
-                       jev=None):
+                       jev=None, jev_excluded: set[int] | None = None, jev_out: dict | None = None):
     started = monotonic()
     query = query_text(query)
     deadline = started+SEARCH_BUDGET_SECONDS
@@ -315,13 +316,20 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         ranked.append({**item,"match_score":round(score,6)})
     ranked.sort(key=lambda item:(-item["match_score"],-int(item["id"])))
     ranked = ranked[:SEARCH_RESULT_LIMIT]
-    if jev is not None:
-        # 2026-11-23 사용자 결정 — 100건으로 자른 뒤 Jev가 명백히 다른 물건만 뺀다(search/jev_filter.py).
-        # 쪽마다 100건 전체를 다시 판정한다. 남은 시간이 부족하거나 실패하면 그대로 둔다.
+    if jev_excluded is not None:
+        # 2026-11-23 비용 최적화 — 다음 쪽은 첫 쪽에서 Jev가 뺀 id(커서)를 그대로 다시 뺀다. Jev를 다시 부르지 않아
+        # 쪽 사이 결과가 어긋나지 않는다.
+        ranked = [item for item in ranked if int(item["id"]) not in jev_excluded]
+        timings["jev_status"] = "cursor"
+    elif jev is not None:
+        # 2026-11-23 사용자 결정 — 100건으로 자른 뒤 Jev가 명백히 다른 물건만 뺀다(search/jev_filter.py, 상위 30건 판정).
+        # 남은 시간이 부족하거나 실패하면 그대로 둔다.
         jev_started = monotonic()
-        ranked, jev_status = jev.apply(query, ranked, budget=deadline-monotonic()-JEV_HYDRATE_RESERVE)
+        ranked, jev_status, excluded = jev.apply(query, ranked, budget=deadline-monotonic()-JEV_HYDRATE_RESERVE)
         timings["jev_ms"] = round((monotonic()-jev_started)*1000,2)
         timings["jev_status"] = jev_status
+        if jev_out is not None:
+            jev_out["excluded"] = excluded
         if jev_status in {"unavailable","skipped"}:
             from ..agent_diagnostics import record
             record("jev.fallback", stage="jev_filter", reason=jev_status, final_status="fallback")
