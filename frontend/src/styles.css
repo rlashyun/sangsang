@@ -2150,6 +2150,32 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   background: var(--color-bg-hover);
 }
 .agent-bubble-user { align-self: flex-end; background: var(--color-action); color: var(--color-text-on-solid); }
+/* PRD 4.3-E — 알림 조건과 동의도 기존 대화 말풍선과 작은 선택지로 이어진다. */
+.agent-alert-setup { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; }
+.agent-alert-setup > .agent-bubble { width: 91%; }
+.agent-alert-conditions { width: 91%; }
+.agent-alert-conditions > p { margin: 0; }
+.agent-alert-setup p { margin: 0; }
+.agent-alert-fields { display: grid; gap: 4px; margin: 8px 0; }
+.agent-alert-fields > div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+.agent-alert-fields dt, .agent-alert-note { color: var(--color-text-secondary); }
+.agent-alert-fields dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.agent-alert-note { font-size: 12px; }
+.agent-alert-privacy { margin-top: 8px; color: var(--color-text-secondary); font-size: 12px; }
+.agent-alert-privacy summary { width: fit-content; max-width: 100%; cursor: pointer; }
+.agent-alert-privacy summary:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; border-radius: 3px; }
+.agent-alert-privacy .agent-alert-fields > div { grid-template-columns: 52px minmax(0, 1fr); }
+.agent-alert-agree { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding-block: 4px; cursor: pointer; }
+.agent-alert-agree input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--color-action); }
+.agent-alert-consent > [role="status"] { margin-top: 8px; }
+.agent-alert-edit { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.agent-alert-place-options { width: 91%; }
+.agent-alert-place-options ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.agent-alert-place-options li { display: flex; align-items: center; gap: 8px; }
+.agent-alert-place-options li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.agent-alert-place-options button { flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 20px; cursor: pointer; }
+.agent-alert-place-options button:hover { background: var(--agent-surface-hover); color: var(--color-text-primary); }
+.agent-alert-edit [aria-pressed="true"] { background: var(--color-bg-selected); border-color: var(--agent-border-hover); }
 .agent-pagination { display: flex; flex-wrap: wrap; gap: 5px; }
 .agent-pagination button {
   min-height: 30px;
