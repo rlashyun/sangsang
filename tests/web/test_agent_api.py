@@ -156,9 +156,9 @@ def test_chat_api_resolves_scope_before_item_when_confirming_candidate():
     assert result["matches"] is None
     search.assert_not_called()
     model.assert_called_once()
-def test_chat_searches_known_item_instead_of_asking_for_optional_features():
+def test_chat_searches_known_item_without_optional_features():
     model = Mock(return_value={
-        "action": "clarify", "message": "지갑의 색상이나 브랜드, 특징을 알려주실 수 있나요?",
+        "action": "search", "message": "",
         "place_query": None, "item_query": None, "clear_item_query": False,
         "asks_for": "item", "item_changes": {"kind": "지갑", "color": None, "brand": None, "features": None},
         "target": None,

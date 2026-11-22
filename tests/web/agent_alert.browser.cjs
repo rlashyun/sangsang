@@ -89,6 +89,46 @@ async (page) => {
       if (route.request().postData().includes("서울역 지갑")) {
         Object.assign(response, {status:"no_matches",prepare_alert:false,message:"일치하는 물건을 찾지 못했어요.",matches:{items:[],total_count:0,next_cursor:null}});
       }
+      if (turn.dialogue?.task === 'alert') {
+        check(Boolean(turn.dialogue.last_message), 'Model receives the previous assistant message');
+        response.prepare_alert = false;
+        response.status = 'answered';
+        const alert = turn.dialogue.alert;
+        let awaiting = turn.dialogue.awaiting;
+        let changed = false;
+        if (turn.text === '알림 받고 싶어요') {
+          awaiting = 'email'; response.message = '알림 조건을 확인해 주세요.'; response.matches = null;
+        } else if (['물건 변경', '취소하지 말고 물건만 바꿀게'].includes(turn.text)) {
+          awaiting = 'item'; response.message = '어떤 물건으로 바꿀까요?';
+        } else if (turn.text === '장소 변경') {
+          awaiting = 'places'; response.message = '제외할 장소를 골라 주세요.';
+        } else if (['반경을 넓혀줘', '반경 변경'].includes(turn.text)) {
+          awaiting = 'radius'; response.message = '알림 반경을 골라 주세요.';
+        } else if (turn.text === '검정 가방') {
+          check(awaiting === 'item', 'Short reply follows the pending item question');
+          alert.query = '검정 가방'; awaiting = 'email'; changed = true;
+          response.message = '알림에 사용할 물건 설명을 바꿨어요.';
+        } else if (turn.text === '반경을 1.5km로 바꿔줘') {
+          alert.radius = 1500; awaiting = 'email'; changed = true;
+          response.message = '알림 반경을 바꿨어요.';
+        } else if (turn.text === '취소할게') {
+          response.message = '진행 중인 알림 작성을 마쳤어요. 검색을 이어갈 수 있어요.';
+          response.dialogue = {task:'search',alert:null,awaiting:null,changed:false};
+        } else {
+          response.dialogue = {task:'search',alert:null,awaiting:null,changed:false};
+        }
+        response.dialogue ??= {task:'alert',alert,awaiting,changed};
+        if (turn.text === '서울역 지갑') response.status = 'no_matches';
+      }
+      if (turn.text === '메일은 나중에 하고 우산 찾아줘' || turn.text === '우산') {
+        Object.assign(response, {status:'results',prepare_alert:false,message:'우산 검색을 마쳤어요.',
+          conditions:{...response.conditions,item_query:'우산'},
+          matches:{items:[{item_id:2,institution_id:42,item_name:'우산',image_url:null}],total_count:1,next_cursor:null},
+          dialogue:{task:'search',alert:null,awaiting:null,changed:false}});
+      }
+      if (turn.text === '물건 바꿀게' && turn.dialogue?.task === 'search') {
+        Object.assign(response,{status:'awaiting_clarification',prepare_alert:false,message:'어떤 물건으로 바꿀까요?',matches:null});
+      }
       return route.fulfill({contentType:"application/x-ndjson",body:JSON.stringify({type:"run.finished",response})+"\n"});
     }
     return route.continue();
@@ -123,17 +163,17 @@ async (page) => {
       'Edit button asks in chat without requesting a search or changing a reservation');
     check(await page.getByLabel('이전 알림 조건', {exact:true}).last().innerText() === originalConditions,
       'Previous conditions remain as an immutable chat message when editing');
-    await input.fill('물건 변경'); await page.getByRole('button',{name:'보내기',exact:true}).click();
-    await input.fill('검정 가방'); await page.locator('.agent-compose').evaluate(form=>{for(let i=0;i<10;i++)form.requestSubmit();});
+    await input.fill('취소하지 말고 물건만 바꿀게'); await page.getByRole('button',{name:'보내기',exact:true}).click();
+    await input.fill('검정 가방'); await page.waitForFunction(() => !document.querySelector('.agent-send').disabled); await page.locator('.agent-compose').evaluate(form=>{for(let i=0;i<10;i++)form.requestSubmit();});
     await page.getByLabel('알림 신청 조건').waitFor();
-    check((await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('검정 가방') && calls === beforeEdit,
-      'Item edit updates alert draft locally even under repeated submits');
+    check((await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('검정 가방') && calls === beforeEdit + 2,
+      'Item edit uses one model request per turn even under repeated submits');
     check(!await page.getByLabel('개인정보 수집·이용에 동의해요').isChecked(), 'Editing resets consent');
     await page.getByRole('button', {name:'조건 수정', exact:true}).click();
     await input.fill('장소 변경'); await page.getByRole('button',{name:'보내기',exact:true}).click();
     await page.locator('.agent-alert-place-options').getByRole('button',{name:'서울역 제거',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
-    check(!(await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('서울역') && calls === beforeEdit,
+    check(!(await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('서울역') && calls === beforeEdit + 3,
       'Place removal changes only alert draft without search');
     await page.getByRole('button',{name:'조건 수정',exact:true}).click();
     await page.getByRole('button',{name:'장소 변경',exact:true}).click();
@@ -148,9 +188,9 @@ async (page) => {
     await page.getByLabel('알림 신청 조건').waitFor();
     check((await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('1.5km') && !await page.getByLabel('개인정보 수집·이용에 동의해요').isChecked(),
       'Radius change is reflected and requires fresh consent');
-    check(calls === beforeEdit && institutionCalls === beforeInstitutions && await page.locator('.agent-summary').innerText() === searchSummary,
+    check(calls === beforeEdit + 4 && institutionCalls === beforeInstitutions && await page.locator('.agent-summary').innerText() === searchSummary,
       'Alert edits do not query institutions/items or change current search conditions');
-    check(await page.locator('.agent-status').count() === 0, 'No search progress notice during local alert edits');
+    check(await page.locator('.agent-status').count() === 0, 'Intent interpretation finishes without lingering progress');
     await page.getByRole('button',{name:'결과 1건 보기',exact:true}).click();
     check(await page.locator('.agent-item').innerText() === originalResult, 'Current item results remain unchanged after editing alert conditions');
     await page.getByRole('button',{name:'결과 목록 접기',exact:true}).click();
@@ -166,8 +206,8 @@ async (page) => {
     // 동의 전에도 취소할 수 있고 이메일만 강요하지 않는다.
     const beforeCancel = calls;
     await input.fill("취소할게"); await page.getByRole("button",{name:"보내기",exact:true}).click();
-    await page.getByText("진행 중인 알림 신청을 취소했어요.",{exact:false}).waitFor();
-    check(calls === beforeCancel, "cancel reached model");
+    await page.getByText("진행 중인 알림 작성을 마쳤어요.",{exact:false}).waitFor();
+    check(calls === beforeCancel + 1, "Natural-language cancellation reaches the model");
     check(await page.getByLabel("알림 신청 조건").count() === 0, "cancel kept draft");
     await input.fill('알림 받고 싶어요'); await page.getByRole('button', {name:'보내기', exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
@@ -223,13 +263,13 @@ async (page) => {
     const beforePlaceChoices = calls;
     await input.fill('장소 변경'); await page.getByRole('button',{name:'보내기',exact:true}).click();
     await page.locator('.agent-alert-place-options').waitFor();
-    check(calls === beforePlaceChoices && await page.locator('.agent-alert-place-options li').count() === 3,
-      'Generic place-change request shows confirmed places locally');
+    check(calls === beforePlaceChoices + 1 && await page.locator('.agent-alert-place-options li').count() === 3,
+      'Generic place-change request shows existing confirmed places after intent interpretation');
     check(await page.locator('.agent-alert-place-options').getByRole('button').count() === 3,
       'Place list offers one remove button per location');
     await page.locator('.agent-alert-place-options').getByRole('button',{name:'강남역 제거',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
-    check(calls === beforePlaceChoices, 'Removing an alert location does not submit a search turn');
+    check(calls === beforePlaceChoices + 1, 'Removing an alert location does not submit a search turn');
     const updatedPlaces = await page.locator('.agent-alert-setup .agent-alert-conditions').innerText();
     check(updatedPlaces.includes('서울역') && updatedPlaces.includes('잠실역') && !updatedPlaces.includes('강남역'),
       'Remaining places are shown in updated alert conditions');
@@ -238,11 +278,11 @@ async (page) => {
     await input.fill('반경 변경'); await page.getByRole('button',{name:'보내기',exact:true}).click();
     const radiusChoices = page.getByLabel('알림 검색 반경 선택');
     await radiusChoices.waitFor();
-    check(calls === beforeRadiusChoices && JSON.stringify(await radiusChoices.getByRole('button').allTextContents()) === JSON.stringify(['1km','1.5km','2km']),
-      'Generic radius-change request offers exactly the supported radii without a model request');
+    check(calls === beforeRadiusChoices + 1 && JSON.stringify(await radiusChoices.getByRole('button').allTextContents()) === JSON.stringify(['1km','1.5km','2km']),
+      'Generic radius-change request interprets intent once and offers exactly the supported radii');
     await radiusChoices.getByRole('button',{name:'1.5km',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
-    check(calls === beforeRadiusChoices, 'Alert radius choice does not submit a search turn');
+    check(calls === beforeRadiusChoices + 1, 'Alert radius choice does not submit a search turn');
     check((await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('1.5km') && !await page.getByLabel('개인정보 수집·이용에 동의해요').isChecked(),
       'Selected radius is reflected and consent remains unchecked');
     await page.getByRole('button',{name:'조건 수정',exact:true}).click();
@@ -251,6 +291,19 @@ async (page) => {
     await page.getByRole('button',{name:'돌아가기',exact:true}).click();
     check(await page.getByLabel('알림 조건 수정', {exact:true}).count() === 0 && await page.getByLabel('알림 신청 조건').count() === 1,
       'Back exits guided editing and restores the current signup conditions');
+    await input.fill('메일은 나중에 하고 우산 찾아줘');
+    await page.getByRole('button', {name:'보내기',exact:true}).click();
+    await page.getByRole('button', {name:'결과 목록 접기',exact:true}).waitFor();
+    check(await page.getByLabel('알림 신청 조건').count() === 0, 'Search transition closes alert setup');
+    check((await page.locator('.agent-summary').innerText()).includes('우산'), 'Search transition applies requested item');
+    await page.getByRole('button', {name:'결과 목록 접기',exact:true}).click();
+    await input.fill('물건 바꿀게');
+    await page.getByRole('button', {name:'보내기',exact:true}).click();
+    await page.getByText('어떤 물건으로 바꿀까요?',{exact:true}).last().waitFor();
+    await input.fill('우산');
+    await page.getByRole('button', {name:'보내기',exact:true}).click();
+    await page.locator('.agent-item').waitFor();
+
   }
   check(!errors.length, errors.join(";"));
 }
