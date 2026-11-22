@@ -57,6 +57,9 @@ def create_app(
         "ui.js": "text/javascript; charset=utf-8",
         "institution-marker.svg": "image/svg+xml",
         "police-marker.svg": "image/svg+xml",
+        "favicon.svg": "image/svg+xml",
+        "favicon.ico": "image/x-icon",
+        "apple-touch-icon.png": "image/png",
     }
     app = FastAPI(
         title="Retriever Lost & Found API",
