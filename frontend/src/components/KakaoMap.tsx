@@ -55,6 +55,8 @@ interface KakaoMapProps {
   showInstitutionCounts?: boolean;
   /** 지도 왼쪽을 가린 패널의 폭(px). 선택한 지점을 가려지지 않은 영역의 가운데에 둔다. */
   leftInset?: number;
+  /** 모바일 하단 패널이 가린 높이(px). 지도 후보·반경을 보이는 영역에 맞춘다. */
+  bottomInset?: number;
   /** 물품의 검증된 보관기관 위치. 검색 중심·범위는 바꾸지 않고 지도만 이동한다. */
   focusedInstitution?: Institution | null;
   /** 장소 확정 후 반경 맞춤을 부드럽게 이동한다. 끄면 기존처럼 바로 맞춘다. */
@@ -193,6 +195,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   mapBadge,
   showInstitutionCounts = true,
   leftInset = 0,
+  bottomInset = 0,
   focusedInstitution = null,
   animateRadiusFit = false,
   onPointSelect,
@@ -482,7 +485,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     if (!mapReady || !map || !container || !selectedPlace) return;
     const kakao = window.kakao;
     const bounds = circleBounds(kakao, searchCenters, radiusMeters);
-    const padding: [number, number, number, number] = [48, 48, 48, 48 + leftInset];
+    const padding: [number, number, number, number] = [48, 48, 48 + bottomInset, 48 + leftInset];
     if (!animateRadiusFit) {
       map.setBounds(bounds, ...padding);
       return;
@@ -493,7 +496,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       viewport: { width: container.clientWidth, height: container.clientHeight },
       reduceMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
     });
-  }, [animateRadiusFit, leftInset, mapReady, radiusMeters, searchCenters, selectedPlace]);
+  }, [animateRadiusFit, leftInset, bottomInset, mapReady, radiusMeters, searchCenters, selectedPlace]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current || selectedPlace || !places.length) return;
@@ -510,15 +513,15 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       const bounds = new kakao.maps.LatLngBounds();
       places.forEach(place => bounds.extend(new kakao.maps.LatLng(place.latitude, place.longitude)));
       // 반경 맞춤 애니메이션이 진행 중이면 끝난 뒤 맞춰야 애니메이션이 이 이동을 덮어쓰지 않는다.
-      return whenMapSettled(map, () => map.setBounds(bounds, 48, 48, 48, 48 + leftInset));
+      return whenMapSettled(map, () => map.setBounds(bounds, 48, 48, 48 + bottomInset, 48 + leftInset));
     }
     const target = new kakao.maps.LatLng(previewPlace.latitude, previewPlace.longitude);
     const cancelMove = whenMapSettled(map, () => {
       map.setLevel(3, { animate: false });
-      if (leftInset) {
+      if (leftInset || bottomInset) {
         const projection = map.getProjection();
         const point = projection.containerPointFromCoords(target);
-        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y + bottomInset / 2)));
       } else {
         map.setCenter(target);
       }
@@ -532,7 +535,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       infoWindowRef.current.open(map, marker);
     }
     return cancelMove;
-  }, [leftInset, mapColors, mapReady, onPlaceSelect, places, placeNumbers, previewPlace, selectedPlace]);
+  }, [leftInset, bottomInset, mapColors, mapReady, onPlaceSelect, places, placeNumbers, previewPlace, selectedPlace]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -546,10 +549,10 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
     const cancelMove = whenMapSettled(map, () => {
       const target = new kakao.maps.LatLng(latitude, longitude);
       map.setLevel(3, { animate: false });
-      if (leftInset) {
+      if (leftInset || bottomInset) {
         const projection = map.getProjection();
         const point = projection.containerPointFromCoords(target);
-        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y)));
+        map.setCenter(projection.coordsFromContainerPoint(new kakao.maps.Point(point.x - leftInset / 2, point.y + bottomInset / 2)));
       } else {
         map.setCenter(target);
       }
@@ -563,7 +566,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       cancelMove();
       marker?.setMap(null);
     };
-  }, [focusedInstitution, leftInset, mapColors, mapReady]);
+  }, [focusedInstitution, leftInset, bottomInset, mapColors, mapReady]);
 
   const sourceCounts = useMemo(() => {
     const partner = visibleInstitutions.filter((item) => item.source !== "police").length;

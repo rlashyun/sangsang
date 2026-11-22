@@ -7,9 +7,11 @@ import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
 import { ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib/alert-return";
 import { useChatPhotos, type ChatPhoto } from "../lib/useChatPhotos";
+import { useMobileChatSheet } from "../lib/useMobileChatSheet";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AlertManagementChat } from "./AlertManagementChat";
+import { AgentSheetGrip } from "./AgentSheetGrip";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
 import { AgentItemDetail } from "./AgentItemDetail";
@@ -67,6 +69,7 @@ function AlertConditionSummary({ conditions, recorded = false }: { conditions: A
 export function AgentSearchApp() {
   const location = useLocation();
   const navigate = useNavigate();
+  const sheet = useMobileChatSheet();
   const mailAction = location.pathname === "/alerts/extend" ? "extend" : location.pathname === "/alerts/cancel" ? "cancel" : null;
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
@@ -324,13 +327,15 @@ export function AgentSearchApp() {
   const onMapPlaceSelect = useCallback((place: Place) => {
     const entry = pagePlaces.find(candidate => candidate.place === place);
     if (entry) {
+      sheet.reveal();
       setSelectedCandidate(entry.id);
-      document.getElementById(`agent-place-${entry.id}`)?.scrollIntoView({ block: "nearest" });
+      requestAnimationFrame(() => document.getElementById(`agent-place-${entry.id}`)?.scrollIntoView({ block: "nearest" }));
     }
-  }, [pagePlaces]);
+  }, [pagePlaces, sheet.reveal]);
   const showFullScope = useCallback(() => setSelectedInstitution([]), []);
   // 검색 중에는 새 지점을 받지 않는다(submit도 진행 중이면 무시한다).
   function onMapPointSelect(point: { latitude: number; longitude: number; name: string; address: string }) {
+    sheet.reveal();
     void submit({ type: "select_point", ...point });
   }
 
@@ -339,6 +344,7 @@ export function AgentSearchApp() {
     const allowed = new Set(conditions.institution_ids);
     const groupInScope = group.filter(row => row.storage_location_id !== undefined && allowed.has(row.storage_location_id));
     if (groupInScope.length) {
+      sheet.reveal();
       const currentGroup = selectedInstitutionRef.current;
       const sameGroup = groupInScope.length === currentGroup.length
         && groupInScope.every((row, index) => row.storage_location_id === currentGroup[index].storage_location_id);
@@ -349,7 +355,7 @@ export function AgentSearchApp() {
       }
       setTab("results");
     }
-  }, [conditions, currentPlace, response?.matches]);
+  }, [conditions, currentPlace, response?.matches, sheet.reveal]);
 
   const matchCount = response?.matches?.total_count ?? 0;
   const pageCount = Math.ceil((cursor ? matchCount : items.length) / itemPageSize);
@@ -899,6 +905,7 @@ export function AgentSearchApp() {
   }
 
   function toggleResults() {
+    sheet.reveal();
     if (drawerOpen) {
       setTab("chat");
       return;
@@ -988,8 +995,11 @@ export function AgentSearchApp() {
         </a>
       </div>
     </header>
-    <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
+    <main ref={sheet.shellRef} style={sheet.style} data-sheet-snap={sheet.snap} data-sheet-dragging={sheet.dragging}
+      className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
       <section className={`agent-panel${drawerOpen ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
+        <AgentSheetGrip {...sheet.gripProps} label="채팅" controls="agent-chat-sheet-content" />
+        <div id="agent-chat-sheet-content" className="agent-sheet-body" hidden={sheet.collapsed} inert={sheet.collapsed}>
         {(conditions?.item_query || conditions?.place_operation || selectedPlaces.length > 0 || currentPlace || pagePlaces.length > 0 || placeChanging) && <dl className="agent-summary">
           <div><dt>장소</dt><dd className={selectedPlaces.length ? undefined : "agent-summary-pending"}>
             {selectedPlaces.length ? <ul className="agent-selected-places" aria-label="선택한 장소">
@@ -1118,7 +1128,7 @@ export function AgentSearchApp() {
             onBack={() => void navigate(-1)} onAccept={() => answerItem("yes")} onReject={() => answerItem("no")} />}
         </div>
         {!drawerOpen && requestStatus}
-        <form className="agent-compose" onSubmit={send} onPaste={alertDraft || editingAlert.current ? undefined : pastePhotos}
+        <form className="agent-compose" onSubmit={send} onFocusCapture={sheet.expand} onPaste={alertDraft || editingAlert.current ? undefined : pastePhotos}
           onKeyDown={event => {
             // PRD 4.3-A — 한글 조합 확정 Enter와 누른 채 반복되는 Enter는 전송하지 않는다.
             if (event.key === "Enter" && (event.repeat || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composing.current)) event.preventDefault();
@@ -1150,9 +1160,12 @@ export function AgentSearchApp() {
           </button>
           </div>
         </form>
+        </div>
       </section>
 
       {drawerOpen && <aside className="agent-drawer" aria-label="전체 검색 결과">
+        <AgentSheetGrip {...sheet.gripProps} label="검색 결과" controls="agent-results-sheet-content" />
+        <div id="agent-results-sheet-content" className="agent-sheet-body" hidden={sheet.collapsed} inert={sheet.collapsed}>
         <div className="agent-drawer-head">
           <strong>{groupIds ? institutionMatchCount === null ? "기관 결과 확인 중" : `결과 ${institutionMatchCount.toLocaleString("ko-KR")}건` : `결과 ${matchCount.toLocaleString("ko-KR")}건`}</strong>
         </div>
@@ -1176,6 +1189,7 @@ export function AgentSearchApp() {
             </>}
         </div>
         {requestStatus}
+        </div>
       </aside>}
 
       {response?.matches && matchCount > 0 && !placeChanging && <button type="button" className="agent-handle" aria-expanded={drawerOpen}
@@ -1187,7 +1201,7 @@ export function AgentSearchApp() {
       <KakaoMap themeKey="retriever-blue" focusedInstitution={focusedInstitution} institutions={institutions} institutionsLoaded={institutionsLoaded}
         institutionError={institutionError} countsAvailable={countsAvailable} places={mapPlaces} placeNumbers={placeNumbers}
         selectedPlace={selectedPlace} searchCenters={searchCenters} previewPlace={previewPlace} radiusMeters={mappedRadius}
-        leftInset={mapInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={mapBadge}
+        leftInset={mapInset} bottomInset={sheet.mapBottomInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={mapBadge}
         showInstitutionCounts={scopeReady} onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect}
         onResetRadius={selectedInstitution.length ? showFullScope : undefined} />
     </main>
