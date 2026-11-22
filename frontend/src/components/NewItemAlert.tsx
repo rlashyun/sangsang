@@ -5,7 +5,7 @@ import { DEFAULT_SEARCH_RADIUS_METERS, radiusKilometersLabel, SEARCH_RADIUS_OPTI
 import type { Place } from "../types";
 import { CloseIcon } from "./CloseIcon";
 
-const CONSENT_DETAILS = {
+export const CONSENT_DETAILS = {
   title: "알림을 위한 개인정보 수집·이용",
   items: "이메일 주소, 알림에 포함한 장소 이름과 좌표, 탐색 반경, 물품 검색어",
   purpose: "이메일 주소 확인, 저장한 조건으로 새 유사 습득물 검색, 알림과 종료·연장 안내 발송, 서비스 이용 통계",
