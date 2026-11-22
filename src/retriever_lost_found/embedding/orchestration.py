@@ -7,7 +7,7 @@ from urllib.request import Request, build_opener
 
 from ..config import read_optional_env_value
 from ..ingestion.collector import KOREA_TIMEZONE
-from ..integrations.embeddings import BgeM3Client, NoRedirect
+from ..integrations.embeddings import GeminiItemClient, NoRedirect
 from .service import run_slice
 from .store import EmbeddingStore
 
@@ -49,7 +49,7 @@ def process_pending_embeddings(*, recover=False):
         key = read_optional_env_value("OPENROUTER_API_KEY")
         if not key:
             return store.finish(run, False, "missing_api_key")
-        result = run_slice(store, BgeM3Client(key), run)
+        result = run_slice(store, GeminiItemClient(key), run)
         if result["status"] in ("pending", "succeeded"):
             dispatch_embeddings()
         return result

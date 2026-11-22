@@ -567,11 +567,38 @@ class SchemaMigrationTests(unittest.TestCase):
         for table in ("found_item_embeddings_gemini2", "found_item_search_vectors_gemini2_1bit"):
             self.assertIn(f"alter table public.{table} enable row level security;", migration)
         self.assertIn("from public, anon, authenticated;", migration)
-        source = "\n".join(p.read_text(encoding="utf-8") for p in (MIGRATIONS.parents[1] / "src").rglob("*.py"))
-        self.assertNotIn("gemini2", source)  # 검색 전환 전까지 앱은 Gemini 표를 읽지 않는다.
+        # 검색 전환 뒤 앱은 Gemini 의미 검색 함수만 부르고, 일일 동기화(크론)도 Gemini 클라이언트를 쓴다(20261122200000).
+        src = MIGRATIONS.parents[1] / "src" / "retriever_lost_found"
+        self.assertIn("semantic_found_item_candidates_gemini2",
+                      (src / "integrations" / "supabase.py").read_text(encoding="utf-8"))
+        for name in ("orchestration.py", "cli.py"):
+            code = (src / "embedding" / name).read_text(encoding="utf-8")
+            self.assertIn("GeminiItemClient(key)", code)
+            self.assertNotIn("BgeM3Client", code)
         rollback = self._squashed(f"../rollbacks/{path.name}")
         self.assertIn("drop trigger if exists found_items_sync_gemini2_vector on public.found_items;", rollback)
         self.assertIn("drop table if exists public.found_item_embeddings_gemini2;", rollback)
+
+    def test_daily_embedding_cycle_reads_and_writes_only_the_gemini_table(self):
+        """PRD 4.5 — 2026-11-22: 회차 함수 5개가 누락 판단·재사용·저장을 Gemini 표로 하고 BGE 표는 지우지 않는다."""
+        path = MIGRATIONS / "20261122200000_gemini2_daily_embeddings.sql"
+        self.assertGreater(path.name.split("_")[0], "20261122100000")
+        migration = self._squashed(path.name)
+        for fn in ("ensure_embedding_cycle", "reuse_run_embeddings", "embedding_run_batch",
+                   "save_run_embeddings", "finish_embedding_run"):
+            self.assertIn(f"create or replace function public.{fn}(", migration)
+            self.assertIn(f"grant execute on function public.{fn}(", migration)
+        self.assertIn("public.upsert_gemini2_embeddings(records)", migration)
+        self.assertNotIn("found_item_embeddings_bge_m3", migration)
+        self.assertNotIn("upsert_bge_m3_embeddings", migration)
+        self.assertNotIn("drop table", migration)
+        self.assertIn("after update of embedding_input on public.found_items", migration)
+        self.assertIn("when (old.embedding_input is distinct from new.embedding_input)", migration)
+        rollback = self._squashed(f"../rollbacks/{path.name}")
+        self.assertIn("upsert_bge_m3_embeddings(records)", rollback)
+        self.assertIn("drop trigger if exists found_items_invalidate_gemini2 on public.found_items;", rollback)
+        self.assertNotIn("gemini2_embeddings(records)", rollback)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from threading import Event
 from time import monotonic
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Request
@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..integrations.agent_model import OpenRouterAgentModel
+from ..search.photo_rerank import MAX_PHOTO_LENGTH, MAX_USER_PHOTOS, prepare_user_photos
 
 from .agent_conversation import ITEM_QUESTION, PLACE_ITEM_QUESTION, Conversation, ItemDetails, Model, PlaceSelectionError, advance_place_selection, confirm_place, edit_places, respond_to_message, search_conversation
 from .agent_search import Institution, PlaceCandidate, SearchPage, resolve_institution_scope
@@ -46,6 +47,7 @@ class Turn(Payload):
     longitude: float | None = Field(default=None, ge=124.0, le=132.0)
     name: str | None = Field(default=None, min_length=1, max_length=100)
     address: str | None = Field(default=None, max_length=200)
+    photos: list[Annotated[str, Field(max_length=MAX_PHOTO_LENGTH)]] = Field(default_factory=list, max_length=MAX_USER_PHOTOS)
 
 
 class NextPage(Payload):
@@ -70,6 +72,7 @@ class Session:
     last_search_query: str | None = None
     cursor: str | None = None
     match_count: int | None = None
+    remaining_photo_ids: tuple[int, ...] = ()
     items: dict[int, dict[str, Any]] = field(default_factory=dict)
     run_id: str | None = None
     cancelled: Event = field(default_factory=Event)
@@ -86,6 +89,7 @@ def _snapshot(session: Session) -> dict:
         "state": asdict(session.state), "revision": session.revision, "status": session.status,
         "scope": list(session.scope), "radius_m": session.radius_m, "manual_radius": session.manual_radius,
         "last_search_query": session.last_search_query, "cursor": session.cursor, "match_count": session.match_count,
+        "remaining_photo_ids": list(session.remaining_photo_ids),
         "items": _detail_cache(session.items.values()),
     }
 
@@ -101,6 +105,7 @@ def _restore(data: dict) -> Session:
     state["recent"] = tuple(tuple(pair) for pair in state["recent"])
     state["item_details"] = ItemDetails(**state["item_details"])
     data["scope"] = tuple(data["scope"])
+    data["remaining_photo_ids"] = tuple(data.get("remaining_photo_ids", ()))
     data["items"] = {int(key): item for key, item in data.get("items", {}).items()}
     return Session(state=Conversation(**state), **data)
 
@@ -167,6 +172,7 @@ def create_agent_router(
     get_institutions: Callable[[], Sequence[Institution]],
     search_items: Callable[[tuple[int, ...], str, str | None], SearchPage],
     find_items_by_id: Callable[[tuple[int, ...], list[int]], Sequence[dict[str, Any]]] | None = None,
+    search_photo_items: Callable[[tuple[int, ...], str, str, tuple[str, ...]], SearchPage] | None = None,
 ) -> APIRouter:
     if model is None:
         if not openrouter_api_key:
@@ -201,6 +207,13 @@ def create_agent_router(
 
     async def parse(request: Request, schema: type[Payload]) -> Any:
         try:
+            if schema is Turn:
+                body = bytearray()
+                async for chunk in request.stream():
+                    body.extend(chunk)
+                    if len(body) > MAX_PHOTO_LENGTH * MAX_USER_PHOTOS + 8_192:
+                        return _json({"error": _error("invalid_request", "첨부 사진의 용량이 너무 큽니다.")}, 413)
+                return schema.model_validate_json(body)
             return schema.model_validate(await request.json())
         except ValueError:
             return _json({"error": _error("invalid_request", "요청 형식이 올바르지 않습니다.")}, 400)
@@ -212,14 +225,19 @@ def create_agent_router(
         if isinstance(turn, JSONResponse):
             return turn
         if (turn.type == "message" and not (turn.text or "").strip()
+                or turn.photos and (turn.type != "message" or not turn.session_id or turn.changing_place)
                 or turn.type == "change_radius" and turn.radius_m is None
                 or turn.type == "select_place" and turn.candidate_id is None
                 or turn.type == "select_point" and (turn.latitude is None or turn.longitude is None)
                 or turn.session_id is None and (turn.type not in ("message", "select_point") or turn.revision is not None)):
             return _json({"error": _error("invalid_turn", "대화 요청에 필요한 값이 없습니다.")}, 400)
+        try:
+            photos = await run_in_threadpool(prepare_user_photos, turn.photos) if turn.photos else ()
+        except ValueError:
+            return _json({"error": _error("invalid_photo", "첨부한 사진을 열 수 없어요. 다른 사진을 선택해 주세요.")}, 400)
         session_id = turn.session_id or store.session_id(turn.request_id)
         run_id = uuid4().hex
-        fingerprint = hashlib.sha256(turn.model_dump_json().encode()).hexdigest()
+        fingerprint = hashlib.sha256(turn.model_dump_json(exclude=None if photos else {"photos"}).encode()).hexdigest()
         try:
             claim = await run_in_threadpool(store.command, session_id, "claim", {
                 "create": turn.session_id is None, "initial": _snapshot(Session()),
@@ -269,6 +287,14 @@ def create_agent_router(
             state, manual_radius = session.state, session.manual_radius
             scope, radius = session.scope, session.radius_m
             result: dict[str, Any] = {}
+            photo_page: SearchPage | None = None
+
+            def search_current(ids, query):
+                nonlocal photo_page
+                if photos and session.state.confirmed and search_photo_items is not None:
+                    photo_page = search_photo_items(ids, query, turn.text, photos)
+                    return photo_page
+                return search_items(ids, query, None)
 
             def line(event: dict) -> str:
                 nonlocal seq, stage
@@ -362,7 +388,11 @@ def create_agent_router(
                             decision = reply.decision
                             target = decision.target or 0
                             # PRD 4.3 — Use only server-owned candidates, visible result IDs and allowed radii.
-                            if decision.action == "preview_place":
+                            if decision.action == "prepare_alert":
+                                # PRD 4.3-E — 실제 신청은 브라우저에서 동의 후 기존 알림 API로 보낸다.
+                                ready = bool(state.selected_places() and state.item_query and radius and not state.place_operation)
+                                result = {"status": "answered", "prepare_alert": ready, "message": "알림 조건을 확인하고 개인정보 이용에 동의한 뒤 이메일을 입력해 주세요." if ready else "먼저 장소를 확정하고 물품을 검색해 주세요."}
+                            elif decision.action == "preview_place":
                                 if not turn.changing_place and 1 <= target <= len(state.candidates):
                                     candidate = state.candidates[target - 1]
                                     result = {
@@ -454,7 +484,7 @@ def create_agent_router(
                     if result["status"] == "ready_to_search":
                         actions = search_conversation(
                             state, model=call_model, get_institutions=get_institutions,
-                            search_items=lambda ids, query: search_items(ids, query, None), radius_m=manual_radius,
+                            search_items=search_current, radius_m=manual_radius,
                         )
                     elif state.confirmed is not None and (result["status"] == "awaiting_clarification" or places_changed or turn.type in ("select_place", "select_point", "skip_place")):
                         # PRD 4.3-A — 장소 확정 직후 물품 입력 전에도 기관과 반경을 표시한다.
@@ -477,6 +507,8 @@ def create_agent_router(
                             else:
                                 state = event.pop("state")
                                 result = event
+                    if photos and result["status"] == "results":
+                        result["photo_status"] = photo_page.photo_status if photo_page else "unavailable"
                     if not state.selected_places() and state.place_operation is None:
                         scope, radius, manual_radius = (), None, None
                 completed_work = True
@@ -510,6 +542,7 @@ def create_agent_router(
                         session.items = {item["item_id"]: item for item in matches["items"]} if matches else {}
                         session.match_count = matches["total_count"] if matches else None
                         session.cursor = matches["next_cursor"] if matches else None
+                        session.remaining_photo_ids = photo_page.remaining_photo_ids if matches and photo_page else ()
                         attempts = result.get("search_attempts")
                         session.last_search_query = attempts[-1]["query"] if attempts else None
                     session.revision += 1
@@ -578,7 +611,13 @@ def create_agent_router(
             if row["run_id"] or session.revision != payload.revision or payload.cursor != session.cursor or session.last_search_query is None:
                 return conflict()
             scope, query = session.scope, session.last_search_query
-            page = await run_in_threadpool(search_items, scope, query, payload.cursor)
+            if session.remaining_photo_ids and find_items_by_id is not None:
+                rows = await run_in_threadpool(find_items_by_id, scope, list(session.remaining_photo_ids))
+                by_id = {row["item_id"]: row for row in rows}
+                items = tuple(by_id[item_id] for item_id in session.remaining_photo_ids if item_id in by_id)
+                page = SearchPage(items, session.match_count or 0)
+            else:
+                page = await run_in_threadpool(search_items, scope, query, payload.cursor)
             if any(item["institution_id"] not in scope for item in page.items):
                 raise RuntimeError("Invalid scope")
             result = await run_in_threadpool(store.command, payload.session_id, "page", {
