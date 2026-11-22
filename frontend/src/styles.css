@@ -2155,6 +2155,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-alert-setup > .agent-bubble { width: 91%; }
 .agent-alert-conditions { width: 91%; }
 .agent-alert-conditions > p { margin: 0; }
+.agent-alert-conditions > .agent-action-chip { margin-bottom: 8px; }
 .agent-alert-setup p { margin: 0; }
 .agent-alert-fields { display: grid; gap: 4px; margin: 8px 0; }
 .agent-alert-fields > div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }

@@ -156,7 +156,15 @@ async (page) => {
     await page.getByRole('button',{name:'결과 1건 보기',exact:true}).click();
     const originalResult = await page.locator('.agent-item').innerText();
     await page.getByRole('button',{name:'결과 목록 접기',exact:true}).click();
-    const originalConditions = await page.locator('.agent-alert-setup .agent-alert-conditions').innerText();
+    // PRD 4.3-E — 조건 수정 버튼은 조건 목록 바로 아래, 발송 안내 위에 있다.
+    check(await page.locator('.agent-alert-setup .agent-alert-conditions').evaluate(bubble => {
+      const order = [...bubble.children].map(child => child.tagName === 'BUTTON' ? child.textContent : child.className || child.tagName);
+      return order.join('|') === 'P|agent-alert-fields|조건 수정|agent-alert-note';
+    }), 'Edit button sits between alert conditions and the delivery note');
+    const originalConditions = await page.locator('.agent-alert-setup .agent-alert-conditions').evaluate(bubble => {
+      const copy = bubble.cloneNode(true); copy.querySelector('button')?.remove();
+      document.body.append(copy); const text = copy.innerText; copy.remove(); return text;
+    });
     await page.getByRole('button', {name:'조건 수정', exact:true}).click();
     await page.getByText('어떤 조건을 바꿀까요? 장소, 물건, 검색 반경을 말씀해 주세요.', {exact:true}).waitFor();
     check(calls === beforeEdit && mails === beforeEditMails && await page.getByLabel('알림 신청 조건').count() === 0,

@@ -39,7 +39,9 @@ function followupText(radius: number) {
     : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요.";
 }
 
-function AlertConditionSummary({ conditions, recorded = false }: { conditions: AlertConditions; recorded?: boolean }) {
+function AlertConditionSummary({ conditions, recorded = false, onEdit, editDisabled = false }: {
+  conditions: AlertConditions; recorded?: boolean; onEdit?: () => void; editDisabled?: boolean;
+}) {
   return <div className="agent-bubble agent-bubble-agent agent-alert-conditions" aria-label={recorded ? "이전 알림 조건" : undefined}>
     <p>이 조건으로 새 물건 소식을 알려드릴게요.</p>
     <dl className="agent-alert-fields">
@@ -47,6 +49,8 @@ function AlertConditionSummary({ conditions, recorded = false }: { conditions: A
       <div><dt>장소</dt><dd>{conditions.places.map(place => place.name).join(", ")}</dd></div>
       <div><dt>반경</dt><dd>{radiusKilometersLabel(conditions.radius)}</dd></div>
     </dl>
+    {/* PRD 4.3-E — 조건 수정은 조건 목록 바로 아래, 발송 안내 위에 둔다. */}
+    {onEdit && <button type="button" className="agent-action-chip" disabled={editDisabled} onClick={onEdit}>조건 수정</button>}
     <p className="agent-alert-note">신청 다음 날부터 7일간 새 유사 물품이 있는 날에만 알려드려요. 마지막 날에는 종료·연장을 안내해요.</p>
   </div>;
 }
@@ -927,8 +931,7 @@ export function AgentSearchApp() {
     {error && lastTurn && !busy && <button type="button" onClick={() => void submit(lastTurn, true)}>다시 시도</button>}
   </div>;
   const alertSetup = alertDraft && <section className="agent-alert-setup" aria-label="알림 신청 조건">
-          <AlertConditionSummary conditions={alertDraft} />
-          <button type="button" className="agent-action-chip" disabled={busy || alertSending} onClick={editAlertConditions}>조건 수정</button>
+          <AlertConditionSummary conditions={alertDraft} onEdit={editAlertConditions} editDisabled={busy || alertSending} />
           <div className="agent-bubble agent-bubble-agent agent-alert-consent">
             <p>안내를 확인하고 동의한 뒤, 아래에 이메일을 입력해 주세요.</p>
             <details className="agent-alert-privacy" onToggle={event => {
