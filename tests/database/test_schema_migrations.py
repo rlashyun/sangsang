@@ -541,5 +541,37 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("reset (toast_tuple_target)", rollback)
         self.assertIn("create or replace function public.keyword_rerank_vectors", rollback)
 
+    def test_gemini2_embeddings_add_storage_without_touching_the_live_bge_path(self) -> None:
+        # PRD 4.5, 5 — Gemini 벡터 저장소만 추가한다. 앱 검색·크론 임베딩·BGE 동기화 함수는 그대로다.
+        [path] = MIGRATIONS.glob("*_gemini2_embeddings.sql")
+        self.assertGreater(path.name.split("_", 1)[0], "20261121211000")
+        migration = self._squashed(path.name)
+        for expected in (
+            "create table public.found_item_embeddings_gemini2 (",
+            "embedding extensions.halfvec(1024) not null",
+            ") with (toast_tuple_target = 4000);",
+            "alter table public.found_item_embeddings_gemini2 alter column embedding set storage plain;",
+            "create table public.found_item_search_vectors_gemini2_1bit (",
+            "references public.found_item_embeddings_gemini2(item_id) on delete cascade",
+            "create function public.upsert_gemini2_embeddings(records jsonb)",
+            "jsonb_array_length(records) not between 1 and 200",
+            "and (s.image_url is null or s.image_url = f.image_url)",
+            "p_min float8 default 0.525, p_limit int default 200, p_rescore int default 500)",
+            "after update of storage_location_id, location_match_status on public.found_items",
+        ):
+            self.assertIn(expected, migration)
+        for untouched in ("refresh_search_vector", "sync_search_document", "found_item_embeddings_bge_m3",
+                          "semantic_found_item_candidates("):
+            self.assertNotIn(untouched, migration)
+        self.assertNotIn("drop table", migration)
+        for table in ("found_item_embeddings_gemini2", "found_item_search_vectors_gemini2_1bit"):
+            self.assertIn(f"alter table public.{table} enable row level security;", migration)
+        self.assertIn("from public, anon, authenticated;", migration)
+        source = "\n".join(p.read_text(encoding="utf-8") for p in (MIGRATIONS.parents[1] / "src").rglob("*.py"))
+        self.assertNotIn("gemini2", source)  # 검색 전환 전까지 앱은 Gemini 표를 읽지 않는다.
+        rollback = self._squashed(f"../rollbacks/{path.name}")
+        self.assertIn("drop trigger if exists found_items_sync_gemini2_vector on public.found_items;", rollback)
+        self.assertIn("drop table if exists public.found_item_embeddings_gemini2;", rollback)
+
 if __name__ == "__main__":
     unittest.main()
