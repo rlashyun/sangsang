@@ -2150,6 +2150,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   background: var(--color-bg-hover);
 }
 .agent-bubble-user { align-self: flex-end; background: var(--color-action); color: var(--color-text-on-solid); }
+/* PRD 4.3-E · 4.4 — 알림 시작 뒤 설문 링크를 본문과 구별하고 터치 영역을 확보한다. */
+.agent-survey-link { display: inline-flex; align-items: center; min-height: 36px; color: var(--color-action-text-strong); text-decoration: underline; text-underline-offset: 3px; }
 /* PRD 4.3-E — 알림 조건과 동의도 기존 대화 말풍선과 작은 선택지로 이어진다. */
 .agent-alert-setup { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; }
 .agent-alert-setup > .agent-bubble { width: 91%; }
@@ -2158,6 +2160,9 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-alert-setup p { margin: 0; }
 .agent-alert-fields { display: grid; gap: 4px; margin: 8px 0; }
 .agent-alert-fields > div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+/* PRD 4.3-E — 메일 예약 요약의 '마지막 날' 항목을 한 줄로 유지한다. */
+.agent-mail-summary .agent-alert-fields > div { grid-template-columns: 60px minmax(0, 1fr); }
+.agent-mail-summary .agent-alert-fields dt { white-space: nowrap; }
 .agent-alert-fields dt, .agent-alert-note { color: var(--color-text-secondary); }
 .agent-alert-fields dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .agent-alert-note { font-size: 12px; }

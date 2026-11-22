@@ -9,6 +9,7 @@ import { ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib
 import { useChatPhotos, type ChatPhoto } from "../lib/useChatPhotos";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
+import { AlertManagementChat } from "./AlertManagementChat";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
 import { AgentItemDetail } from "./AgentItemDetail";
@@ -26,9 +27,15 @@ const TOOL_LABELS: Record<string, string> = {
 
 type ItemConversation = { id: string; item: AgentItem; institution?: Institution; answer: "yes" | "no"; acknowledged: boolean };
 type AlertConditions = { query: string; places: Place[]; radius: number };
-type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[]; photoGuidance?: boolean; alertConditions?: AlertConditions } | { confirmedPlace: AgentPlace } | { itemConversation: ItemConversation };
+type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[]; photoGuidance?: boolean; alertConditions?: AlertConditions; survey?: boolean } | { confirmedPlace: AgentPlace } | { itemConversation: ItemConversation };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
+
+// PRD 4.3-E · 4.4 — 알림 활성화 성공 뒤 기존 이용 경험 설문을 선택적으로 안내한다.
+function alertStartedMessages(text: string): ChatMessage[] {
+  return [{ author: "agent", text },
+    { author: "agent", text: "리트리버 이용 경험은 어떠셨나요? 짧은 설문으로 의견을 들려주세요.", survey: true }];
+}
 
 function mapPlace(place: AgentPlace): Place {
   return { ...place, phone: "", category: "", url: "" };
@@ -60,11 +67,12 @@ function AlertConditionSummary({ conditions, recorded = false }: { conditions: A
 export function AgentSearchApp() {
   const location = useLocation();
   const navigate = useNavigate();
+  const mailAction = location.pathname === "/alerts/extend" ? "extend" : location.pathname === "/alerts/cancel" ? "cancel" : null;
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const returned = location.state?.alertReturn;
     if (!returned || !Array.isArray(returned.messages) || typeof returned.text !== "string") return [];
-    return [...returned.messages.filter((message: ChatMessage) => "author" in message && typeof message.text === "string"), { author: "agent", text: returned.text }];
+    return [...returned.messages.filter((message: ChatMessage) => "author" in message && typeof message.text === "string"), ...alertStartedMessages(returned.text)];
   });
   const pendingAlertIds = useRef(new Set<number>());
   useEffect(() => {
@@ -76,7 +84,7 @@ export function AgentSearchApp() {
       try {
         const { id } = JSON.parse(event.newValue);
         if (!pendingAlertIds.current.delete(id)) return;
-        setMessages(previous => [...previous, { author: "agent", text: CONFIRMED_TEXT }]);
+        setMessages(previous => [...previous, ...alertStartedMessages(CONFIRMED_TEXT)]);
         setTab("chat");
       } catch { /* 다른 탭의 잘못된 값은 무시한다. */ }
     }
@@ -809,7 +817,7 @@ export function AgentSearchApp() {
             pendingAlertIds.current.add(reservationId);
             // PRD 4.3-E — 이메일·사진·물품 상세를 제외한 신청 당시의 텍스트 대화만 복원한다.
             const history = messages.flatMap(message => "author" in message
-              ? [{ author: message.author, text: message.text, alertConditions: message.alertConditions }] : []);
+              ? [{ author: message.author, text: message.text, alertConditions: message.alertConditions, survey: message.survey }] : []);
             rememberAlertChat(reservationId, [...history,
               { author: "agent", text: "", alertConditions: alertDraft },
               { author: "agent", text: "확인 메일을 보냈어요." }]);
@@ -1001,14 +1009,15 @@ export function AgentSearchApp() {
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
         <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
-            <h2 className="agent-welcome-title">이용 방법</h2>
+            {!mailAction && <><h2 className="agent-welcome-title">이용 방법</h2>
             <ol className="agent-welcome-steps" aria-label="이용 순서">
               <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 보관기관 핀을 눌러 선택하세요</li>
               <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
-            <hr className="agent-welcome-divider" />
-            {messages.length === 0 && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
+            <hr className="agent-welcome-divider" /></>}
+            {messages.length === 0 && !mailAction && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
+            {mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
           {messages.map((message, index) => "itemConversation" in message
             ? <AgentItemDetail key={message.itemConversation.id} item={message.itemConversation.item}
               institution={message.itemConversation.institution} answer={message.itemConversation.answer}
@@ -1026,6 +1035,9 @@ export function AgentSearchApp() {
                   <img key={photo.id} src={photo.url} alt={`첨부한 사진 ${photoIndex + 1}: ${photo.name}`} />)}</div>
               </>}
               {message.text && <p className="agent-message-text">{message.text}</p>}
+              {message.survey && <a className="agent-survey-link" href={SURVEY_URL} target="_blank" rel="noopener noreferrer">
+                이용 경험 설문 참여하기<span className="sr-only"> (새 창에서 열림)</span>
+              </a>}
             </div>)}
           {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates" aria-label="장소 후보" start={placePage * PLACE_PAGE_SIZE + 1}>
             {pagePlaces.map(({ id, place, number }) => <li className={`agent-place-card${id === selectedCandidate ? " is-selected" : ""}`} key={id} id={`agent-place-${id}`}>
