@@ -4,12 +4,12 @@ import base64
 import binascii
 import json
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPException
 from threading import BoundedSemaphore
 
 from ..agent_diagnostics import record
 from ..privacy.masking import is_high_risk_category, mask_text
 from ..thumbnails.resize import resize_image
-from ..thumbnails.storage import is_supported_source
 
 MAX_PHOTO_LENGTH = 400_000
 MAX_USER_PHOTOS = 3
@@ -96,13 +96,14 @@ def rerank_photos(ranked, location_ids, user_text, photos, fetch_candidates, com
         item_ids = {row["id"] for row in ranked}
         try:
             rows = fetch_candidates(location_ids, list(item_ids))
-        except (RuntimeError, OSError):
+        except (RuntimeError, OSError, HTTPException) as error:
+            record("photo_rerank.lookup_failed", error=error, stage="photo_rerank", final_status="fallback")
             return ranked, "unavailable"
         eligible = []
         for row in rows:
-            url = row.get("image_url")
+            url = row.get("thumbnail_url")
             if (row.get("id") in item_ids and row.get("storage_location_id") in location_ids
-                    and isinstance(url, str) and is_supported_source(url)):
+                    and isinstance(url, str) and url):
                 text = mask_text(row.get("embedding_input"), high_risk=is_high_risk_category(row.get("raw_category_name")))
                 eligible.append((str(row["id"]), (text or "")[:500], url))
         if not eligible:
