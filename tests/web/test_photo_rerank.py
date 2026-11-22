@@ -12,6 +12,8 @@ from retriever_lost_found.web.agent_search import Institution
 from retriever_lost_found.web.agent_store import MemoryAgentStore
 from retriever_lost_found.web.app import create_app, photo_ranked_item_page
 
+THUMBNAIL_URL = "https://project.supabase.co/storage/v1/object/public/found-item-thumbnails/21/test.jpg"
+
 
 def test_user_and_candidate_content_rerank_only_top_100_and_keep_page_order():
     class FoundItems:
@@ -23,10 +25,11 @@ def test_user_and_candidate_content_rerank_only_top_100_and_keep_page_order():
             assert locations == [42] and set(ids) == set(range(21, 121))
             return [
                 {"id": 21, "storage_location_id": 42, "embedding_input": "보라 지갑",
-                 "image_url": "https://minwon24.police.go.kr/photo.jpg"},
-                {"id": 20, "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/outside.jpg"},
+                 "image_url": "https://minwon24.police.go.kr/photo.jpg", "thumbnail_url": THUMBNAIL_URL},
+                {"id": 20, "storage_location_id": 42, "thumbnail_url": THUMBNAIL_URL},
                 {"id": 22, "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/img02_no_img.gif"},
-                {"id": 23, "storage_location_id": 99, "image_url": "https://minwon24.police.go.kr/other.jpg"},
+                {"id": 23, "storage_location_id": 99, "thumbnail_url": THUMBNAIL_URL},
+                {"id": 24, "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/original.jpg"},
             ]
 
         def fetch_item_details(self, locations, ids):
@@ -39,7 +42,7 @@ def test_user_and_candidate_content_rerank_only_top_100_and_keep_page_order():
         assert json.loads(content[0]["text"]) == {"user_text": "보라색 지갑을 찾아줘"}
         assert content[1]["image_url"]["url"].startswith(JPEG_PREFIX)
         assert json.loads(content[2]["text"]) == {"id": "21", "embedding_input": "보라 지갑"}
-        assert content[3]["image_url"]["url"] == "https://minwon24.police.go.kr/photo.jpg"
+        assert content[3]["image_url"]["url"] == THUMBNAIL_URL
         assert len(content) == 4
         return {"results": [{"id": "21", "label": "same"}]}
 
@@ -86,7 +89,7 @@ def test_user_and_candidate_content_rerank_only_top_100_and_keep_page_order():
 
 def test_photo_rerank_applies_penalties_and_preserves_order_when_photo_comparison_fails():
     ranked = [{"id": i, "match_score": score} for i, score in [(3, .52), (2, .50), (1, .485)]]
-    candidates = [{"id": i, "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/photo.jpg"} for i in (3, 2)]
+    candidates = [{"id": i, "storage_location_id": 42, "thumbnail_url": THUMBNAIL_URL} for i in (3, 2)]
     fetch = Mock(return_value=candidates)
     compare = Mock(return_value={"results": [{"id": "3", "label": "very_different"}, {"id": "2", "label": "different"}]})
     items, status = rerank_photos(ranked, [42], "지갑", ("photo",), fetch, compare)
@@ -99,12 +102,16 @@ def test_photo_rerank_applies_penalties_and_preserves_order_when_photo_compariso
     assert rerank_photos(ranked, [42], "지갑", ("photo",), fetch, compare) == (ranked, "no_photos")
     compare.assert_not_called()
 
+    fetch.side_effect = RuntimeError("thumbnail lookup failed")
+    assert rerank_photos(ranked, [42], "지갑", ("photo",), fetch, compare) == (ranked, "unavailable")
+    compare.assert_not_called()
+
 
 def test_photo_rerank_keeps_successful_batch_when_another_batch_fails():
     last_id = PHOTO_BATCH_SIZE + 1
     ids = range(1, last_id + 1)
     ranked = [{"id": i, "match_score": .5 + i * .001} for i in reversed(ids)]
-    candidates = [{"id": i, "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/photo.jpg"} for i in ids]
+    candidates = [{"id": i, "storage_location_id": 42, "thumbnail_url": THUMBNAIL_URL} for i in ids]
 
     def compare(_, content, schema):
         batch_ids = [json.loads(part["text"])["id"] for part in content[2::2]]
@@ -120,7 +127,7 @@ def test_photo_rerank_keeps_successful_batch_when_another_batch_fails():
 
 def test_photo_rerank_keeps_valid_unique_verdicts_from_an_incomplete_batch():
     ranked = [{"id": i, "match_score": .5 + i * .001} for i in (5, 4, 3, 2, 1)]
-    candidates = [{"id": row["id"], "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/photo.jpg"} for row in ranked]
+    candidates = [{"id": row["id"], "storage_location_id": 42, "thumbnail_url": THUMBNAIL_URL} for row in ranked]
     compare = Mock(return_value={"results": [
         {"id": "1", "label": "same"},
         {"id": "2", "label": "same"},

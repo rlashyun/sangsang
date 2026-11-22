@@ -145,8 +145,8 @@ class SupabaseFoundItemClient:
             "total_count": int(total_count) if total_count is not None else None,
         }
 
-    def add_thumbnails(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """PRD 3.2-2 — 축소본 조회 실패 시 검색 결과는 원본을 그대로 사용한다."""
+    def add_thumbnails(self, rows: list[dict[str, Any]], *, strict: bool = False) -> list[dict[str, Any]]:
+        """PRD 3.2-2 · 4.5 — 목록은 원본으로 대체하고 사진 비교에서는 조회 실패를 전달한다."""
         from ..thumbnails.storage import ThumbnailStorage
 
         ids = sorted({int(row["id"]) for row in rows if row.get("id") and row.get("image_url")})
@@ -160,14 +160,16 @@ class SupabaseFoundItemClient:
                                              headers=_headers(self.secret_key))
             records = _request_json(request, 0.5, "축소 사진 조회")
             if not isinstance(records, list):
-                return rows
+                raise ValueError("축소본 응답이 목록이 아닙니다.")
             lookup = {(r["item_id"], r["source_url"]): r["object_key"] for r in records}
             result = []
             for row in rows:
                 key = lookup.get((row.get("id"), row.get("image_url")))
                 result.append({**row, "thumbnail_url": storage.public_url(key)} if key else row)
             return result
-        except (RuntimeError, OSError, HTTPException, ValueError, KeyError, TypeError):
+        except (RuntimeError, OSError, HTTPException, ValueError, KeyError, TypeError) as error:
+            if strict:
+                raise RuntimeError("검색용 축소본을 조회하지 못했습니다.") from error
             return rows
 
     def fetch_search_candidates(self, location_ids: list[int]) -> list[dict[str, Any]]:
@@ -239,7 +241,9 @@ class SupabaseFoundItemClient:
         return rows
 
     def fetch_photo_candidates(self, location_ids: list[int], item_ids: list[int]) -> list[dict[str, Any]]:
-        """PRD 4.5 — Read the model input only for already-ranked, in-scope items."""
+        """PRD 4.5 — Read text and current, ready Storage URLs for the ranked items."""
+        from ..thumbnails.storage import is_supported_source
+
         locations = _unique_location_ids(location_ids)
         if not locations or not item_ids:
             return []
@@ -253,7 +257,12 @@ class SupabaseFoundItemClient:
         payload = _request_json(request, min(self.timeout, 2), "검색 사진 조회")
         if not isinstance(payload, list):
             raise RuntimeError("검색 사진 응답 형식이 올바르지 않습니다.")
-        return [row for row in payload if isinstance(row, dict)]
+        photo_rows = [
+            row for row in payload
+            if isinstance(row, dict) and isinstance(source_url := row.get("image_url"), str)
+            and is_supported_source(source_url)
+        ]
+        return [row for row in self.add_thumbnails(photo_rows, strict=True) if row.get("thumbnail_url")]
 
     def fetch_items(self, location_ids: list[int], *, search_only: bool = False,
                     item_ids: list[int] | None = None) -> list[dict[str, Any]]:

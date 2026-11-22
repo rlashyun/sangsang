@@ -1,5 +1,7 @@
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
 
 from retriever_lost_found.integrations.supabase import SupabaseFoundItemClient
@@ -21,6 +23,42 @@ def test_only_current_source_gets_a_thumbnail_and_lookup_failure_preserves_resul
     assert "thumbnail_url" not in result[1]
     with patch("retriever_lost_found.integrations.supabase._request_json", side_effect=RuntimeError):
         assert client.add_thumbnails(rows) == rows
+        with pytest.raises(RuntimeError, match="축소본"):
+            client.add_thumbnails(rows, strict=True)
+
+
+def test_photo_candidates_include_only_ready_thumbnails_for_the_current_source():
+    client = SupabaseFoundItemClient("https://project.supabase.co", "dummy")
+    origin = "https://minwon24.police.go.kr"
+    current = f"{origin}/photo.jpg"
+    stale = f"{origin}/old.jpg"
+    candidates = [
+        {"id": 1, "storage_location_id": 7, "embedding_input": "검정 지갑", "image_url": current},
+        {"id": 2, "storage_location_id": 7, "image_url": current},
+        {"id": 3, "storage_location_id": 7, "image_url": current},
+        {"id": 4, "storage_location_id": 7, "image_url": f"{origin}/img02_no_img.gif?cache=1"},
+    ]
+    current_key = thumbnail_key(1, current)
+    records = [
+        {"item_id": 1, "source_url": current, "object_key": current_key},
+        {"item_id": 2, "source_url": stale, "object_key": thumbnail_key(2, stale)},
+    ]
+    with patch("retriever_lost_found.integrations.supabase._request_json", side_effect=[candidates, records]) as query:
+        selected = client.fetch_photo_candidates([7], [1, 2, 3, 4])
+
+    assert selected == [{
+        **candidates[0],
+        "thumbnail_url": f"https://project.supabase.co/storage/v1/object/public/found-item-thumbnails/{current_key}",
+    }]
+    assert query.call_count == 2
+    candidate_request, thumbnail_request = (urlsplit(call.args[0].full_url) for call in query.call_args_list)
+    assert candidate_request.path == "/rest/v1/found_items"
+    assert parse_qs(candidate_request.query)["storage_location_id"] == ["in.(7)"]
+    assert thumbnail_request.path == "/rest/v1/found_item_thumbnails"
+    thumbnail_filters = parse_qs(thumbnail_request.query)
+    assert thumbnail_filters["item_id"] == ["in.(1,2,3)"]
+    assert thumbnail_filters["status"] == ["eq.ready"]
+    assert thumbnail_filters["deleted_at"] == ["is.null"]
 
 
 def test_csp_only_adds_the_exact_valid_storage_host():
