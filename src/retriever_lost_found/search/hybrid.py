@@ -20,6 +20,7 @@ from .synonyms import ALIASES
 # 임계값 0.525는 사용자 실험(질의 100개, 보정 50에서 선택)의 Gemini TASK 값이다. 가중치는 75/25 그대로.
 SEMANTIC_MIN_SIMILARITY = 0.525  # 이 값 이상만 의미 점수를 준다(키워드에 없는 물품도 이 값 이상이면 추가).
 SEMANTIC_LIMIT = 200             # 의미 검색 결과 상한(코사인 0.525 이상 상위 200건)
+SEARCH_RESULT_LIMIT = 100       # PRD 4.5 — 키워드와 의미 점수를 합산한 뒤의 상한
 SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 후보 수(원본 상위 200과 98.0% 일치)
 KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25
 SEMANTIC_BUDGET_SECONDS = 4.0
@@ -146,14 +147,16 @@ class SearchBusy(SearchDeadlineExceeded):
     failure_reason = "busy"
 
 
-def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0):
+def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0,
+                         hydrate_page=True):
     """Bound the entire read pipeline, including slow body reads and ranking.
 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
     """
     if not _search_slots.acquire(blocking=False):
         raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
-    future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids, embedding_client, offset=offset)
+    future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids,
+                                 embedding_client, offset=offset, hydrate_page=hydrate_page)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -221,7 +224,7 @@ def _embed_and_search(client, embedding_client, query, location_ids, budget_end)
 
 
 def search_found_items(client, query: str, location_ids: list[int], embedding_client=None,
-                       *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0):
+                       *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True):
     started = monotonic()
     query = query_text(query)
     deadline = started+SEARCH_BUDGET_SECONDS
@@ -292,8 +295,9 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
             score=lexical[item_id]
         ranked.append({**item,"match_score":round(score,6)})
     ranked.sort(key=lambda item:(-item["match_score"],-int(item["id"])))
-    # Keep every keyword match. Only the visible page needs full display fields.
-    page=ranked[offset:offset+50]
+    ranked = ranked[:SEARCH_RESULT_LIMIT]
+    # Only the visible page needs full display fields.
+    page=ranked[offset:offset+50] if hydrate_page else []
     missing=[int(item["id"]) for item in page if "image_url" not in item]
     if missing and hasattr(client,"fetch_item_details"):
         details={int(item["id"]):item for item in client.fetch_item_details(location_ids,missing,

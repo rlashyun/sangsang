@@ -38,6 +38,8 @@ class SearchPage:
     items: tuple[dict[str, Any], ...]
     total_count: int
     next_cursor: str | None = None
+    remaining_photo_ids: tuple[int, ...] = ()
+    photo_status: str | None = None
 
 
 def _validated_query(query: str) -> str:

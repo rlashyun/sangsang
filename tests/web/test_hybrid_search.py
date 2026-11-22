@@ -158,27 +158,33 @@ def test_description_can_support_kind_when_source_name_is_vague():
     assert 1 in keyword_scores([item], "지갑")
 
 
-def test_search_pagination_exposes_total_without_dropping_remaining_matches():
+@pytest.mark.parametrize("item_count", [55, 100, 120])
+def test_search_pagination_returns_at_most_top_100_ranked_items(item_count):
     class Items(FakeItems):
         def fetch_items(self, ids):
-            return [{"id": i, "storage_location_id": 7, "item_name": "지갑"} for i in range(1, 56)]
+            return [{"id": i, "storage_location_id": 7, "item_name": "지갑"} for i in range(1, item_count + 1)]
 
     client = TestClient(create_app(object(), "test-js", found_item_client=Items()))
     first = client.get("/api/found-items?location_ids=7&q=지갑").json()
     second = client.get("/api/found-items", params={"location_ids": 7, "q": "지갑", "cursor": first["next_cursor"]}).json()
-    assert first["match_count"] == first["total_count"] == 55
-    assert len(first["items"]) == 50 and len(second["items"]) == 5
-    assert not ({r["id"] for r in first["items"]} & {r["id"] for r in second["items"]})
+    outside = client.get("/api/found-items?location_ids=7&q=지갑&cursor=search:100").json()
+    visible_count = min(item_count, 100)
+    assert first["candidate_count"] == item_count
+    assert first["match_count"] == first["total_count"] == second["total_count"] == visible_count
+    assert len(first["items"]) == 50
+    assert [r["id"] for r in first["items"] + second["items"]] == list(range(item_count, item_count - visible_count, -1))
+    assert second["next_cursor"] is None
+    assert outside["items"] == [] and outside["next_cursor"] is None
 
 
-def test_every_keyword_match_is_preserved_without_semantic_scores():
+def test_keyword_only_matches_are_preserved_when_below_the_result_cap():
     class Items(FakeItems):
         def fetch_items(self, ids):
-            return [{"id": i,"storage_location_id":7,"item_name":"지갑"} for i in range(1,251)]
+            return [{"id": i,"storage_location_id":7,"item_name":"지갑"} for i in range(1,101)]
         def fetch_semantic_items(self, ids, vector, **kwargs):
-            return super().fetch_semantic_items(ids,vector,**kwargs)[:200]
+            return super().fetch_semantic_items(ids,vector,**kwargs)[:30]
     rows,_,status=search_found_items(Items(),"지갑",[7],FakeEmbedding())
-    assert status=="ok" and {row["id"] for row in rows}==set(range(1,251))
+    assert status=="ok" and {row["id"] for row in rows}==set(range(1,101))
 
 
 def test_supabase_compressed_json_is_decoded():

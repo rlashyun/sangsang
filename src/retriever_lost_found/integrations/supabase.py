@@ -238,6 +238,23 @@ class SupabaseFoundItemClient:
             rows.extend(row for row in payload if isinstance(row, dict))
         return rows
 
+    def fetch_photo_candidates(self, location_ids: list[int], item_ids: list[int]) -> list[dict[str, Any]]:
+        """PRD 4.5 — Read the model input only for already-ranked, in-scope items."""
+        locations = _unique_location_ids(location_ids)
+        if not locations or not item_ids:
+            return []
+        query = urllib.parse.urlencode({
+            "select": "id,storage_location_id,embedding_input,raw_category_name,image_url",
+            "storage_location_id": f"in.({','.join(map(str, locations))})",
+            "id": f"in.({','.join(map(str, sorted(set(item_ids))))})",
+            "image_url": "not.is.null",
+        })
+        request = urllib.request.Request(f"{self.url}/rest/v1/found_items?{query}", headers=_headers(self.secret_key))
+        payload = _request_json(request, min(self.timeout, 2), "검색 사진 조회")
+        if not isinstance(payload, list):
+            raise RuntimeError("검색 사진 응답 형식이 올바르지 않습니다.")
+        return [row for row in payload if isinstance(row, dict)]
+
     def fetch_items(self, location_ids: list[int], *, search_only: bool = False,
                     item_ids: list[int] | None = None) -> list[dict[str, Any]]:
         unique_ids = _unique_location_ids(location_ids)
