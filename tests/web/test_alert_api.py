@@ -48,6 +48,7 @@ class AlertApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.json()["status"], "pending")
+        self.assertEqual(response.json()["reservation_id"], next(iter(self.store.reservations)))
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_mail_link_paths_open_the_app_without_leaking_the_token(self) -> None:

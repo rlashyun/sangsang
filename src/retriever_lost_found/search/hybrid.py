@@ -11,7 +11,7 @@ from time import monotonic
 from typing import Any
 
 from ..privacy.masking import mask_numbers
-from . import synonyms
+from . import color_filter, synonyms
 from .synonyms import ALIASES
 
 # PRD 4.5 — 2026-11-21 확정안. 의미 점수는 반경 전체 1비트 의미 검색 한 곳에서만 온다
@@ -25,6 +25,7 @@ SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 �
 KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25
 SEMANTIC_BUDGET_SECONDS = 4.0
 SEARCH_BUDGET_SECONDS = 4.4  # HTTP/JSON 전송 여유를 포함해 5초 목표를 검증한다.
+JEV_HYDRATE_RESERVE = 0.4    # Jev 뒤 첫 페이지 상세 조회에 남겨 두는 시간(2026-11-23 — Jev 포함 5초 이내).
 _semantic_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="semantic")
 _semantic_slots = BoundedSemaphore(4)
 _search_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="found-items")
@@ -148,7 +149,7 @@ class SearchBusy(SearchDeadlineExceeded):
 
 
 def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0,
-                         hydrate_page=True):
+                         hydrate_page=True, jev=None):
     """Bound the entire read pipeline, including slow body reads and ranking.
 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
@@ -156,7 +157,7 @@ def search_with_deadline(client, query, location_ids, embedding_client=None, *, 
     if not _search_slots.acquire(blocking=False):
         raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
     future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids,
-                                 embedding_client, offset=offset, hydrate_page=hydrate_page)
+                                 embedding_client, offset=offset, hydrate_page=hydrate_page, jev=jev)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -224,7 +225,8 @@ def _embed_and_search(client, embedding_client, query, location_ids, budget_end)
 
 
 def search_found_items(client, query: str, location_ids: list[int], embedding_client=None,
-                       *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True):
+                       *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True,
+                       jev=None):
     started = monotonic()
     query = query_text(query)
     deadline = started+SEARCH_BUDGET_SECONDS
@@ -239,9 +241,20 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     # expressions from synonyms.json do the kind gate, including aliases the
     # mask never knew. Attribute-only hits cannot widen it.
     terms, words = candidate_terms(query)
+    keyword_error = None
     if hasattr(client,"fetch_candidate_bundle"):
-        bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
-        items,count = bundle["items"],bundle.get("candidate_count")
+        try:
+            bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
+            items,count = bundle["items"],bundle.get("candidate_count")
+        except RuntimeError as error:
+            # PRD 5 — 키워드 후보 RPC가 DB 시간 제한(57014)에 걸려도 의미 검색이 돌고 있으면 그 결과로 답한다.
+            # 의미 검색이 없거나 함께 실패하면 아래에서 이 오류를 그대로 올린다(빈 결과로 숨기지 않는다 — PRD 6).
+            if vector_future is None:
+                raise
+            keyword_error = error
+            items,count = [],None
+            from ..agent_diagnostics import record
+            record("keyword.fallback", error=error, stage="keyword_candidates", final_status="fallback")
     else:
         items = client.fetch_items(location_ids)
         count = len(items)
@@ -269,9 +282,11 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     if embedding_client is not None and vector_future is None:
         from ..agent_diagnostics import record
         record("embedding.fallback", stage="embedding", reason="busy", final_status="fallback")
+    if keyword_error is not None and semantic_rows is None:
+        raise keyword_error
     if semantic_rows is not None:
         status = "ok"
-    by_id = {int(item["id"]):item for item in items if int(item["id"]) in lexical}
+    by_id ={int(item["id"]):item for item in items if int(item["id"]) in lexical}
     scored = {}
     # Radius-wide semantic results (1-bit → half rescore, cos ≥ 0.60, top 200) score keyword matches
     # and add items the keyword step missed, behind the same kind gate as BM25.
@@ -288,7 +303,11 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
             continue
         scored[item_id]=row["similarity"]
     ranked=[]
+    # 2026-11-23 사용자 결정 — 색이 확실히 다른 물품은 상위 100건으로 자르기 전에 뺀다(color_filter.py).
+    wanted_colors=color_filter.query_colors(query)
     for item_id,item in by_id.items():
+        if wanted_colors and not color_filter.keeps(query,item,wanted=wanted_colors):
+            continue
         # PRD 4.5 — 0.75·BM25 + 0.25·(cos−0.60)/0.40. Keyword matches always stay.
         score=KEYWORD_WEIGHT*lexical.get(item_id,0)+SEMANTIC_WEIGHT*semantic_score(scored.get(item_id))
         if semantic_rows is None:
@@ -296,6 +315,16 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
         ranked.append({**item,"match_score":round(score,6)})
     ranked.sort(key=lambda item:(-item["match_score"],-int(item["id"])))
     ranked = ranked[:SEARCH_RESULT_LIMIT]
+    if jev is not None:
+        # 2026-11-23 사용자 결정 — 100건으로 자른 뒤 Jev가 명백히 다른 물건만 뺀다(search/jev_filter.py).
+        # 쪽마다 100건 전체를 다시 판정한다. 남은 시간이 부족하거나 실패하면 그대로 둔다.
+        jev_started = monotonic()
+        ranked, jev_status = jev.apply(query, ranked, budget=deadline-monotonic()-JEV_HYDRATE_RESERVE)
+        timings["jev_ms"] = round((monotonic()-jev_started)*1000,2)
+        timings["jev_status"] = jev_status
+        if jev_status in {"unavailable","skipped"}:
+            from ..agent_diagnostics import record
+            record("jev.fallback", stage="jev_filter", reason=jev_status, final_status="fallback")
     # Only the visible page needs full display fields.
     page=ranked[offset:offset+50] if hydrate_page else []
     missing=[int(item["id"]) for item in page if "image_url" not in item]

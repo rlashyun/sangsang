@@ -129,11 +129,31 @@ export async function createAlertReservation(reservation: AlertReservation) {
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify(reservation),
   });
-  const payload = await response.json().catch(() => null) as { status?: string; error?: string } | null;
+  const payload = await response.json().catch(() => null) as { status?: string; error?: string; reservation_id?: number } | null;
   if (response.status !== 202 || payload?.status !== "pending") {
     const fallback = response.status === 429
       ? "알림 신청 한도에 도달했어요. 나중에 다시 시도해 주세요."
       : "지금은 알림을 신청할 수 없어요. 잠시 뒤 다시 시도해 주세요.";
     throw new Error(typeof payload?.error === "string" && payload.error ? payload.error : fallback);
   }
+  return payload.reservation_id;
+}
+
+export type AlertSummary = {
+  status: string; query: string; places: { name: string }[]; radius_m: number;
+  last_day: string; expires_at: string; extensions_left: number;
+};
+export function fetchAlertSummary(token: string, signal?: AbortSignal) {
+  return fetchJson<AlertSummary>(`/api/alerts/summary?${new URLSearchParams({ token })}`, signal);
+}
+// PRD 4.3-E — 토큰은 예약 API에만 보내며 검색 대화·모델에 전달하지 않는다.
+export async function manageAlertReservation(action: "extend" | "cancel", token: string) {
+  const response = await fetch(`/api/alerts/${action}`, {
+    method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result?.error || "예약을 처리하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+  if (typeof result?.result !== "string" || typeof result?.message !== "string") throw new Error("예약 처리 결과를 확인하지 못했어요.");
+  return result as { result: string; message: string; last_day?: string; expires_at?: string; extensions_left?: number };
 }

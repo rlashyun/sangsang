@@ -65,7 +65,7 @@ async (page) => {
       mails++;
       check(payload.email === "user@example.com" && payload.consent && payload.places.length === 1, "reservation payload");
       if (mails % 2) return route.fulfill({status:503,json:{error:"일시 실패: 다시 입력해 주세요"}});
-      return route.fulfill({status:202,json:{status:"pending"}});
+      return route.fulfill({status:202,json:{status:"pending",reservation_id:7}});
     }
     if (url.pathname === "/api/search-chat/turns") {
       calls++;
@@ -265,6 +265,46 @@ async (page) => {
     await followup.getByRole("link", {name:"당근에서 찾아보기"}).waitFor();
     check(calls===before,"email invoked chat API");
     check(!(await page.locator(".agent-feed").innerText()).includes("user@example.com"),"email in history");
+    const confirmation = await page.context().newPage();
+    await confirmation.setViewportSize(viewport);
+    let confirms = 0;
+    let confirmResult = 'link_expired';
+    await confirmation.route('**/*', route => {
+      const url = new URL(route.request().url());
+      if (url.hostname !== '127.0.0.1') return route.abort();
+      if (url.pathname === '/api/alerts/confirm') {
+        confirms++;
+        check(route.request().method() === 'POST', 'Confirmation uses POST');
+        return route.fulfill({json:{result:confirmResult,message:confirmResult === 'link_expired' ? '확인 링크가 만료됐어요.' : '알림이 켜졌습니다.'}});
+      }
+      if (url.pathname === '/api/institutions') return route.fulfill({json:{institutions:[],counts_available:true}});
+      return route.continue();
+    });
+    await confirmation.goto('http://127.0.0.1:5178/alerts/confirm?search=chat&token=7.00000000000000000000000000000000');
+    await confirmation.getByText('확인 링크가 만료됐어요.',{exact:true}).waitFor();
+    check(await confirmation.getByRole('link',{name:'이용 경험 설문 참여하기'}).count() === 0
+      && await page.getByRole('link',{name:'이용 경험 설문 참여하기'}).count() === 0, 'No survey invitation before activation');
+    check(confirms === 1 && await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).count() === 0,
+      'Expired links never announce success; StrictMode sends only one POST');
+    confirmResult = 'confirmed';
+    await confirmation.getByRole('button',{name:'다시 확인하기',exact:true}).click();
+    await confirmation.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).waitFor();
+    await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).waitFor();
+    for (const chat of [page, confirmation]) {
+      const survey = chat.getByRole('link',{name:'이용 경험 설문 참여하기'});
+      check(await survey.count() === 1, 'Each chat receives one survey invitation after activation');
+      check(await survey.getAttribute('href') === await chat.getByRole('link',{name:'의견 보내기'}).getAttribute('href'),
+        'Survey invitation uses the existing feedback form');
+      check(await survey.getAttribute('target') === '_blank' && (await survey.getAttribute('rel')).includes('noopener'),
+        'Survey opens safely in another tab');
+      check((await chat.locator('.agent-feed > .agent-bubble').allTextContents()).at(-1).includes('리트리버 이용 경험은 어떠셨나요?'),
+        'Survey message follows the activation confirmation');
+    }
+    check(confirms === 2 && !confirmation.url().includes('token='), 'One POST per attempt and token removed');
+    check(await confirmation.getByLabel('이전 알림 조건',{exact:true}).count() > 0, 'Mail tab restores signup conditions');
+    check(!(await confirmation.locator('.agent-feed').innerText()).includes('user@example.com'), 'Restored chat excludes email');
+    if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await confirmation.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-return-${viewport.width}.png`});
+    await confirmation.close();
     await input.fill('여러 장소 알림 신청'); await page.getByRole('button',{name:'보내기',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
     await page.getByRole('button',{name:'조건 수정',exact:true}).click();
@@ -312,6 +352,85 @@ async (page) => {
     await page.getByRole('button', {name:'보내기',exact:true}).click();
     await page.locator('.agent-item').waitFor();
 
+  }
+  // PRD 4.3-E — 메일의 연장·취소는 같은 챗봇 안에서 명시적 선택 뒤에만 실행한다.
+  for (const viewport of [{width:1440,height:1000},{width:390,height:844}]) {
+    await page.setViewportSize(viewport);
+    let left = 3, status = 'active', posts = 0, failSummary = false, failAction = false, rejectExtension = false;
+    await page.route('**/api/alerts/**', async route => {
+      const url = new URL(route.request().url());
+      if (url.pathname === '/api/alerts/summary') {
+        check(url.searchParams.get('token') === '8.test-token', 'Summary uses mail token only at reservation API');
+        if (failSummary) return route.fulfill({status:400,json:{error:'링크가 올바르지 않습니다.'}});
+        return route.fulfill({json:{status,query:'갈색 지갑',places:[{name:'강남역'}],radius_m:1000,last_day:'2026-12-01',expires_at:'2026-12-02T00:00:00+09:00',extensions_left:left}});
+      }
+      posts++;
+      check(route.request().method() === 'POST' && route.request().postDataJSON().token === '8.test-token', 'Management POST uses token');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      if (failAction) return route.fulfill({status:503,json:{error:'잠시 처리할 수 없습니다.'}});
+      if (url.pathname.endsWith('/extend')) {
+        if (rejectExtension) return route.fulfill({json:{result:'limit_reached',message:'연장할 수 있는 횟수(3회)를 모두 사용했습니다.'}});
+        left--;
+        return route.fulfill({json:{result:'extended',message:`알림을 12월 8일까지 연장했습니다. 남은 연장은 ${left}회입니다.`,last_day:'2026-12-08',expires_at:'2026-12-09T00:00:00+09:00',extensions_left:left}});
+      }
+      status = 'cancelled';
+      return route.fulfill({json:{result:'cancelled',message:'알림 예약을 취소했습니다. 이메일 주소도 지웠습니다.'}});
+    });
+    const open = async action => {
+      await page.goto(`http://127.0.0.1:5178/alerts/${action}?search=chat&token=8.test-token`);
+      await page.getByLabel('메일에 연결된 알림 예약').waitFor();
+      check(!page.url().includes('token='), 'Management token removed from address');
+    };
+    const beforeManagementCalls = calls;
+    await open('extend');
+    check(posts === 0 && await page.getByText(/남은 연장은 3회예요/).count() === 1, 'Opening extension only shows summary and remaining count');
+    if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await page.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-extend-prompt-${viewport.width}.png`});
+    await page.getByRole('button',{name:'지금은 연장하지 않기',exact:true}).click();
+    check(posts === 0, 'Declining extension changes nothing');
+    check(await page.getByLabel('알림 예약 관리',{exact:true}).count() === 0, 'Declining extension removes all choices');
+    await open('extend');
+    await page.getByRole('button',{name:'알림 7일 연장하기',exact:true}).evaluate(button => { button.click(); button.click(); });
+    await page.getByText('알림을 12월 8일까지 연장했습니다. 남은 연장은 2회입니다.',{exact:true}).waitFor();
+    check(posts === 1 && await page.getByRole('button',{name:'알림 7일 연장하기',exact:true}).count() === 0, 'Double click extends once and success removes action');
+    check(await page.getByLabel('알림 예약 관리',{exact:true}).count() === 0, 'Completed extension removes all choices');
+    if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await page.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-extend-${viewport.width}.png`});
+    left = 0;
+    await open('extend');
+    await page.getByText('연장 가능한 횟수를 모두 사용했어요.',{exact:true}).waitFor();
+    check(posts === 1 && await page.getByRole('button',{name:'알림 7일 연장하기',exact:true}).count() === 0, 'No fourth extension after three uses');
+    left = 1; rejectExtension = true;
+    await open('extend');
+    await page.getByRole('button',{name:'알림 7일 연장하기',exact:true}).click();
+    await page.getByText('연장할 수 있는 횟수(3회)를 모두 사용했습니다.',{exact:true}).waitFor();
+    check(await page.getByText(/연장했습니다/).count() === 0, 'Server extension limit is never success');
+    rejectExtension = false;
+    await open('cancel');
+    const beforeCancel = posts;
+    if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await page.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-cancel-prompt-${viewport.width}.png`});
+    await page.getByRole('button',{name:'알림 유지하기',exact:true}).click();
+    check(posts === beforeCancel, 'Keeping the reservation never cancels');
+    check(await page.getByLabel('알림 예약 관리',{exact:true}).count() === 0, 'Keeping reservation removes all choices');
+    await open('cancel');
+    await page.getByRole('button',{name:'알림 취소하기',exact:true}).click();
+    await page.getByText('알림 예약을 취소했습니다. 이메일 주소도 지웠습니다.',{exact:true}).waitFor();
+    check(posts === beforeCancel + 1 && await page.getByRole('button',{name:'알림 취소하기',exact:true}).count() === 0, 'Cancellation uses actual POST once');
+    check(await page.getByLabel('알림 예약 관리',{exact:true}).count() === 0, 'Completed cancellation removes keep and cancel choices');
+    if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await page.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-cancel-${viewport.width}.png`});
+    await open('cancel');
+    check(await page.getByText('이미 끝난 예약이에요.',{exact:true}).count() === 1 && await page.getByRole('button',{name:'알림 취소하기',exact:true}).count() === 0, 'Ended reservation has no cancel action');
+    status = 'pending';
+    await open('extend');
+    check(await page.getByText('메일 확인을 마친 예약만 연장할 수 있어요.',{exact:true}).count() === 1 && await page.getByRole('button',{name:'알림 7일 연장하기',exact:true}).count() === 0, 'Unconfirmed reservation cannot extend');
+    status = 'active'; failAction = true;
+    await open('extend');
+    await page.getByRole('button',{name:'알림 7일 연장하기',exact:true}).click();
+    await page.getByRole('alert').filter({hasText:'잠시 처리할 수 없습니다.'}).waitFor();
+    check(await page.getByText(/연장했습니다/).count() === 0, 'Failed action never reports success');
+    failSummary = true;
+    await page.goto('http://127.0.0.1:5178/alerts/cancel?search=chat&token=8.test-token');
+    await page.getByRole('alert').filter({hasText:'링크가 올바르지 않습니다.'}).waitFor();
+    check(await page.getByRole('button',{name:'알림 취소하기',exact:true}).count() === 0 && calls === beforeManagementCalls, 'Invalid link exposes no mutation and management never invokes model');
+    await page.unroute('**/api/alerts/**');
   }
   check(!errors.length, errors.join(";"));
 }

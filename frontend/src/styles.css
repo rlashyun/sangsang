@@ -2078,6 +2078,9 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   color: var(--color-text-primary);
   font-size: 13px;
 }
+.agent-sheet-grip { display: none; }
+.agent-sheet-body { display: contents; }
+.agent-sheet-body[hidden] { display: none; }
 .agent-summary { display: grid; gap: 4px; margin: 0; padding: 12px; border-radius: 12px; background: var(--agent-surface-rest); }
 .agent-summary > div { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; line-height: 24px; }
 .agent-summary > div + div { border-top: 1px solid var(--color-border-card); padding-top: 4px; }
@@ -2150,6 +2153,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   background: var(--color-bg-hover);
 }
 .agent-bubble-user { align-self: flex-end; background: var(--color-action); color: var(--color-text-on-solid); }
+/* PRD 4.3-E · 4.4 — 알림 시작 뒤 설문 링크를 본문과 구별하고 터치 영역을 확보한다. */
+.agent-survey-link { display: inline-flex; align-items: center; min-height: 36px; color: var(--color-action-text-strong); text-decoration: underline; text-underline-offset: 3px; }
 /* PRD 4.3-E — 알림 조건과 동의도 기존 대화 말풍선과 작은 선택지로 이어진다. */
 .agent-alert-setup { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; }
 .agent-alert-setup > .agent-bubble { width: 91%; }
@@ -2160,6 +2165,9 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-alert-setup p { margin: 0; }
 .agent-alert-fields { display: grid; gap: 4px; margin: 8px 0; }
 .agent-alert-fields > div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+/* PRD 4.3-E — 메일 예약 요약의 '마지막 날' 항목을 한 줄로 유지한다. */
+.agent-mail-summary .agent-alert-fields > div { grid-template-columns: 60px minmax(0, 1fr); }
+.agent-mail-summary .agent-alert-fields dt { white-space: nowrap; }
 .agent-alert-fields dt, .agent-alert-note { color: var(--color-text-secondary); }
 .agent-alert-fields dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .agent-alert-note { font-size: 12px; }
@@ -2434,12 +2442,36 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 
 @media (max-width: 820px) {
-  .app-shell.agent-shell { --layout-gutter: 9px; --agent-footer-inset: 12px; height: calc(100dvh - 64px); min-height: 0; overflow: hidden; display: flex; align-items: stretch; justify-content: end; }
+  /* PRD 4.3-A · 4.4 — 모바일 손잡이로 채팅 전체·반반·지도 전체를 전환한다. */
+  .app-shell.agent-shell { --layout-gutter: 9px; --agent-footer-inset: 12px; --agent-sheet-collapsed: calc(52px + env(safe-area-inset-bottom)); --agent-sheet-height: 56%; height: calc(var(--agent-viewport-height, 100dvh) - 64px); min-height: 0; overflow: hidden; display: block; }
   .agent-shell .map-panel, .agent-shell #map { min-height: 0; }
-  .agent-shell .map-panel { position: absolute; inset: 0 0 56%; }
-  .agent-panel { --agent-panel-padding: 12px; width: calc(100% - 2 * var(--layout-gutter)); height: 56%; margin-bottom: var(--layout-gutter); padding: var(--agent-panel-padding); gap: 8px; }
+  .agent-shell .map-panel { position: absolute; inset: 0; }
+  .agent-shell .agent-panel, .agent-shell .agent-drawer {
+    --agent-panel-padding: 12px;
+    position: absolute; inset: auto 0 0; width: 100%; height: var(--agent-sheet-height); min-height: var(--agent-sheet-collapsed);
+    margin: 0; padding: 0; gap: 0; border: 1px solid var(--color-border-panel); border-bottom: 0; border-radius: 20px 20px 0 0;
+    transition: height 220ms ease, border-radius 220ms ease; box-shadow: var(--shadow-floating);
+  }
+  .agent-shell[data-sheet-dragging="true"] .agent-panel, .agent-shell[data-sheet-dragging="true"] .agent-drawer { transition: none; }
+  .agent-shell[data-sheet-snap="expanded"] .agent-panel, .agent-shell[data-sheet-snap="expanded"] .agent-drawer { border-radius: 0; }
+  .agent-sheet-grip { display: flex; flex: 0 0 44px; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 100%; padding: 4px 0; border: 0; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 11px; cursor: grab; touch-action: none; user-select: none; }
+  .agent-sheet-grip-bar { width: 36px; height: 4px; border-radius: 4px; background: var(--color-border-control); }
+  .agent-sheet-grip:active { cursor: grabbing; }
+  .agent-sheet-grip:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -4px; border-radius: 16px; }
+  .agent-sheet-body { display: flex; flex: 1; flex-direction: column; min-height: 0; gap: 8px; padding: 0 var(--agent-panel-padding) max(12px, env(safe-area-inset-bottom)); }
+  .agent-drawer .agent-sheet-body { padding-inline: 0; }
+  .agent-shell .agent-handle { right: 12px; bottom: calc(var(--agent-sheet-height) - 1px); transition: bottom 220ms ease; }
+  .agent-shell[data-sheet-dragging="true"] .agent-handle { transition: none; }
+  .agent-shell[data-sheet-snap="expanded"]:not([data-sheet-dragging="true"]) .agent-handle { top: 12px; right: 12px; bottom: auto; border: 1px solid var(--color-border-panel); border-radius: 12px; height: 30px; }
+  .agent-shell[data-sheet-snap="expanded"]:not([data-sheet-dragging="true"]) .map-panel { visibility: hidden; }
   .agent-compose input { font-size: 16px; }
-  .agent-shell .map-toolbar { bottom: 10px; }
+  .agent-shell .map-toolbar { bottom: calc(var(--agent-sheet-height) + 10px); }
+  /* 메일 확인 중 잠깐 표시하는 독립 안내 화면은 기존 여백을 유지한다. */
+  .app-shell.agent-shell:not([data-sheet-snap]) { display: flex; align-items: stretch; justify-content: end; }
+  .agent-shell:not([data-sheet-snap]) > .agent-panel { position: relative; inset: auto; width: calc(100% - 18px); margin: 9px; padding: 12px; gap: 8px; }
+}
+@media (max-width: 820px) and (prefers-reduced-motion: reduce) {
+  .agent-shell .agent-panel, .agent-shell .agent-drawer, .agent-shell .agent-handle { transition: none; }
 }
 
 

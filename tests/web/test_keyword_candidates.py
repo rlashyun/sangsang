@@ -114,6 +114,46 @@ def test_headphone_is_not_corrected_to_phone():
     assert query_kinds(query_text("핸드폰")) == ["휴대폰"]
 
 
+def _bigrams(text: str) -> set[str]:
+    """SQL public.search_bigrams(20261123090000)와 같은 판정: 공백을 모두 지운 뒤 서로 다른 2글자 조각."""
+    compact = "".join(text.split())
+    return {compact[i:i + 2] for i in range(len(compact) - 1)}
+
+
+ALL_KIND_TERMS = sorted({term.lower() for name in synonyms.KIND_NAMES
+                         for term in synonyms.kind_candidate_terms({name})})
+
+
+@pytest.mark.parametrize("raw_query", QUERIES + ["지갑", "휴대폰", "에어팟", "모자", "선 캡", "돈을 넣은 지갑"])
+def test_bigram_filter_never_drops_an_item_that_containment_passes(raw_query):
+    # PRD 4.5 — 조각 조건(@>)은 strpos의 필요조건이어야 한다. 그래야 인덱스를 붙여도 BM25 후보가 줄지 않는다.
+    terms, words = candidate_terms(query_text(raw_query))
+    for item in ITEMS:
+        text = item["search_text"]
+        for term in terms:
+            if term in text:
+                assert _bigrams(term) <= _bigrams(text), (term, text)
+
+
+def test_bigram_filter_holds_for_every_dictionary_kind_term_and_actually_narrows():
+    corpus = CORPUS + ["돈을 넣는 머니 클립", "썬 캡 흰색", "차 키 1개", "카드 홀더 검정"]
+    for term in ALL_KIND_TERMS:
+        for text in corpus:
+            if term in text:
+                assert _bigrams(term) <= _bigrams(text), (term, text)
+    # positive 쌍: 필요조건이면서 실제로 문서를 걸러낸다(항상 참인 조건이 아니다).
+    wallet = synonyms.kind_candidate_terms({"지갑"})
+    passed = [text for text in CORPUS if any(_bigrams(t.lower()) <= _bigrams(text) for t in wallet)]
+    assert "검정 장지갑" in passed and "블랙 우산" not in passed and len(passed) < len(CORPUS)
+
+
+def test_only_terms_with_fewer_than_two_letters_skip_the_bigram_index():
+    # 공백을 빼면 1글자인 후보어(옷·책)는 조각이 없어 기존 전체 확인으로 간다. '선 캡'·'차 키'는 인덱스를 쓴다.
+    unindexable = {term for term in ALL_KIND_TERMS if not _bigrams(term)}
+    assert unindexable == {term for term in ALL_KIND_TERMS if len("".join(term.split())) < 2}
+    assert {"선 캡", "차 키"} <= set(ALL_KIND_TERMS) - unindexable
+
+
 def test_rpc_sends_word_terms_only_when_present():
     client = SupabaseFoundItemClient("https://test.supabase.co", "test-key")
     bundle = {"candidate_count": None, "items": []}
