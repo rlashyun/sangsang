@@ -254,16 +254,25 @@ def ranked_item_page(
     jev=None,
 ) -> dict[str, Any]:
     offset = 0
+    jev_excluded = None
     if cursor.strip():
-        if not re.fullmatch(r"search:[0-9]{1,6}", cursor.strip()):
+        # "search:50" 또는 "search:50:x=12,34" — x는 첫 쪽에서 Jev가 뺀 물품 id(2026-11-23 비용 최적화).
+        match = SEARCH_CURSOR_PATTERN.fullmatch(cursor.strip())
+        if not match:
             raise ValueError("검색 결과 페이지 위치가 올바르지 않습니다.")
-        offset = int(cursor.strip().split(":")[1])
+        offset = int(match["offset"])
+        if match["jev"] is not None:
+            jev_excluded = {int(value) for value in match["jev"].split(",") if value}
     if contains_identifier(query):
         raise ValueError(IDENTIFIER_QUERY_ERROR)
     # PRD 4.1 · 4.5 — Both entry points use the same scoped search and paging.
+    jev_out: dict[str, Any] = {}
     matched_items, candidate_count, semantic_status = search_with_deadline(
         found_item_client, query, location_ids, embedding_client, offset=offset, jev=jev,
+        jev_excluded=jev_excluded, jev_out=jev_out,
     )
+    if jev_excluded is None and "excluded" in jev_out:
+        jev_excluded = jev_out["excluded"]
     match_count = len(matched_items)
     next_offset = offset + FOUND_ITEM_PAGE_LIMIT
     page_items = matched_items[offset:next_offset]
@@ -277,7 +286,7 @@ def ranked_item_page(
         "match_count": match_count,
         "total_count": match_count,
         "query": query,
-        "next_cursor": f"search:{next_offset}" if next_offset < match_count else None,
+        "next_cursor": search_cursor(next_offset, jev_excluded) if next_offset < match_count else None,
     }
 
 
@@ -384,6 +393,16 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     app.state.location_source = "supabase"
     app.state.item_counts_available = True
     return app
+
+
+SEARCH_CURSOR_PATTERN = re.compile(r"search:(?P<offset>[0-9]{1,6})(?::x=(?P<jev>(?:[0-9]{1,18}(?:,[0-9]{1,18}){0,29})?))?")
+
+
+def search_cursor(offset: int, jev_excluded: set[int] | None) -> str:
+    """다음 쪽 커서. Jev 판정을 했으면(뺀 것이 없어도) x=를 붙여 다음 쪽이 다시 판정하지 않게 한다."""
+    if jev_excluded is None:
+        return f"search:{offset}"
+    return f"search:{offset}:x=" + ",".join(map(str, sorted(jev_excluded)))
 
 
 FOUND_ITEM_CURSOR_PATTERN = re.compile(r"(\d{4}-\d{2}-\d{2}):([1-9]\d{0,17})")  # bigint 범위 안
