@@ -2116,6 +2116,11 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 /* PRD 4.3-A — 스크롤은 패널 오른쪽 끝에 얇게, 실제 이동 중에만 표시한다. */
 .agent-feed {
   --chat-scrollbar-thumb: transparent;
+  /* 말풍선의 둥근 하단과 주의 표시가 스크롤 경계에서 잘리지 않게 한다. */
+  padding-block: 4px;
+  padding-left: 4px;
+  margin-left: -4px;
+  scroll-padding-block: 4px;
   margin-right: calc(4px - var(--agent-panel-padding));
   padding-right: calc(var(--agent-panel-padding) - 2px);
   scrollbar-gutter: stable;
@@ -2145,6 +2150,32 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   background: var(--color-bg-hover);
 }
 .agent-bubble-user { align-self: flex-end; background: var(--color-action); color: var(--color-text-on-solid); }
+/* PRD 4.3-E — 알림 조건과 동의도 기존 대화 말풍선과 작은 선택지로 이어진다. */
+.agent-alert-setup { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; }
+.agent-alert-setup > .agent-bubble { width: 91%; }
+.agent-alert-conditions { width: 91%; }
+.agent-alert-conditions > p { margin: 0; }
+.agent-alert-setup p { margin: 0; }
+.agent-alert-fields { display: grid; gap: 4px; margin: 8px 0; }
+.agent-alert-fields > div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+.agent-alert-fields dt, .agent-alert-note { color: var(--color-text-secondary); }
+.agent-alert-fields dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.agent-alert-note { font-size: 12px; }
+.agent-alert-privacy { margin-top: 8px; color: var(--color-text-secondary); font-size: 12px; }
+.agent-alert-privacy summary { width: fit-content; max-width: 100%; cursor: pointer; }
+.agent-alert-privacy summary:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; border-radius: 3px; }
+.agent-alert-privacy .agent-alert-fields > div { grid-template-columns: 52px minmax(0, 1fr); }
+.agent-alert-agree { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; padding-block: 4px; cursor: pointer; }
+.agent-alert-agree input { flex: none; width: 16px; height: 16px; margin: 2px 0 0; accent-color: var(--color-action); }
+.agent-alert-consent > [role="status"] { margin-top: 8px; }
+.agent-alert-edit { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; }
+.agent-alert-place-options { width: 91%; }
+.agent-alert-place-options ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.agent-alert-place-options li { display: flex; align-items: center; gap: 8px; }
+.agent-alert-place-options li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.agent-alert-place-options button { flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 20px; cursor: pointer; }
+.agent-alert-place-options button:hover { background: var(--agent-surface-hover); color: var(--color-text-primary); }
+.agent-alert-edit [aria-pressed="true"] { background: var(--color-bg-selected); border-color: var(--agent-border-hover); }
 .agent-pagination { display: flex; flex-wrap: wrap; gap: 5px; }
 .agent-pagination button {
   min-height: 30px;
@@ -2242,6 +2273,22 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-photo-previews button { position: absolute; top: -4px; right: -4px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 1px solid var(--color-border-control); border-radius: 50%; background: var(--color-bg-surface); color: var(--color-text-primary); font-size: 17px; line-height: 1; }
 .agent-photo-note, .agent-photo-error { margin: 7px 0 0; font-size: 11px; line-height: 1.5; color: var(--color-text-secondary); }
 .agent-photo-error { color: var(--color-error); }
+/* PRD 4.2 · 4.3-A — 같은 안내는 유지하고 입력 행동에 짧은 주의 표시를 되돌려 준다. */
+.agent-compose button.is-photo-attention { animation: agent-photo-button-attention 520ms ease-out; }
+.agent-photo-guidance.is-photo-attention { animation: agent-photo-attention-still 650ms ease-out; }
+@keyframes agent-photo-button-attention {
+  0%, 100% { transform: translateY(0); box-shadow: 0 0 0 0 rgb(68 136 235 / 0); }
+  30% { transform: translateY(-4px); box-shadow: 0 0 0 4px rgb(68 136 235 / .2); }
+  55% { transform: translateY(1px); }
+  75% { transform: translateY(-2px); }
+}
+@keyframes agent-photo-attention-still {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(68 136 235 / 0); }
+  35% { box-shadow: 0 0 0 3px rgb(68 136 235 / .2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-compose button.is-photo-attention { animation-name: agent-photo-attention-still; }
+}
 .agent-message-text { margin: 0; white-space: pre-wrap; }
 .agent-bubble-with-photos { width: min(260px, 91%); }
 .agent-message-photos { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 6px; }
@@ -2426,16 +2473,17 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-detail-card, .agent-pickup-card { width: 91%; max-width: 91%; padding: 12px; }
 .agent-detail-card .agent-detail-heading { margin-bottom: 12px; padding-bottom: 8px; }
 .agent-detail-card .agent-detail-heading h2 { font-size: 12px; color: var(--color-text-secondary); font-weight: 400; }
-.agent-detail-card .item-detail-content { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px 12px; align-items: start; }
+.agent-detail-card .item-detail-content { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 10px 12px; align-items: start; }
 .agent-detail-card .item-detail-overview { grid-column: 1; grid-row: 1; }
 .agent-detail-card .item-detail-photo { height: 112px; min-height: 112px; max-height: 112px; margin: 0 0 4px; }
 .agent-detail-card .item-detail-photo { background: var(--agent-surface-rest); }
-.agent-detail-card .item-detail-source { margin: 0; font-size: 10px; line-height: 1.4; }
+.agent-detail-card .item-detail-source { margin: 0; font-size: 10px; line-height: 1.4; white-space: nowrap; }
 .agent-detail-card .item-detail-body { display: contents; }
 .agent-detail-card .item-detail-summary { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .agent-detail-card .item-detail-name { margin: 0; font-size: 15px; line-height: 1.4; }
 .agent-detail-card .item-detail-fields { gap: 4px; }
-.agent-detail-card .item-detail-fields > div { grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+.agent-detail-card .item-detail-fields > div { grid-template-columns: 52px minmax(0, 1fr); gap: 8px; }
+.agent-detail-card .item-detail-fields dt { white-space: nowrap; }
 .agent-detail-card .item-detail-fields :is(dt, dd) { font-size: 12px; line-height: 1.5; }
 .agent-detail-card .item-detail-fields a { min-height: 28px; }
 .agent-detail-card .item-detail-section { grid-column: 1 / -1; margin: 0; }

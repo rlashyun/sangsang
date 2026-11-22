@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-export type ChatPhoto = { id: string; url: string; name: string };
+export type ChatPhoto = { id: string; url: string; name: string; searchUrl: string };
 
 const MAX_PHOTOS = 3;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
@@ -25,6 +25,8 @@ export function useChatPhotos() {
   const [photoError, setPhotoError] = useState("");
   const [addingPhotos, setAddingPhotos] = useState(false);
   const pending = useRef<ChatPhoto[]>([]);
+  const objectUrls = useRef(new Set<string>());
+  const chatUrls = useRef(new Set<string>());
   const loading = useRef(false);
   const mounted = useRef(true);
 
@@ -32,6 +34,9 @@ export function useChatPhotos() {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      objectUrls.current.forEach(URL.revokeObjectURL);
+      objectUrls.current.clear();
+      chatUrls.current.clear();
     };
   }, []);
 
@@ -58,17 +63,18 @@ export function useChatPhotos() {
           continue;
         }
         const url = URL.createObjectURL(file);
+        objectUrls.current.add(url);
         try {
           const image = new Image();
           image.src = url;
           await image.decode();
           if (!mounted.current) return;
-          pending.current = [...pending.current, { id: crypto.randomUUID(), url: photoForSearch(image), name: file.name || "붙여넣은 사진" }];
+          pending.current = [...pending.current, { id: crypto.randomUUID(), url, searchUrl: photoForSearch(image), name: file.name || "붙여넣은 사진" }];
           setPhotos(pending.current);
         } catch {
-          issues.push("사진을 열지 못했어요. 다른 사진을 선택해 주세요.");
-        } finally {
           URL.revokeObjectURL(url);
+          objectUrls.current.delete(url);
+          issues.push("사진을 열지 못했어요. 다른 사진을 선택해 주세요.");
         }
       }
     } finally {
@@ -81,18 +87,34 @@ export function useChatPhotos() {
   }
 
   function removePhoto(id: string) {
+    const photo = pending.current.find(photo => photo.id === id);
+    if (photo && !chatUrls.current.has(photo.url)) {
+      URL.revokeObjectURL(photo.url);
+      objectUrls.current.delete(photo.url);
+    }
     pending.current = pending.current.filter(photo => photo.id !== id);
     setPhotos(pending.current);
     setPhotoError("");
   }
 
-  function takePhotos() {
-    const selected = pending.current;
-    pending.current = [];
-    setPhotos([]);
+  function takePhotos(ids: string[]) {
+    const selected = pending.current.filter(photo => ids.includes(photo.id));
+    pending.current = pending.current.filter(photo => !ids.includes(photo.id));
+    setPhotos(pending.current);
     setPhotoError("");
     return selected;
   }
 
-  return { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos };
+  // 전송 실패 후 초안을 삭제해도 이미 보낸 말풍선의 사진은 남긴다.
+  function retainPhotosInChat(selected: ChatPhoto[]) {
+    selected.forEach(photo => chatUrls.current.add(photo.url));
+  }
+
+  function restorePhotos(selected: ChatPhoto[]) {
+    const existing = new Set(pending.current.map(photo => photo.id));
+    pending.current = [...pending.current, ...selected.filter(photo => !existing.has(photo.id))];
+    setPhotos(pending.current);
+  }
+
+  return { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos, retainPhotosInChat, restorePhotos };
 }
