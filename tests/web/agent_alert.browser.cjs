@@ -65,7 +65,7 @@ async (page) => {
       mails++;
       check(payload.email === "user@example.com" && payload.consent && payload.places.length === 1, "reservation payload");
       if (mails % 2) return route.fulfill({status:503,json:{error:"일시 실패: 다시 입력해 주세요"}});
-      return route.fulfill({status:202,json:{status:"pending"}});
+      return route.fulfill({status:202,json:{status:"pending",reservation_id:7}});
     }
     if (url.pathname === "/api/search-chat/turns") {
       calls++;
@@ -217,6 +217,34 @@ async (page) => {
     await followup.getByRole("link", {name:"당근에서 찾아보기"}).waitFor();
     check(calls===before,"email invoked chat API");
     check(!(await page.locator(".agent-feed").innerText()).includes("user@example.com"),"email in history");
+    const confirmation = await page.context().newPage();
+    await confirmation.setViewportSize(viewport);
+    let confirms = 0;
+    let confirmResult = 'link_expired';
+    await confirmation.route('**/*', route => {
+      const url = new URL(route.request().url());
+      if (url.hostname !== '127.0.0.1') return route.abort();
+      if (url.pathname === '/api/alerts/confirm') {
+        confirms++;
+        check(route.request().method() === 'POST', 'Confirmation uses POST');
+        return route.fulfill({json:{result:confirmResult,message:confirmResult === 'link_expired' ? '확인 링크가 만료됐어요.' : '알림이 켜졌습니다.'}});
+      }
+      if (url.pathname === '/api/institutions') return route.fulfill({json:{institutions:[],counts_available:true}});
+      return route.continue();
+    });
+    await confirmation.goto('http://127.0.0.1:5178/alerts/confirm?search=chat&token=7.00000000000000000000000000000000');
+    await confirmation.getByText('확인 링크가 만료됐어요.',{exact:true}).waitFor();
+    check(confirms === 1 && await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).count() === 0,
+      'Expired links never announce success; StrictMode sends only one POST');
+    confirmResult = 'confirmed';
+    await confirmation.getByRole('button',{name:'다시 확인하기',exact:true}).click();
+    await confirmation.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).waitFor();
+    await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).waitFor();
+    check(confirms === 2 && !confirmation.url().includes('token='), 'One POST per attempt and token removed');
+    check(await confirmation.getByLabel('이전 알림 조건',{exact:true}).count() > 0, 'Mail tab restores signup conditions');
+    check(!(await confirmation.locator('.agent-feed').innerText()).includes('user@example.com'), 'Restored chat excludes email');
+    if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await confirmation.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-return-${viewport.width}.png`});
+    await confirmation.close();
     await input.fill('여러 장소 알림 신청'); await page.getByRole('button',{name:'보내기',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
     await page.getByRole('button',{name:'조건 수정',exact:true}).click();
