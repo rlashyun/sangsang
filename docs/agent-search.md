@@ -310,3 +310,9 @@ PRD 4.3-A·4.3-E. 기존 POST /api/search-chat/turns의 message 요청에 선택
 자유 입력 한 턴은 공통 대화 모델을 한 번 호출한다. 기존 검색의 0건 재작성은 기존 별도 예산이다. 조건 변경과 사용법 질문이 함께 있으면 변경값과 message를 함께 반영한다. 메일 발송은 기존 동의와 /api/alerts의 검증을 통과한 이메일 입력 경로에서만 수행한다.
 
 검색 실행과 함께 받은 사용법 답변은 응답의 선택적 explanation 필드로 전달하고 실제 검색 완료 안내 앞에 표시한다. 기존 결과 안내·카드 표시를 보존하면서 복합 요청의 설명을 누락하지 않는다.
+
+### 대화 범위·말투 고정 — 2026-11-23 사용자 승인
+
+PRD 4.3-A·4.3-E. TurnDecision.action에 decline을 추가한다. 모델이 범위 밖 요청(말투·페르소나 변경, 랩·노래·농담·역할극, 무관한 질문)을 decline으로 고르면 서버는 모델 문장을 버리고 OFF_TOPIC_MESSAGE 고정 문장을 answered로 반환한다. 검색 작업에서는 조건·결과·커서를 유지하고, 알림 작성 중에는 apply_alert_decision이 초안·awaiting을 그대로 둔 dialogue(task=alert, changed=false)를 반환한다. 습득물·기관·장소 API는 호출하지 않는다.
+
+안전망: 모델 message에 이모지가 있으면 answer·clarify·end는 decline으로 바꾸고, 그 밖의 실행 행동(search·update_alert 등)은 message만 비운다. 따라서 explanation이 빠지고 알림 변경은 고정 확인 문장만 남는다. recent에는 고정 문장만 저장한다. 반말·사투리 어미 검사는 하지 않는다.

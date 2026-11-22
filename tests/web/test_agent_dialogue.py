@@ -173,3 +173,78 @@ def test_email_in_message_never_reaches_model_or_closes_alert():
     assert "user@example.com" not in json.dumps(result)
     model.assert_not_called()
     search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
+
+
+# PRD 4.3-A · 4.3-E — 범위 밖 요청과 말투 변경은 서버 고정 문장으로만 답한다.
+def test_decline_in_search_uses_fixed_message_and_keeps_conditions():
+    from retriever_lost_found.web.agent_conversation import OFF_TOPIC_MESSAGE
+    _, send, original, model, search, institutions, places = client_with_search()
+    model.return_value = decision("decline", message="오케이, 앞으로 힙하게 갈게! 😎")
+    result = send({"type": "message", "request_id": "rap", "text": "랩가사 써줘",
+                   "session_id": original["session_id"], "revision": original["revision"]})
+    assert result["status"] == "answered"
+    assert result["message"] == OFF_TOPIC_MESSAGE
+    assert result["conditions"] == original["conditions"]
+    search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
+
+
+def test_usage_answer_without_emoji_is_shown_as_written():
+    _, send, original, model, _, _, _ = client_with_search()
+    model.return_value = decision("answer", message="반경은 1km, 1.5km, 2km 중에서 바꿀 수 있어요.")
+    result = send({"type": "message", "request_id": "usage", "text": "반경은 어떻게 바꿔?",
+                   "session_id": original["session_id"], "revision": original["revision"]})
+    assert result["message"] == "반경은 1km, 1.5km, 2km 중에서 바꿀 수 있어요."
+
+
+def test_decline_during_alert_keeps_draft_and_alert_task():
+    from retriever_lost_found.web.agent_conversation import OFF_TOPIC_MESSAGE
+    _, send, original, model, search, institutions, places = client_with_search()
+    model.return_value = decision("decline", task="alert", message="갱갱갱~ 😎")
+    result = send({"type": "message", "request_id": "slang", "text": "힙하게 말해줘",
+                   "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
+    assert result["message"] == OFF_TOPIC_MESSAGE
+    assert result["dialogue"]["task"] == "alert"
+    assert result["dialogue"]["alert"] == context()["alert"]
+    assert result["dialogue"]["awaiting"] == "email"
+    assert not result["dialogue"]["changed"]
+    search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["answer", "clarify", "end"])
+def test_emoji_reply_is_replaced_and_not_kept_in_history(action):
+    from retriever_lost_found.web.agent_conversation import OFF_TOPIC_MESSAGE
+    place = PlaceCandidate("p", "서울역", "서울", 37.55, 126.97)
+    state = Conversation("서울역", "검은 지갑", confirmed=place)
+    model = Mock(return_value=decision(action, message="오케이 힙하게 안내할게 😎", asks_for="item"))
+    turn = respond_to_message(state, "힙하게 말해줘", model=model, find_places=Mock())
+    assert turn.status == "answered"
+    assert turn.message == OFF_TOPIC_MESSAGE
+    assert turn.state.item_query == "검은 지갑"
+    assert all("😎" not in reply for _, reply in turn.state.recent)
+
+
+def test_emoji_explanation_is_dropped_but_search_still_runs():
+    _, send, original, model, search, _, _ = client_with_search()
+    model.return_value = decision("search", item_query="우산", message="우산 찾으러 간다 🎤")
+    result = send({"type": "message", "request_id": "combo", "text": "우산 찾아줘 랩으로",
+                   "session_id": original["session_id"], "revision": original["revision"]})
+    assert result["status"] == "results"
+    assert "explanation" not in result
+    search.assert_called_once_with((42,), "우산", None)
+
+
+def test_emoji_in_alert_update_keeps_change_with_fixed_confirmation():
+    _, send, original, model, _, _, _ = client_with_search()
+    model.return_value = decision("update_alert", task="alert", message="바꿔뒀어예 😎",
+                                  alert_changes={"query": "우산", "radius": None, "remove_places": []})
+    result = send({"type": "message", "request_id": "upd", "text": "우산으로 바꿔",
+                   "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
+    assert result["dialogue"]["alert"]["query"] == "우산"
+    assert "😎" not in result["message"] and "예." not in result["message"]
+    assert result["message"].startswith("알림 조건을 반영했어요.")
+
+
+def test_instructions_fix_scope_and_tone():
+    from retriever_lost_found.web.agent_conversation import INSTRUCTIONS
+    assert "decline" in INSTRUCTIONS
+    assert "해요체" in INSTRUCTIONS and "이모지" in INSTRUCTIONS
