@@ -417,6 +417,37 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn(f"drop function if exists {signature};", rollback)
         self.assertIn("(p_location_ids bigint[],p_terms text[]) returns json", rollback)
 
+    def test_keyword_candidates_use_a_bigram_index_and_keep_the_strpos_check(self) -> None:
+        # PRD 4.5, 5 — 반경 안 문서를 전부 읽던 포함 검사가 1.8초 제한(57014)에 걸렸다. 조각 인덱스로 먼저 좁히되
+        # strpos 검사·1글자 독립 단어 검사·범위 필터·시간 제한은 그대로 둔다(결과 행이 바뀌지 않는다).
+        migration = self._squashed("20261123090000_keyword_candidates_bigram_index.sql")
+        self.assertIn("create function public.search_bigrams(p_text text) returns text[] language sql immutable strict", migration)
+        self.assertIn("regexp_replace(p_text, '[[:space:]]+', '', 'g')", migration)
+        self.assertIn("revoke all on function public.search_bigrams(text) from public, anon, authenticated", migration)
+        self.assertIn("on public.found_item_search_documents using gin (public.search_bigrams(search_text))", migration)
+        body = migration.split("create or replace function public.keyword_found_item_candidates", 1)[1]
+        self.assertIn("(p_location_ids bigint[],p_terms text[],p_word_terms text[] default '{}') returns json", body)
+        self.assertIn("set statement_timeout='1800ms'", body)
+        self.assertIn("security invoker", body)
+        # 조각 조건은 1글자 단어가 없고 모든 후보어에 조각이 있을 때만 붙는다.
+        self.assertIn("cardinality(coalesce(p_word_terms,'{}'::text[]))=0", body)
+        self.assertIn("cardinality(public.search_bigrams(lower(t.term)))=0", body)
+        self.assertIn("'public.search_bigrams(d.search_text) @> '||quote_literal(public.search_bigrams(lower(t.term)))", body)
+        self.assertIn("d.storage_location_id=any($1) and cardinality($1) between 1 and 300", body)
+        self.assertIn("strpos(d.search_text,lower(t.term))>0", body)
+        self.assertIn("'(^|[^[:alnum:]])'||regexp_replace(lower(w.word),'([^[:alnum:]])','\\\\\\1','g')", body)
+        self.assertNotIn("kind_mask", body)
+        signature = "public.keyword_found_item_candidates(bigint[],text[],text[])"
+        self.assertIn(f"revoke all on function {signature} from public,anon,authenticated", migration)
+        self.assertIn(f"grant execute on function {signature} to service_role", migration)
+        rollback = self._squashed("../rollbacks/20261123090000_keyword_candidates_bigram_index.sql")
+        self.assertIn("drop index if exists public.found_item_search_documents_bigrams;", rollback)
+        self.assertIn("drop function if exists public.search_bigrams(text);", rollback)
+        self.assertNotIn("search_bigrams(d.search_text)", rollback)
+        # 함수를 먼저 되돌려야 지운 조각 함수를 부르지 않는다.
+        self.assertLess(rollback.index("create or replace function public.keyword_found_item_candidates"),
+                        rollback.index("drop function if exists public.search_bigrams(text);"))
+
     @staticmethod
     def _squashed(name: str) -> str:
         """SQL 주석(`--` 이후)을 빼고 공백을 정규화한다. 주석 속 설명이 검사에 걸리지 않게 한다."""
