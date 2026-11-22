@@ -228,3 +228,22 @@ def test_item_updates_keep_other_clues_and_only_limit_the_search_query():
     assert state.item_details.features == full_features
     assert len(result.pending.query) <= 30
     assert "검은" not in result.pending.query
+
+
+@pytest.mark.parametrize("email", ["user@example.com", "01012345678@example.com"])
+def test_email_never_reaches_model_or_conversation_history(email):
+    model = Mock()
+    state = Conversation()
+    result = respond_to_message(state, email, model=model, find_places=Mock())
+    model.assert_not_called()
+    assert result.state == state
+    assert result.status == "answered"
+
+
+def test_alert_request_is_a_tool_action_without_search():
+    model = Mock(return_value=decision("prepare_alert"))
+    places = Mock()
+    result = respond_to_message(Conversation(), "새 물건 알림 받고 싶어요", model=model, find_places=places)
+    assert result.status == "action_requested"
+    assert result.decision.action == "prepare_alert"
+    places.assert_not_called()

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { AgentRequestError, AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
+import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
 import { DEFAULT_SEARCH_RADIUS_METERS, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
@@ -10,9 +10,9 @@ import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Plac
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
-import { FoundItemDetail } from "./FoundItemDetail";
+import { AgentItemDetail } from "./AgentItemDetail";
 import { KakaoMap } from "./KakaoMap";
-import { NewItemAlert } from "./NewItemAlert";
+import { CONSENT_DETAILS, NewItemAlert } from "./NewItemAlert";
 import { UsageGuide } from "./UsageGuide";
 
 // PRD 4.3-A — 2026-11-21 사용자 피드백: 대화와 확정 버튼의 공간을 확보해 5곳씩 보여준다.
@@ -23,7 +23,8 @@ const TOOL_LABELS: Record<string, string> = {
   found_items: "습득물을 찾고 있어요.",
 };
 
-type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[] } | { confirmedPlace: AgentPlace };
+type ItemConversation = { id: string; item: AgentItem; institution?: Institution; answer: "yes" | "no"; acknowledged: boolean };
+type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[] } | { confirmedPlace: AgentPlace } | { itemConversation: ItemConversation };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
 
@@ -37,6 +38,10 @@ export function AgentSearchApp() {
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [alertDraft, setAlertDraft] = useState<{ query: string; places: Place[]; radius: number } | null>(null);
+  const [alertConsent, setAlertConsent] = useState(false);
+  const [alertSending, setAlertSending] = useState(false);
+  const alertPending = useRef(false);
   const { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos } = useChatPhotos();
   const photoInput = useRef<HTMLInputElement>(null);
   const [response, setResponse] = useState<AgentResponse | null>(null);
@@ -49,7 +54,7 @@ export function AgentSearchApp() {
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [progress, setProgress] = useState("");
   const [revealingReplies, setRevealingReplies] = useState(false);
-  const [followupVisible, setFollowupVisible] = useState(false);
+  const [followup, setFollowup] = useState<"hidden" | "prompt" | "actions">("hidden");
   const replyTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [pendingScope, setPendingScope] = useState<Scope | null>(null);
   const [confirmingPlace, setConfirmingPlace] = useState<AgentPlace | null>(null);
@@ -70,7 +75,7 @@ export function AgentSearchApp() {
   const [openItem, setOpenItem] = useState<AgentItem | null>(null);
   const [focusedInstitution, setFocusedInstitution] = useState<Institution | null>(null);
   const [mapInset, setMapInset] = useState(0);
-  // 장소 변경 중: 확정한 장소를 화면에서 비우고 처음처럼 입력·지도 더블클릭으로 고르게 한다.
+  // 장소 변경 중: 확정한 장소를 화면에서 비우고 입력 또는 지도 팝업의 버튼으로 고른다.
   const [placeChanging, setPlaceChanging] = useState(false);
   const searchPath = `${location.pathname}${location.search}`;
   const guideIsOpen = location.hash === GUIDE_HASH;
@@ -82,6 +87,10 @@ export function AgentSearchApp() {
   const recoveryRequired = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   const feed = useRef<HTMLDivElement>(null);
+  const detailChatScroll = useRef(0);
+  const detailTrigger = useRef<HTMLElement | null>(null);
+  const wasDetailOpen = useRef(false);
+  const detailRejected = useRef(false);
   const [feedScrolling, setFeedScrolling] = useState(false);
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -99,7 +108,7 @@ export function AgentSearchApp() {
   function hideFollowup() {
     replyTimers.current.forEach(clearTimeout);
     replyTimers.current = [];
-    setFollowupVisible(false);
+    setFollowup("hidden");
   }
 
   function revealReplies(replies: ChatMessage[], showFollowup = false) {
@@ -114,7 +123,7 @@ export function AgentSearchApp() {
       setRevealingReplies(false);
     }, Math.max(1, replies.length) * 300));
     if (showFollowup) {
-      replyTimers.current.push(setTimeout(() => setFollowupVisible(true), Math.max(1, replies.length) * 300 + 700));
+      replyTimers.current.push(setTimeout(() => setFollowup("prompt"), Math.max(1, replies.length) * 300 + 700));
     }
   }
 
@@ -221,6 +230,21 @@ export function AgentSearchApp() {
   const pageCount = Math.ceil((cursor ? matchCount : items.length) / itemPageSize);
   const busy = Boolean(progress) || paging || revealingReplies;
   const detail = openItem?.item_id === location.state?.agentItemId ? openItem : null;
+  useLayoutEffect(() => {
+    if (detail) {
+      const card = feed.current?.querySelector(".agent-chat-detail:not(.is-recorded)");
+      // 여유가 있으면 앞 대화도 보여 주고, 좁으면 상세와 확인 선택지를 우선 함께 보여 준다.
+      const previous = card?.previousElementSibling;
+      const combinedHeight = card && previous ? card.getBoundingClientRect().bottom - previous.getBoundingClientRect().top : Infinity;
+      (combinedHeight <= (feed.current?.clientHeight ?? 0) ? previous : card)?.scrollIntoView({ block: "start" });
+    } else if (wasDetailOpen.current) {
+      if (feed.current) feed.current.scrollTop = detailRejected.current ? feed.current.scrollHeight : detailChatScroll.current;
+      if (detailRejected.current) feed.current?.focus({ preventScroll: true });
+      else if (detailTrigger.current?.isConnected) detailTrigger.current.focus({ preventScroll: true });
+      detailRejected.current = false;
+    }
+    wasDetailOpen.current = Boolean(detail);
+  }, [detail]);
   const alertOpen = Boolean(location.state?.agentAlert);
   const nextRadius = nextSearchRadiusMeters(mappedRadius);
 
@@ -243,7 +267,7 @@ export function AgentSearchApp() {
 
   useEffect(() => {
     if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [messages, selectedCandidate, followupVisible, photos.length, photoError]);
+  }, [messages, selectedCandidate, followup, photos.length, photoError, alertDraft]);
 
   function changePlaceCandidates(page: number) {
     setPlacePage(page);
@@ -273,6 +297,10 @@ export function AgentSearchApp() {
       return;
     }
     const request = new AbortController();
+    setOpenItem(null);
+    if (detail) {
+      void navigate(searchPath, { replace: true, state: null });
+    }
     controller.current = request;
     hideFollowup();
     if (!retry || !retryRequest.current) {
@@ -320,6 +348,11 @@ export function AgentSearchApp() {
       }, request.signal, identity.id);
       sessionIdentity.current = result;
       recoveryRequired.current = false;
+      if (result.prepare_alert && result.conditions.item_query && result.conditions.radius_m) {
+        const places = result.conditions.places ?? (result.conditions.place ? [result.conditions.place] : []);
+        setAlertDraft({ query: result.conditions.item_query, places: places.map(mapPlace), radius: result.conditions.radius_m });
+        setAlertConsent(false); setTab("chat");
+      }
       if (result.status === "error") {
         recoveryRequired.current = ["state_unavailable", "state_conflict"].includes(result.error?.code ?? "");
         setError(result.error?.message || result.message || "검색 중 문제가 생겼어요.");
@@ -449,9 +482,37 @@ export function AgentSearchApp() {
 
   function send(event: FormEvent) {
     event.preventDefault();
-    if (busy || addingPhotos) return;
+    if (busy || addingPhotos || alertPending.current) return;
     const text = draft.trim();
     if (!text && !photos.length) return;
+    // PRD 3.3 · 4.3-E — 이메일은 모델·대화 기록을 거치지 않고 기존 예약 API로만 보낸다.
+    if (alertDraft && !text.includes("@")) {
+      // PRD 4.3-E — 이메일 대기 중에도 취소·질문·검색 조건 변경을 허용한다.
+      setAlertDraft(null); setAlertConsent(false); setError("");
+      if (/취소|그만|안\s*할|안\s*받|하지\s*마/.test(text)) {
+        setDraft("");
+        setMessages(current => [...current, { author: "user", text }, { author: "agent", text: "진행 중인 알림 신청을 취소했어요. 기존에 신청한 알림은 변경되지 않아요." }]);
+        return;
+      }
+    }
+    if (alertDraft && text.includes("@")) {
+      if (!alertConsent) { setError("먼저 개인정보 수집·이용에 동의해 주세요."); return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) || text.length > 254) { setError("올바른 이메일 주소만 입력해 주세요."); return; }
+      if (alertPending.current) return;
+      alertPending.current = true; setAlertSending(true); setDraft(""); setError("");
+      void createAlertReservation({ email: text, query: alertDraft.query, places: alertDraft.places.map(({name, latitude, longitude}) => ({name, latitude, longitude})), radius_m: alertDraft.radius, consent: true })
+        .then(() => {
+          setAlertDraft(null);
+          setAlertConsent(false);
+          // PRD 4.3-E — 확인 링크 안내 뒤에는 검색 결과 행동만 표시한다.
+          setFollowup("actions");
+          setMessages(current => [...current, { author: "agent", text: "확인 메일을 보냈어요. 24시간 안에 메일의 확인 링크를 눌러야 알림이 시작돼요." }]);
+        })
+        .catch(error => setError(error instanceof Error && !(error instanceof TypeError) ? error.message : "연결하지 못했어요. 확인 메일이 도착했는지 확인하고, 없다면 이메일을 다시 입력해 주세요."))
+        .finally(() => { alertPending.current = false; setAlertSending(false); });
+      return;
+    }
+    if (text.includes("@")) { setDraft(""); setError("이메일은 알림 신청 안내 뒤 입력해 주세요."); return; }
     if (text) {
       const visibleItemIds = selectedInstitution.length
         ? institutionItemIds
@@ -522,15 +583,41 @@ export function AgentSearchApp() {
   }
 
   function openDetail(item: AgentItem) {
+    if (!detail) {
+      detailChatScroll.current = feed.current?.scrollTop ?? 0;
+      detailTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
     // PRD 4.3-C · 4.4 — 물품에 연결된 기관 ID의 검증된 좌표로만 이동한다.
     const institution = institutionIndex.get(item.institution_id);
     setFocusedInstitution(institution ? { ...institution } : null);
     setOpenItem(item);
-    void navigate(location.pathname + location.search, { state: { agentItemId: item.item_id } });
+    void navigate(location.pathname + location.search, { replace: Boolean(detail), state: { agentItemId: item.item_id } });
   }
 
   function openAlerts() {
-    void navigate(location.pathname + location.search, { state: { agentAlert: true } });
+    if (!conditions?.item_query || !searchCenters.length || placeChanging || conditions.place_operation) {
+      setError("먼저 장소를 확정하고 물품을 검색해 주세요."); return;
+    }
+    setAlertDraft({ query: conditions.item_query, places: [...searchCenters], radius: mappedRadius });
+    setAlertConsent(false); setTab("chat");
+  }
+
+  function answerItem(answer: "yes" | "no") {
+    if (!detail) return;
+    const institution = institutionIndex.get(detail.institution_id);
+    setMessages(current => [...current, { itemConversation: {
+      id: crypto.randomUUID(), item: { ...detail }, institution: institution ? { ...institution } : undefined,
+      answer, acknowledged: false,
+    } }]);
+    detailRejected.current = true;
+    if (window.matchMedia("(max-width: 820px)").matches) setTab("chat");
+    setFollowup(answer === "no" ? "prompt" : "hidden");
+    void navigate(-1);
+  }
+
+  function acknowledgeItem(id: string) {
+    setMessages(current => current.map(message => "itemConversation" in message && message.itemConversation.id === id
+      ? { itemConversation: { ...message.itemConversation, acknowledged: true } } : message));
   }
 
   const drawerOpen = tab === "results" && Boolean(response?.matches) && !placeChanging;
@@ -571,7 +658,7 @@ export function AgentSearchApp() {
     <main className={`app-shell agent-shell${drawerOpen ? " agent-shell-drawer" : ""}`}>
       <section className={`agent-panel${drawerOpen ? " agent-panel-joined" : ""}`} aria-label="대화형 습득물 검색">
         {(conditions?.item_query || conditions?.place_operation || selectedPlaces.length > 0 || currentPlace || pagePlaces.length > 0 || placeChanging) && <dl className="agent-summary">
-          <div><dt>장소</dt><dd>
+          <div><dt>장소</dt><dd className={selectedPlaces.length ? undefined : "agent-summary-pending"}>
             {selectedPlaces.length ? <ul className="agent-selected-places" aria-label="선택한 장소">
               {selectedPlaces.map((place, index) => <li key={`${place.latitude}:${place.longitude}`}>
                 <span title={place.address}>{place.name}</span>
@@ -584,22 +671,24 @@ export function AgentSearchApp() {
                 {Boolean(conditions.pending_place_queries?.length) && ` · 다음 ${conditions.pending_place_queries?.join(", ")}`}</p>
             </>}
           </dd></div>
-          <div><dt>물건</dt><dd>{conditions?.item_query || "입력 대기 중"}</dd>
+          <div><dt>물건</dt><dd className={conditions?.item_query ? undefined : "agent-summary-pending"}>{conditions?.item_query || "입력 대기 중"}</dd>
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
-        <div ref={feed} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
-          {messages.length === 0 && <>
+        <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
             <h2 className="agent-welcome-title">이용 방법</h2>
             <ol className="agent-welcome-steps" aria-label="이용 순서">
-              <li><span aria-hidden="true">1</span>잃어버린 장소를 적거나, 지도에서 보관기관 핀을 더블클릭하세요</li>
+              <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 보관기관 핀을 눌러 선택하세요</li>
               <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
             <hr className="agent-welcome-divider" />
-            <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>
-          </>}
-          {messages.map((message, index) => "confirmedPlace" in message
+            {messages.length === 0 && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
+          {messages.map((message, index) => "itemConversation" in message
+            ? <AgentItemDetail key={message.itemConversation.id} item={message.itemConversation.item}
+              institution={message.itemConversation.institution} answer={message.itemConversation.answer}
+              acknowledged={message.itemConversation.acknowledged} onAcknowledge={() => acknowledgeItem(message.itemConversation.id)} />
+            : "confirmedPlace" in message
             ? <div className="agent-confirmed-card" key={index}>
               <small>확정된 장소</small>
               <strong>{message.confirmedPlace.name}</strong>
@@ -631,10 +720,10 @@ export function AgentSearchApp() {
             {(placePage + 1) * PLACE_PAGE_SIZE < numberedPlaces.length && <button type="button" className="agent-action-chip agent-place-next" disabled={busy}
               onClick={() => changePlaceCandidates(placePage + 1)}>다른 장소 살펴보기</button>}
           </nav>}
-          {followupVisible && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
-            <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
+          {followup !== "hidden" && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
+            {followup === "prompt" && <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
               ? "찾으시는 물건이 없나요? 반경을 넓혀보거나, 비슷한 물건 알림을 받아보세요."
-              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>
+              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>}
             <div className="agent-place-replies agent-result-actions">
               {nextRadius !== null && <button type="button" className="agent-action-chip" disabled={busy}
                   onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>
@@ -646,9 +735,21 @@ export function AgentSearchApp() {
             </a>}
             </div>
           </div>}
+        {alertDraft && <section className="agent-bubble agent-bubble-agent agent-alert-setup" aria-label="알림 신청 조건">
+          <p>물건: {alertDraft.query} · 장소: {alertDraft.places.map(place => place.name).join(", ")} · 반경: {radiusKilometersLabel(alertDraft.radius)}</p>
+          <p>등록 다음날부터 7일간 새 유사 물품이 있는 날에만 알려드리고, 마지막 날에는 종료·연장을 안내해요.</p>
+          <details><summary>{CONSENT_DETAILS.title}</summary>
+            <p>수집 항목: {CONSENT_DETAILS.items}</p><p>이용 목적: {CONSENT_DETAILS.purpose}</p>
+            <p>보관 기간: {CONSENT_DETAILS.retention}</p><p>{CONSENT_DETAILS.refusal}</p>
+          </details>
+          <label><input type="checkbox" checked={alertConsent} onChange={event => setAlertConsent(event.target.checked)} disabled={alertSending} /> 개인정보 수집·이용에 동의해요</label>
+          <p>동의 후 아래에 이메일 주소를 입력해 보내 주세요. 확인 메일을 보내드릴게요.</p>
+        </section>}
+          {detail && <AgentItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)}
+            onBack={() => void navigate(-1)} onAccept={() => answerItem("yes")} onReject={() => answerItem("no")} />}
         </div>
         {!drawerOpen && requestStatus}
-        <form className="agent-compose" onSubmit={send} onPaste={pastePhotos}>
+        <form className="agent-compose" onSubmit={send} onPaste={alertDraft ? undefined : pastePhotos}>
           {canAttachPhotos && (photos.length > 0 || addingPhotos || photoError) && <div className="agent-photo-draft">
             {photos.length > 0 && <ul className="agent-photo-previews" aria-label="보낼 사진">
               {photos.map((photo, index) => <li key={photo.id}>
@@ -664,13 +765,13 @@ export function AgentSearchApp() {
           <label className="sr-only" htmlFor="agent-input">메시지</label>
           <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden aria-label="사진 파일 선택"
             onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; if (files.length) addDraftPhotos(files); }} />
-          <button type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos}
+          <button type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos || Boolean(alertDraft)}
             onClick={choosePhotos}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1-1.5h5.8l1 1.5h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.2" /></svg>
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
-            maxLength={1000} placeholder={composePlaceholder} />
-          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
+            maxLength={alertDraft ? 254 : 1000} disabled={alertSending} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : composePlaceholder} />
+          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
           </div>
@@ -690,9 +791,9 @@ export function AgentSearchApp() {
         <div className="agent-drawer-body">
           {groupIds && submittedQuery
             ? <AgentInstitutionResults key={`${submittedQuery}:${groupIds}`} ids={groupIds}
-              pageSize={itemPageSize} query={submittedQuery} institutions={institutionIndex} onOpen={openDetail} onVisibleItems={setInstitutionItemIds} onTotalChange={setInstitutionMatchCount} />
+              selectedItemId={openItem?.item_id} pageSize={itemPageSize} query={submittedQuery} institutions={institutionIndex} onOpen={openDetail} onVisibleItems={setInstitutionItemIds} onTotalChange={setInstitutionMatchCount} />
             : matchCount === 0 ? <p className="agent-bubble">일치하는 습득물을 찾지 못했어요.</p> : <>
-              <AgentResultList pageSize={itemPageSize} items={items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize)} institutions={institutionIndex} onOpen={openDetail} />
+              <AgentResultList selectedItemId={openItem?.item_id} pageSize={itemPageSize} items={items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize)} institutions={institutionIndex} onOpen={openDetail} />
               <nav className="agent-pagination" aria-label="습득물 결과 페이지">
                 {pageCount <= 1 ? <button type="button" aria-label="1페이지" aria-current="page" disabled={busy}>1</button> : itemPageNumbers(itemPage, pageCount).map((page: number) =>
                   <button type="button" key={page} aria-label={`${page + 1}페이지`} aria-current={page === itemPage ? "page" : undefined}
@@ -716,7 +817,6 @@ export function AgentSearchApp() {
         showInstitutionCounts={scopeReady} onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect}
         onResetRadius={selectedInstitution.length ? showFullScope : undefined} />
     </main>
-    {detail && <FoundItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)} onClose={() => void navigate(-1)} />}
     {guideIsOpen && <UsageGuide variant="chat" searchPath={searchPath} surveyUrl={SURVEY_URL} onDismiss={() => {
       if (location.state?.openedGuide) void navigate(-1);
       else void navigate(searchPath, { replace: true });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
 
 import { formatRegisteredDate, foundItemImageUrl, sourceLabel } from "../lib/presentation";
@@ -13,7 +13,7 @@ interface FoundItemDetailProps {
   onClose: () => void;
 }
 
-function DetailPhoto({ imageUrl, name, category }: { imageUrl: string | null; name: string; category?: string }) {
+function DetailPhoto({ imageUrl, name, category, onPhotoOpen }: { imageUrl: string | null; name: string; category?: string; onPhotoOpen?: () => void }) {
   const [attempt, setAttempt] = useState(0);
   const currentAttempt = useRef(0);
   const photoRef = useRef<HTMLDivElement>(null);
@@ -36,6 +36,7 @@ function DetailPhoto({ imageUrl, name, category }: { imageUrl: string | null; na
         <p role="status">사진을 불러오고 있습니다…</p>
       </div>}
       <div className="item-detail-image" aria-busy={!loaded}>
+        {onPhotoOpen && loaded && <button type="button" className="item-detail-photo-open" aria-label={`${name} 사진 크게 보기`} onClick={onPhotoOpen} />}
         <img key={attempt} src={imageUrl} alt={`${name} 사진`} width={320} height={340}
         onLoad={() => { if (attempt === currentAttempt.current) setLoaded(true); }}
         onError={() => { if (attempt === currentAttempt.current) setFailed(true); }} hidden={!loaded} />
@@ -56,9 +57,7 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
   const contentRef = useRef<HTMLDivElement>(null);
   const detailScrollRef = useRef(0);
   const returningToDetail = useRef(false);
-  const imageUrl = foundItemImageUrl(item.image_url);
   const phone = institution?.phone?.trim();
-  const dialNumber = phone?.replace(/[^\d+]/g, "");
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -131,33 +130,7 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
         onBack={() => { returningToDetail.current = true; setShowPickup(false); }}
         onClose={onClose}
       /> : <>
-      <div ref={contentRef} className="item-detail-content" role="region" aria-label="물품 상세 내용" tabIndex={0}>
-        {/* PRD 4.3-C · 4.4 — 넓은 화면에서는 요약과 본문을 병렬 배치한다. */}
-        <div className="item-detail-overview">
-          <DetailPhoto key={imageUrl} imageUrl={imageUrl} name={item.item_name || "습득물"} category={item.raw_category_name} />
-          {item.item_source_code && <p className="item-detail-source">등록 정보 출처 · {sourceLabel(item.item_source_code)}</p>}
-        </div>
-        <div className="item-detail-body">
-          <h3 className="item-detail-name">{item.item_name || "이름 미상"}</h3>
-          <dl className="item-detail-fields item-detail-basics">
-            <div><dt>분류</dt><dd>{item.raw_category_name || "정보 없음"}</dd></div>
-            <div><dt>색상</dt><dd>{item.color_name || "정보 없음"}</dd></div>
-            <div><dt>등록일</dt><dd>{formatRegisteredDate(item.registered_on) || "정보 없음"}</dd></div>
-          </dl>
-          {/* PRD 3.3 — 설명 원문과 줄바꿈을 유지하고 HTML로 해석하지 않는다. */}
-          <h3>물품 설명</h3>
-          <p className="item-detail-description">{item.description || "정보 없음"}</p>
-          {/* PRD 4.3-C · M3 — 이름 유사성이 아닌 검증된 기관 ID로 연락처를 연결한다. */}
-          <h3>보관기관</h3>
-          <dl className="item-detail-fields">
-            <div><dt>기관명</dt><dd>{institution?.name || item.raw_storage_name || "정보 없음"}</dd></div>
-            <div><dt>주소</dt><dd>{institution?.address || "정보 없음"}</dd></div>
-            <div className="item-detail-contact-row"><dt>전화번호</dt><dd>{phone && dialNumber
-              ? <a href={`tel:${dialNumber}`}>{phone}</a>
-              : "정보 없음"}</dd></div>
-          </dl>
-        </div>
-      </div>
+      <FoundItemInformation item={item} institution={institution} contentRef={contentRef} />
       <footer className="item-match-confirmation">
         <p>찾으시는 물건이 맞나요?</p>
         <div className="item-match-actions">
@@ -171,5 +144,42 @@ export function FoundItemDetail({ item, institution, onClose }: FoundItemDetailP
       </>}
     </dialog>,
     document.body,
+  );
+}
+
+// PRD 4.3-C — 대화형 상세와 기존 상세창은 같은 원문·기관 정보를 표시한다.
+export function FoundItemInformation({ item, institution, contentRef, onPhotoOpen }: {item: FoundItem; institution?: Institution; contentRef?: Ref<HTMLDivElement>; onPhotoOpen?: () => void}) {
+  const imageUrl = foundItemImageUrl(item.image_url);
+  const phone = institution?.phone?.trim();
+  const dialNumber = phone?.replace(/[^\d+]/g, "");
+  return (
+      <div ref={contentRef} className="item-detail-content" role="region" aria-label="물품 상세 내용" tabIndex={0}>
+        {/* PRD 4.3-C · 4.4 — 넓은 화면에서는 요약과 본문을 병렬 배치한다. */}
+        <div className="item-detail-overview">
+          <DetailPhoto key={imageUrl} imageUrl={imageUrl} name={item.item_name || "습득물"} category={item.raw_category_name} onPhotoOpen={onPhotoOpen} />
+          {item.item_source_code && <p className="item-detail-source">등록 정보 출처 · {sourceLabel(item.item_source_code)}</p>}
+        </div>
+        <div className="item-detail-body">
+          <div className="item-detail-summary">
+          <h3 className="item-detail-name">{item.item_name || "이름 미상"}</h3>
+          <dl className="item-detail-fields item-detail-basics">
+            <div><dt>분류</dt><dd>{item.raw_category_name || "정보 없음"}</dd></div>
+            <div><dt>색상</dt><dd>{item.color_name || "정보 없음"}</dd></div>
+            <div><dt>등록일</dt><dd>{formatRegisteredDate(item.registered_on) || "정보 없음"}</dd></div>
+          </dl>
+          </div>
+          {/* PRD 4.3-C · M3 — 이름 유사성이 아닌 검증된 기관 ID로 연락처를 연결한다. */}
+          <section className="item-detail-section" aria-labelledby="item-institution-title">
+          <h3 id="item-institution-title">보관기관</h3>
+          <dl className="item-detail-fields">
+            <div><dt>기관명</dt><dd>{institution?.name || item.raw_storage_name || "정보 없음"}</dd></div>
+            <div><dt>주소</dt><dd>{institution?.address || "정보 없음"}</dd></div>
+            <div className="item-detail-contact-row"><dt>전화번호</dt><dd>{phone && dialNumber
+              ? <a href={`tel:${dialNumber}`}>{phone}</a>
+              : "정보 없음"}</dd></div>
+          </dl>
+          </section>
+        </div>
+      </div>
   );
 }

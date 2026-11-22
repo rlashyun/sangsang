@@ -24,6 +24,7 @@ import {
 } from "../lib/theme";
 import type { Institution, Place } from "../types";
 import { MapControls } from "./MapControls";
+import { createMapPopup } from "../lib/map-popup";
 
 declare global {
   interface Window {
@@ -58,7 +59,7 @@ interface KakaoMapProps {
   focusedInstitution?: Institution | null;
   /** 장소 확정 후 반경 맞춤을 부드럽게 이동한다. 끄면 기존처럼 바로 맞춘다. */
   animateRadiusFit?: boolean;
-  /** 보관기관 핀을 더블클릭해 고른 위치. 없으면 더블클릭 선택과 안내를 쓰지 않는다. */
+  /** 보관기관 팝업의 장소선택 버튼으로 확정한 위치. */
   onPointSelect?: (point: { latitude: number; longitude: number; name: string; address: string }) => void;
   onPlaceSelect: (place: Place) => void;
   onInstitutionSelect: (institutions: Institution[]) => void;
@@ -134,9 +135,10 @@ function institutionDetails(
   institutions: Institution[],
   activePlace: Place | null,
   countsAvailable: boolean,
+  selectable: boolean,
 ) {
-  const visible = institutions.slice(0, 8);
-  const items = visible.map((institution) => {
+  const visible = institutions;
+  const items = visible.map((institution, index) => {
     const distance = activePlace
       ? `${Math.round(distanceMeters(activePlace, institution)).toLocaleString("ko-KR")}m`
       : "";
@@ -147,19 +149,19 @@ function institutionDetails(
     const meta = [distance, source, itemCount, institution.organization, institution.phone]
       .filter((value, index, values) => value && values.indexOf(value) === index)
       .join(" · ");
-    return `<li><strong>${escapeHtml(institution.name)}</strong>`
+    return `<li><div class="institution-window-copy"><strong>${escapeHtml(institution.name)}</strong>`
       + `<span>${escapeHtml(institution.address)}</span>`
       + (meta ? `<small>${escapeHtml(meta)}</small>` : "")
+      + "</div>"
+      + (selectable ? `<button type="button" class="agent-place-confirm" data-institution-index="${index}">장소선택</button>` : "")
       + "</li>";
   }).join("");
-  const remainder = institutions.length - visible.length;
   const title = institutions.length === 1
     ? (institutions[0].source === "police" ? "경찰청 관서" : "연계기관")
     : `같은 위치의 보관기관 ${institutions.length}곳`;
   return `<div class="institution-window">`
     + `<div class="institution-window-title">${title}</div>`
     + `<ul>${items}</ul>`
-    + (remainder > 0 ? `<p>외 ${remainder}곳</p>` : "")
     + "</div>";
 }
 
@@ -237,7 +239,7 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
         level: 8,
       });
       mapRef.current = map;
-      infoWindowRef.current = new kakao.maps.InfoWindow({ removable: true, zIndex: 30 });
+      infoWindowRef.current = createMapPopup(kakao);
 
       setMapReady(true);
     });
@@ -322,8 +324,6 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       return image;
     }
 
-    // 같은 핀을 450ms 안에 두 번 누르면 더블클릭으로 보고 그 기관 위치를 장소로 고른다.
-    const lastPin: { marker: any; at: number } = { marker: null, at: 0 };
     const markers = institutions.map((institution) => {
       const source = institution.source === "police" ? "police" : "partner";
       const image = softenedMarkers ? compactImages[source] : countsAvailable
@@ -338,18 +338,6 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       });
       const group = groups.get(coordinateKey(institution)) || [institution];
       kakao.maps.event.addListener(marker, "click", () => {
-        const now = Date.now();
-        if (onPointSelectRef.current && lastPin.marker === marker && now - lastPin.at < 450) {
-          lastPin.marker = null;
-          infoWindowRef.current.close();
-          onPointSelectRef.current({
-            latitude: institution.latitude, longitude: institution.longitude,
-            name: institution.name, address: institution.address,
-          });
-          return;
-        }
-        lastPin.marker = marker;
-        lastPin.at = now;
         if (softenedMarkers) {
           if (highlightedMarker) {
             highlightedMarker.marker.setImage(compactImages[highlightedMarker.source]);
@@ -359,12 +347,25 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
           marker.setZIndex(3);
           highlightedMarker = { marker, source };
         }
-        infoWindowRef.current.setContent(institutionDetails(
+        const content = document.createElement("div");
+        content.innerHTML = institutionDetails(
           group,
           selectedPlaceRef.current,
           countsAvailable,
-        ) + (onPointSelectRef.current
-          ? '<div class="info-hint">더블클릭하면 이 위치를 장소로 선택해요</div>' : ""));
+          Boolean(onPointSelectRef.current),
+        );
+        content.querySelectorAll<HTMLButtonElement>("[data-institution-index]").forEach(select => {
+          select.onclick = () => {
+            if (!onPointSelectRef.current) return;
+            const chosen = group[Number(select.dataset.institutionIndex)];
+            infoWindowRef.current.close();
+            onPointSelectRef.current({
+              latitude: chosen.latitude, longitude: chosen.longitude,
+              name: chosen.name, address: chosen.address,
+            });
+          };
+        });
+        infoWindowRef.current.setContent(content);
         infoWindowRef.current.open(map, marker);
         onInstitutionSelectRef.current(group);
       });

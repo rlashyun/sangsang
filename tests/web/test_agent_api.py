@@ -422,3 +422,24 @@ def test_chat_actions_preserve_results_and_apply_only_validated_targets():
     assert confirmed["conditions"]["place"]["candidate_id"] == "p1"
     assert confirmed["conditions"]["radius_m"] == 1000
     search.assert_called_with((42,), clarifying["conditions"]["item_query"], None)
+
+
+def test_prepare_alert_preserves_search_without_sending_mail_or_searching_again():
+    def decision(action, place=None, item=None):
+        return {"action": action, "message": "", "place_query": place, "item_query": item,
+                "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None}
+    model = Mock(side_effect=[decision("search", "서울역", "지갑"), decision("prepare_alert")])
+    search = Mock(return_value=SearchPage(({"item_id": 1, "institution_id": 42},), 1, "next"))
+    client = TestClient(create_app(Mock(), "dummy", agent_router=create_agent_router(
+        model=model, find_places=lambda _: [PlaceCandidate("p", "서울역", "", 37.5, 127.03)],
+        get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search)))
+    def turn(payload):
+        result = client.post("/api/search-chat/turns", json=payload)
+        return json.loads(result.text.splitlines()[-1])["response"]
+    first = turn({"type": "message", "text": "서울역 지갑", "request_id": "a"})
+    found = turn({"type": "select_place", "candidate_id": "p", "session_id": first["session_id"], "revision": first["revision"], "request_id": "b"})
+    prepared = turn({"type": "message", "text": "알림 신청해줘", "session_id": found["session_id"], "revision": found["revision"], "request_id": "c"})
+    assert prepared["prepare_alert"] is True
+    assert prepared["status"] == "answered"
+    assert prepared["conditions"] == found["conditions"]
+    search.assert_called_once()
