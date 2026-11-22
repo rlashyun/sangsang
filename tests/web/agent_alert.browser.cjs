@@ -22,7 +22,7 @@ async (page) => {
       setMapTypeId(value) { this.mapTypeId = value; }
       addControl() {} setBounds() {} extend() {} setMap() {} clear() {}
       addMarkers(markers) { window.testMapMarkerCount = markers.length; }
-      setContent() {} open() {} close() {}
+      setContent() {} setPosition() {} open() {} close() {}
       setImage() {} setZIndex() {} setLevel(value) { this.level = value; } panTo() {}
     }
     class FakeOverlay {
@@ -38,7 +38,7 @@ async (page) => {
     }
     window.kakao = { maps: {
       load: callback => callback(), LatLng, Map: FakeObject, AbstractOverlay: FakeOverlay,
-      ZoomControl: FakeObject, MapTypeControl: FakeObject, InfoWindow: FakeObject,
+      ZoomControl: FakeObject, MapTypeControl: FakeObject, InfoWindow: FakeObject, CustomOverlay: FakeObject,
       Marker: FakeObject, MarkerClusterer: FakeObject, MarkerImage: FakeObject,
       Size: FakeObject, Point: class { constructor(x, y) { this.x = x; this.y = y; } }, Circle: FakeObject, LatLngBounds: FakeObject,
       ControlPosition: {}, MapTypeId: { ROADMAP: 1, HYBRID: 3 }, event: { addListener() {}, removeListener() {} },
@@ -63,6 +63,9 @@ async (page) => {
       calls++;
       check(!route.request().postData().includes("@"), "email leaked into model route");
       const response = {session_id:"s",run_id:"r",revision:calls,status:"answered",prepare_alert:true,message:"알림 조건 확인",conditions:{place,places:[place],item_query:"지갑",radius_m:1000,institution_ids:[42]},place_candidates:[],search_attempts:[],recommended_item_ids:[],matches:null,error:null};
+      if (route.request().postData().includes("서울역 지갑")) {
+        Object.assign(response, {status:"no_matches",prepare_alert:false,message:"일치하는 물건을 찾지 못했어요.",matches:{items:[],total_count:0,next_cursor:null}});
+      }
       return route.fulfill({contentType:"application/x-ndjson",body:JSON.stringify({type:"run.finished",response})+"\n"});
     }
     return route.continue();
@@ -83,12 +86,23 @@ async (page) => {
     await input.fill("알림 받고 싶어요"); await page.getByRole("button",{name:"보내기",exact:true}).click();
     await page.getByLabel("개인정보 수집·이용에 동의해요").waitFor();
     await input.fill("반경을 넓혀줘"); await page.getByRole("button",{name:"보내기",exact:true}).click();
+    await page.getByLabel("알림 신청 조건").waitFor();
+    await input.fill("서울역 지갑"); await page.getByRole("button",{name:"보내기",exact:true}).click();
+    const followup = page.locator(".agent-result-followup");
+    const prompt = followup.getByText("찾으시는 물건이 없나요?", {exact:false});
+    await prompt.waitFor();
+    await followup.getByRole("button", {name:"비슷한 물건 알림 받기"}).click();
     await page.getByLabel("개인정보 수집·이용에 동의해요").check();
     const before=calls;
     await input.fill("user@example.com"); await page.getByRole("button",{name:"보내기",exact:true}).click();
     await page.getByText("일시 실패: 다시 입력해 주세요",{exact:true}).waitFor();
+    await prompt.waitFor();
     await input.fill("user@example.com"); await page.getByRole("button",{name:"보내기",exact:true}).click();
     await page.getByText("확인 메일을 보냈어요.",{exact:false}).waitFor();
+    await prompt.waitFor({state:"hidden"});
+    await followup.getByRole("button", {name:"반경 넓혀보기"}).waitFor();
+    await followup.getByRole("button", {name:"비슷한 물건 알림 받기"}).waitFor();
+    await followup.getByRole("link", {name:"당근에서 찾아보기"}).waitFor();
     check(calls===before,"email invoked chat API");
     check(!(await page.locator(".agent-feed").innerText()).includes("user@example.com"),"email in history");
   }

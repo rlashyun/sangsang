@@ -54,7 +54,7 @@ export function AgentSearchApp() {
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [progress, setProgress] = useState("");
   const [revealingReplies, setRevealingReplies] = useState(false);
-  const [followupVisible, setFollowupVisible] = useState(false);
+  const [followup, setFollowup] = useState<"hidden" | "prompt" | "actions">("hidden");
   const replyTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [pendingScope, setPendingScope] = useState<Scope | null>(null);
   const [confirmingPlace, setConfirmingPlace] = useState<AgentPlace | null>(null);
@@ -108,7 +108,7 @@ export function AgentSearchApp() {
   function hideFollowup() {
     replyTimers.current.forEach(clearTimeout);
     replyTimers.current = [];
-    setFollowupVisible(false);
+    setFollowup("hidden");
   }
 
   function revealReplies(replies: ChatMessage[], showFollowup = false) {
@@ -123,7 +123,7 @@ export function AgentSearchApp() {
       setRevealingReplies(false);
     }, Math.max(1, replies.length) * 300));
     if (showFollowup) {
-      replyTimers.current.push(setTimeout(() => setFollowupVisible(true), Math.max(1, replies.length) * 300 + 700));
+      replyTimers.current.push(setTimeout(() => setFollowup("prompt"), Math.max(1, replies.length) * 300 + 700));
     }
   }
 
@@ -267,7 +267,7 @@ export function AgentSearchApp() {
 
   useEffect(() => {
     if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [messages, selectedCandidate, followupVisible, photos.length, photoError, alertDraft]);
+  }, [messages, selectedCandidate, followup, photos.length, photoError, alertDraft]);
 
   function changePlaceCandidates(page: number) {
     setPlacePage(page);
@@ -501,7 +501,13 @@ export function AgentSearchApp() {
       if (alertPending.current) return;
       alertPending.current = true; setAlertSending(true); setDraft(""); setError("");
       void createAlertReservation({ email: text, query: alertDraft.query, places: alertDraft.places.map(({name, latitude, longitude}) => ({name, latitude, longitude})), radius_m: alertDraft.radius, consent: true })
-        .then(() => { setAlertDraft(null); setAlertConsent(false); setMessages(current => [...current, {author: "agent", text: "확인 메일을 보냈어요. 24시간 안에 메일의 확인 링크를 눌러야 알림이 시작돼요."}]); })
+        .then(() => {
+          setAlertDraft(null);
+          setAlertConsent(false);
+          // PRD 4.3-E — 확인 링크 안내 뒤에는 검색 결과 행동만 표시한다.
+          setFollowup("actions");
+          setMessages(current => [...current, { author: "agent", text: "확인 메일을 보냈어요. 24시간 안에 메일의 확인 링크를 눌러야 알림이 시작돼요." }]);
+        })
         .catch(error => setError(error instanceof Error && !(error instanceof TypeError) ? error.message : "연결하지 못했어요. 확인 메일이 도착했는지 확인하고, 없다면 이메일을 다시 입력해 주세요."))
         .finally(() => { alertPending.current = false; setAlertSending(false); });
       return;
@@ -605,7 +611,7 @@ export function AgentSearchApp() {
     } }]);
     detailRejected.current = true;
     if (window.matchMedia("(max-width: 820px)").matches) setTab("chat");
-    setFollowupVisible(answer === "no");
+    setFollowup(answer === "no" ? "prompt" : "hidden");
     void navigate(-1);
   }
 
@@ -714,10 +720,10 @@ export function AgentSearchApp() {
             {(placePage + 1) * PLACE_PAGE_SIZE < numberedPlaces.length && <button type="button" className="agent-action-chip agent-place-next" disabled={busy}
               onClick={() => changePlaceCandidates(placePage + 1)}>다른 장소 살펴보기</button>}
           </nav>}
-          {followupVisible && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
-            <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
+          {followup !== "hidden" && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
+            {followup === "prompt" && <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
               ? "찾으시는 물건이 없나요? 반경을 넓혀보거나, 비슷한 물건 알림을 받아보세요."
-              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>
+              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>}
             <div className="agent-place-replies agent-result-actions">
               {nextRadius !== null && <button type="button" className="agent-action-chip" disabled={busy}
                   onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>
