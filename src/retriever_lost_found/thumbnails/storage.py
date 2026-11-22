@@ -25,12 +25,12 @@ def thumbnail_key(item_id: int, source_url: str) -> str:
     return f"{item_id}/{hashlib.sha256(source_url.encode('utf-8')).hexdigest()}.jpg"
 
 
-def _valid_source(source_url: str) -> bool:
-    parts = urlsplit(source_url)
+def is_supported_source(source_url: str) -> bool:
     try:
+        parts = urlsplit(source_url)
         return (parts.scheme == "https" and parts.hostname == "minwon24.police.go.kr"
                 and parts.port in (None, 443) and not parts.username and not parts.password
-                and not parts.fragment and not parts.path.endswith("/img02_no_img.gif"))
+                and not parts.fragment and not parts.path.lower().endswith("/img02_no_img.gif"))
     except ValueError:
         return False
 
@@ -49,7 +49,7 @@ class ThumbnailStorage:
         self.timeout = timeout
 
     def create(self, item_id: int, source_url: str) -> str:
-        if not _valid_source(source_url):
+        if not is_supported_source(source_url):
             raise ValueError("지원하지 않는 원본 사진 주소입니다.")
         key = thumbnail_key(item_id, source_url)
         with self.opener.open(Request(source_url, headers={"User-Agent": "RetrieverLostFound/0.1"}), timeout=self.timeout) as response:

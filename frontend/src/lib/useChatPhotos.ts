@@ -6,13 +6,25 @@ const MAX_PHOTOS = 3;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
-// PRD 4.2 — 첨부 UI만 제공한다. 파일은 업로드·영구 저장하지 않고 현재 화면에서만 보관한다.
+function photoForSearch(image: HTMLImageElement): string {
+  const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("사진을 처리할 수 없어요.");
+  context.fillStyle = "white";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.8);
+}
+
+// PRD 4.2 — 검색에 보낼 축소 사진을 브라우저 메모리에서만 보관한다.
 export function useChatPhotos() {
   const [photos, setPhotos] = useState<ChatPhoto[]>([]);
   const [photoError, setPhotoError] = useState("");
   const [addingPhotos, setAddingPhotos] = useState(false);
   const pending = useRef<ChatPhoto[]>([]);
-  const objectUrls = useRef(new Set<string>());
   const loading = useRef(false);
   const mounted = useRef(true);
 
@@ -20,8 +32,6 @@ export function useChatPhotos() {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      objectUrls.current.forEach(URL.revokeObjectURL);
-      objectUrls.current.clear();
     };
   }, []);
 
@@ -48,18 +58,17 @@ export function useChatPhotos() {
           continue;
         }
         const url = URL.createObjectURL(file);
-        objectUrls.current.add(url);
         try {
           const image = new Image();
           image.src = url;
           await image.decode();
           if (!mounted.current) return;
-          pending.current = [...pending.current, { id: crypto.randomUUID(), url, name: file.name || "붙여넣은 사진" }];
+          pending.current = [...pending.current, { id: crypto.randomUUID(), url: photoForSearch(image), name: file.name || "붙여넣은 사진" }];
           setPhotos(pending.current);
         } catch {
-          URL.revokeObjectURL(url);
-          objectUrls.current.delete(url);
           issues.push("사진을 열지 못했어요. 다른 사진을 선택해 주세요.");
+        } finally {
+          URL.revokeObjectURL(url);
         }
       }
     } finally {
@@ -72,11 +81,6 @@ export function useChatPhotos() {
   }
 
   function removePhoto(id: string) {
-    const photo = pending.current.find(photo => photo.id === id);
-    if (photo) {
-      URL.revokeObjectURL(photo.url);
-      objectUrls.current.delete(photo.url);
-    }
     pending.current = pending.current.filter(photo => photo.id !== id);
     setPhotos(pending.current);
     setPhotoError("");
@@ -87,7 +91,6 @@ export function useChatPhotos() {
     pending.current = [];
     setPhotos([]);
     setPhotoError("");
-    // 전송한 말풍선에서도 URL을 사용하므로 대화 화면을 떠날 때 해제한다.
     return selected;
   }
 

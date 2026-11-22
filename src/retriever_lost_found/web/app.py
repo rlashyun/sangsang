@@ -275,6 +275,27 @@ def ranked_item_page(
     }
 
 
+def photo_ranked_item_page(found_item_client, embedding_client, compare, location_ids, query, user_text, photos):
+    from ..search.photo_rerank import rerank_photos
+    from .agent_adapters import adapt_search_item
+    from .agent_search import SearchPage
+
+    location_ids = list(location_ids)
+    ranked, _, _ = search_with_deadline(found_item_client, query, location_ids, embedding_client, hydrate_page=False)
+    ranked, status = rerank_photos(ranked, location_ids, user_text, photos,
+                                    found_item_client.fetch_photo_candidates, compare)
+    # PRD 4.5 — Hydrate the first page after reranking. Keep only the remaining IDs for the next page.
+    page, remaining = ranked[:FOUND_ITEM_PAGE_LIMIT], ranked[FOUND_ITEM_PAGE_LIMIT:]
+    missing = [row["id"] for row in page if "image_url" not in row]
+    if missing:
+        details = found_item_client.fetch_item_details(location_ids, missing)
+        by_id = {row["id"]: row for row in details if row.get("storage_location_id") in location_ids}
+        page = [{**row, **by_id.get(row["id"], {})} for row in page]
+    items = tuple(adapt_search_item(row) for row in found_item_client.add_thumbnails(page))
+    return SearchPage(items, len(ranked), "search:50" if remaining else None,
+                      tuple(row["id"] for row in remaining), status)
+
+
 def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     """필수 환경 변수와 Supabase DB를 사용해 실제 실행 앱을 구성합니다."""
     rest_api_key = read_env_value("KAKAO_REST_API_KEY")
@@ -295,9 +316,12 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     kakao_client = KakaoLocalClient(rest_api_key)
     agent_router = None
     if agent_search:
+        from ..integrations.agent_model import OpenRouterAgentModel
         from .agent_adapters import adapt_institutions, adapt_places, adapt_search_item, adapt_search_page
         from .agent_api import create_agent_router
         from .agent_store import SupabaseAgentStore
+
+        photo_model = OpenRouterAgentModel(embedding_key, timeout=4.5)
 
         def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None):
             ids = validate_location_ids(",".join(map(str, location_ids)))
@@ -315,6 +339,9 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),
             search_items=search_items,
             find_items_by_id=find_items_by_id,
+            search_photo_items=lambda ids, query, text, photos: photo_ranked_item_page(
+                found_item_client, embedding_client, photo_model.complete, ids, query, text, photos,
+            ),
         )
     try:
         alert_settings = load_alert_settings()

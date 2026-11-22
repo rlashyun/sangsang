@@ -379,6 +379,11 @@ export function AgentSearchApp() {
         ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
         : result.message;
       if (message) replies.push({ author: "agent", text: message });
+      if (result.photo_status === "unavailable" || result.photo_status === "no_photos") {
+        replies.push({ author: "agent", text: result.photo_status === "no_photos"
+          ? "비교할 후보 사진이 없어 글 검색 순서로 보여드려요."
+          : "사진을 비교하지 못해 글 검색 순서로 보여드려요." });
+      }
       revealReplies(replies, completedSearch);
       if (result.status === "answered") {
         // PRD 4.3 — An informational turn advances the session without replacing results.
@@ -413,7 +418,7 @@ export function AgentSearchApp() {
         setItems([]);
         setCursor(null);
         setSelectedInstitution([]);
-        if (turn.type !== "message") setLastTurn(null);
+        if (turn.type !== "message" || turn.photos?.length) setLastTurn(null);
       }
       setError(err instanceof Error ? err.message : "대화형 검색에 연결하지 못했어요.");
     } finally {
@@ -484,7 +489,7 @@ export function AgentSearchApp() {
     event.preventDefault();
     if (busy || addingPhotos || alertPending.current) return;
     const text = draft.trim();
-    if (!text && !photos.length) return;
+    if (!text) return;
     // PRD 3.3 · 4.3-E — 이메일은 모델·대화 기록을 거치지 않고 기존 예약 API로만 보낸다.
     if (alertDraft && !text.includes("@")) {
       // PRD 4.3-E — 이메일 대기 중에도 취소·질문·검색 조건 변경을 허용한다.
@@ -513,29 +518,17 @@ export function AgentSearchApp() {
       return;
     }
     if (text.includes("@")) { setDraft(""); setError("이메일은 알림 신청 안내 뒤 입력해 주세요."); return; }
-    if (text) {
-      const visibleItemIds = selectedInstitution.length
-        ? institutionItemIds
-        : items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize).map(item => item.item_id);
-      const turn: AgentTurn = { type: "message", text, changing_place: placeChanging, visible_item_ids: visibleItemIds };
-      if (recoveryRequired.current) {
-        void submit(turn);
-        return;
-      }
-      void submit(turn, false, canAttachPhotos ? takePhotos() : []);
-    } else {
-      if (!canAttachPhotos) {
-        explainPhotoPlaceRequirement();
-        return;
-      }
-      // PRD 4.2 — 사진 첨부만 제공하며 실제 이미지 검색 완료로 처리하지 않는다.
-      const selectedPhotos = takePhotos();
-      setMessages(current => [...current, { author: "user", text: "", photos: selectedPhotos }]);
-      setDraft("");
-      revealReplies([{ author: "agent", text: currentPlace
-        ? "사진을 첨부했어요. 물건의 특징도 글로 알려주세요."
-        : "사진을 첨부했어요. 찾을 장소와 물건의 특징도 글로 알려주세요." }]);
+    const visibleItemIds = selectedInstitution.length
+      ? institutionItemIds
+      : items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize).map(item => item.item_id);
+    const turn: AgentTurn = { type: "message", text, changing_place: placeChanging, visible_item_ids: visibleItemIds };
+    if (recoveryRequired.current) {
+      void submit(turn);
+      return;
     }
+    const selectedPhotos = canAttachPhotos ? takePhotos() : [];
+    if (selectedPhotos.length) turn.photos = selectedPhotos.map(photo => photo.url);
+    void submit(turn, false, selectedPhotos);
   }
 
   function explainPhotoPlaceRequirement() {
@@ -695,11 +688,9 @@ export function AgentSearchApp() {
               {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
             </div>
             : <div key={index} className={`agent-bubble agent-bubble-${message.author}${message.photos?.length ? " agent-bubble-with-photos" : ""}`}>
-              {Boolean(message.photos?.length) && <>
+              {Boolean(message.photos?.length) &&
                 <div className="agent-message-photos">{message.photos?.map((photo, photoIndex) =>
-                  <img key={photo.id} src={photo.url} alt={`첨부한 사진 ${photoIndex + 1}: ${photo.name}`} />)}</div>
-                <small className="agent-photo-caption">사진 첨부 · 사진 검색은 준비 중이에요</small>
-              </>}
+                  <img key={photo.id} src={photo.url} alt={`첨부한 사진 ${photoIndex + 1}: ${photo.name}`} />)}</div>}
               {message.text && <p className="agent-message-text">{message.text}</p>}
             </div>)}
           {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates" aria-label="장소 후보" start={placePage * PLACE_PAGE_SIZE + 1}>
@@ -757,7 +748,7 @@ export function AgentSearchApp() {
                 <button type="button" aria-label={`사진 ${index + 1} 삭제`} onClick={() => { removePhoto(photo.id); input.current?.focus(); }}>×</button>
               </li>)}
             </ul>}
-            {photos.length > 0 && <p className="agent-photo-note">사진 검색은 준비 중이에요. 첨부한 사진은 현재 대화에서만 볼 수 있어요.</p>}
+            {photos.length > 0 && <p className="agent-photo-note">물건의 특징도 입력해 주세요. 첨부한 사진은 AI가 검색 결과를 비교하는 데 사용해요.</p>}
             {addingPhotos && <p className="agent-photo-note" role="status">사진을 불러오고 있어요.</p>}
             {photoError && <p className="agent-photo-error" role="alert">{photoError}</p>}
           </div>}
@@ -771,7 +762,7 @@ export function AgentSearchApp() {
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
             maxLength={alertDraft ? 254 : 1000} disabled={alertSending} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : composePlaceholder} />
-          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
+          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || !draft.trim()}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
           </div>
