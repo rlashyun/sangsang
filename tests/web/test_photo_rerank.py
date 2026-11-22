@@ -6,7 +6,7 @@ from unittest.mock import Mock
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from retriever_lost_found.search.photo_rerank import JPEG_PREFIX, rerank_photos
+from retriever_lost_found.search.photo_rerank import JPEG_PREFIX, PHOTO_BATCH_SIZE, rerank_photos
 from retriever_lost_found.web.agent_api import create_agent_router
 from retriever_lost_found.web.agent_search import Institution
 from retriever_lost_found.web.agent_store import MemoryAgentStore
@@ -98,3 +98,38 @@ def test_photo_rerank_applies_penalties_and_preserves_order_when_photo_compariso
     compare.reset_mock()
     assert rerank_photos(ranked, [42], "지갑", ("photo",), fetch, compare) == (ranked, "no_photos")
     compare.assert_not_called()
+
+
+def test_photo_rerank_keeps_successful_batch_when_another_batch_fails():
+    last_id = PHOTO_BATCH_SIZE + 1
+    ids = range(1, last_id + 1)
+    ranked = [{"id": i, "match_score": .5 + i * .001} for i in reversed(ids)]
+    candidates = [{"id": i, "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/photo.jpg"} for i in ids]
+
+    def compare(_, content, schema):
+        batch_ids = [json.loads(part["text"])["id"] for part in content[2::2]]
+        if str(last_id) in batch_ids:
+            raise RuntimeError("provider timeout")
+        return {"results": [{"id": item_id, "label": "same" if item_id == "1" else "unsure"} for item_id in batch_ids]}
+
+    items, status = rerank_photos(ranked, [42], "지갑", ("photo",), Mock(return_value=candidates), compare)
+
+    assert status == "applied"
+    assert [row["id"] for row in items] == [1, *range(last_id, 1, -1)]
+
+
+def test_photo_rerank_keeps_valid_unique_verdicts_from_an_incomplete_batch():
+    ranked = [{"id": i, "match_score": .5 + i * .001} for i in (5, 4, 3, 2, 1)]
+    candidates = [{"id": row["id"], "storage_location_id": 42, "image_url": "https://minwon24.police.go.kr/photo.jpg"} for row in ranked]
+    compare = Mock(return_value={"results": [
+        {"id": "1", "label": "same"},
+        {"id": "2", "label": "same"},
+        {"id": "2", "label": "very_different"},
+        {"id": "4", "label": "unrecognized"},
+        {"id": "100", "label": "same"},
+    ]})
+
+    items, status = rerank_photos(ranked, [42], "지갑", ("photo",), Mock(return_value=candidates), compare)
+
+    assert status == "applied"
+    assert [row["id"] for row in items] == [1, 5, 4, 3, 2]
