@@ -991,7 +991,8 @@ export function AgentSearchApp() {
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
             <hr className="agent-welcome-divider" />
-            {messages.length === 0 && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
+            {/* PRD 4.3-A — 첫 안내 문장은 대화가 시작돼도 기록 맨 위에 남긴다. */}
+            <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>
           {messages.map((message, index) => <Fragment key={index}>
             {alertDraft && alertAnchor === index && alertSetup}
             {"itemConversation" in message
