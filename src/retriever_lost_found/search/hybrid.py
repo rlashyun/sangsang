@@ -11,7 +11,7 @@ from time import monotonic
 from typing import Any
 
 from ..privacy.masking import mask_numbers
-from . import synonyms
+from . import color_filter, synonyms
 from .synonyms import ALIASES
 
 # PRD 4.5 — 2026-11-21 확정안. 의미 점수는 반경 전체 1비트 의미 검색 한 곳에서만 온다
@@ -288,7 +288,11 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
             continue
         scored[item_id]=row["similarity"]
     ranked=[]
+    # 2026-11-23 사용자 결정 — 색이 확실히 다른 물품은 상위 100건으로 자르기 전에 뺀다(color_filter.py).
+    wanted_colors=color_filter.query_colors(query)
     for item_id,item in by_id.items():
+        if wanted_colors and not color_filter.keeps(query,item,wanted=wanted_colors):
+            continue
         # PRD 4.5 — 0.75·BM25 + 0.25·(cos−0.60)/0.40. Keyword matches always stay.
         score=KEYWORD_WEIGHT*lexical.get(item_id,0)+SEMANTIC_WEIGHT*semantic_score(scored.get(item_id))
         if semantic_rows is None:

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..search import hybrid, synonyms
+from ..search import color_filter, hybrid, synonyms
 
 
 def candidate_terms(query: str) -> tuple[set[str], set[str]]:
@@ -48,7 +48,6 @@ ALSO_MATCHES = {
     "오른쪽유닛": ("오른쪽",),
 }
 _GROUPS = {group["canonical"]: group for group in synonyms._CONCEPTS}
-_COLOR_GROUPS = [group for group in synonyms._CONCEPTS if group["domain"] == "color"]
 
 
 def _is_condition(group: dict[str, Any]) -> bool:
@@ -85,10 +84,14 @@ def _mentions(words: set[str], canonical: str) -> bool:
 def meets_conditions(search_text: str, conditions: dict[str, list[str]]) -> bool:
     words = _item_words(search_text.casefold())
     for domain, canonicals in conditions.items():
+        if domain == "color":
+            # 색을 하나도 알 수 없는 물품은 넣는다(2026-11-15 사용자 결정). 2026-11-23 사용자 결정으로
+            # 검색 화면과 같은 색 계열·팔레트 기준을 쓴다 — 확실히 다른 색일 때만 뺀다(search/color_filter.py).
+            wanted = set(canonicals) - color_filter.UNKNOWN
+            if color_filter.compatible(wanted, color_filter.item_colors({"search_text": search_text})):
+                continue
+            return False
         if any(_mentions(words, canonical) for canonical in canonicals):
-            continue
-        # 색을 하나도 알 수 없는 물품은 넣는다(2026-11-15 사용자 결정). 다른 색이 적혀 있으면 뺀다.
-        if domain == "color" and not any(_mentions(words, group["canonical"]) for group in _COLOR_GROUPS):
             continue
         return False
     return True
