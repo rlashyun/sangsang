@@ -13,6 +13,7 @@ export function useChatPhotos() {
   const [addingPhotos, setAddingPhotos] = useState(false);
   const pending = useRef<ChatPhoto[]>([]);
   const objectUrls = useRef(new Set<string>());
+  const chatUrls = useRef(new Set<string>());
   const loading = useRef(false);
   const mounted = useRef(true);
 
@@ -22,6 +23,7 @@ export function useChatPhotos() {
       mounted.current = false;
       objectUrls.current.forEach(URL.revokeObjectURL);
       objectUrls.current.clear();
+      chatUrls.current.clear();
     };
   }, []);
 
@@ -73,7 +75,7 @@ export function useChatPhotos() {
 
   function removePhoto(id: string) {
     const photo = pending.current.find(photo => photo.id === id);
-    if (photo) {
+    if (photo && !chatUrls.current.has(photo.url)) {
       URL.revokeObjectURL(photo.url);
       objectUrls.current.delete(photo.url);
     }
@@ -82,14 +84,25 @@ export function useChatPhotos() {
     setPhotoError("");
   }
 
-  function takePhotos() {
-    const selected = pending.current;
-    pending.current = [];
-    setPhotos([]);
+  function takePhotos(ids: string[]) {
+    const selected = pending.current.filter(photo => ids.includes(photo.id));
+    pending.current = pending.current.filter(photo => !ids.includes(photo.id));
+    setPhotos(pending.current);
     setPhotoError("");
     // 전송한 말풍선에서도 URL을 사용하므로 대화 화면을 떠날 때 해제한다.
     return selected;
   }
 
-  return { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos };
+  // 전송 실패 후 초안을 삭제해도 이미 보낸 말풍선의 사진은 남긴다.
+  function retainPhotosInChat(selected: ChatPhoto[]) {
+    selected.forEach(photo => chatUrls.current.add(photo.url));
+  }
+
+  function restorePhotos(selected: ChatPhoto[]) {
+    const existing = new Set(pending.current.map(photo => photo.id));
+    pending.current = [...pending.current, ...selected.filter(photo => !existing.has(photo.id))];
+    setPhotos(pending.current);
+  }
+
+  return { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos, retainPhotosInChat, restorePhotos };
 }

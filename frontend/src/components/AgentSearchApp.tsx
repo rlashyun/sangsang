@@ -24,7 +24,7 @@ const TOOL_LABELS: Record<string, string> = {
 };
 
 type ItemConversation = { id: string; item: AgentItem; institution?: Institution; answer: "yes" | "no"; acknowledged: boolean };
-type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[] } | { confirmedPlace: AgentPlace } | { itemConversation: ItemConversation };
+type ChatMessage = { author: "user" | "agent"; text: string; photos?: ChatPhoto[]; photoGuidance?: boolean } | { confirmedPlace: AgentPlace } | { itemConversation: ItemConversation };
 type Scope = { radius_m: number; institution_ids: number[] };
 type ActiveRun = { session_id: string; run_id: string };
 
@@ -38,8 +38,12 @@ export function AgentSearchApp() {
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos } = useChatPhotos();
+  const { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos, retainPhotosInChat, restorePhotos } = useChatPhotos();
   const photoInput = useRef<HTMLInputElement>(null);
+  const photoButton = useRef<HTMLButtonElement>(null);
+  const sendButton = useRef<HTMLButtonElement>(null);
+  const [photoAttention, setPhotoAttention] = useState(0);
+  const photoAttentionTarget = useRef<"attach" | "send">("attach");
   const [response, setResponse] = useState<AgentResponse | null>(null);
   const [items, setItems] = useState<AgentItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -78,6 +82,7 @@ export function AgentSearchApp() {
   const controller = useRef<AbortController | null>(null);
   // PRD 4.3-A, 5 — Retry the original request, including its original revision.
   const retryRequest = useRef<{ id: string; session: { session_id: string; revision: number } | null } | null>(null);
+  const retryPhotos = useRef<ChatPhoto[]>([]);
   const sessionIdentity = useRef<{ session_id: string; revision: number } | null>(null);
   const cancellationPending = useRef(false);
   const recoveryRequired = useRef(false);
@@ -89,6 +94,21 @@ export function AgentSearchApp() {
   const detailRejected = useRef(false);
   const [feedScrolling, setFeedScrolling] = useState(false);
   const scrollIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useLayoutEffect(() => {
+    if (!photoAttention) return;
+    const button = photoAttentionTarget.current === "send" ? sendButton.current : photoButton.current;
+    const guidance = Array.from(feed.current?.querySelectorAll<HTMLElement>(".agent-photo-guidance") ?? []).at(-1);
+    const targets = [button, guidance].filter((element): element is HTMLElement => Boolean(element));
+    // PRD 4.2 · 4.3-A — 반복 요청은 말풍선을 늘리지 않고 기존 안내와 버튼을 다시 강조한다.
+    targets.forEach(element => {
+      element.classList.remove("is-photo-attention");
+      void element.offsetWidth;
+      element.classList.add("is-photo-attention");
+    });
+    guidance?.scrollIntoView({ block: "nearest", behavior: "instant" });
+    return () => targets.forEach(element => element.classList.remove("is-photo-attention"));
+  }, [photoAttention]);
 
   useEffect(() => () => replyTimers.current.forEach(clearTimeout), []);
   useEffect(() => () => {
@@ -293,6 +313,16 @@ export function AgentSearchApp() {
       return;
     }
     const request = new AbortController();
+    // PRD 4.2 — 전송 즉시 미리보기를 비우고 실패·취소 시 이번에 비운 사진만 복원한다.
+    const requestPhotos = retry ? retryPhotos.current : attachedPhotos;
+    if (!retry) retryPhotos.current = attachedPhotos;
+    const sentDraftPhotos = turn.type === "message" ? takePhotos(requestPhotos.map(photo => photo.id)) : [];
+    const restorePhotoDescription = () => {
+      if (turn.type === "message" && requestPhotos.length) {
+        restorePhotos(sentDraftPhotos);
+        setDraft(current => current || turn.text);
+      }
+    };
     setOpenItem(null);
     if (detail) {
       void navigate(searchPath, { replace: true, state: null });
@@ -308,6 +338,7 @@ export function AgentSearchApp() {
     setError("");
     setProgress("검색 조건을 확인하고 있어요.");
     if (turn.type === "message" && !retry) {
+      retainPhotosInChat(attachedPhotos);
       setMessages(current => [...current, { author: "user", text: turn.text, photos: attachedPhotos }]);
       setDraft("");
     }
@@ -345,6 +376,7 @@ export function AgentSearchApp() {
       sessionIdentity.current = result;
       recoveryRequired.current = false;
       if (result.status === "error") {
+        restorePhotoDescription();
         recoveryRequired.current = ["state_unavailable", "state_conflict"].includes(result.error?.code ?? "");
         setError(result.error?.message || result.message || "검색 중 문제가 생겼어요.");
         return;
@@ -392,10 +424,16 @@ export function AgentSearchApp() {
         setTab((result.matches?.total_count ?? 0) > 0 ? "results" : "chat");
       }
       sessionIdentity.current = result.status === "ended" ? null : result;
+      if (result.status === "cancelled") restorePhotoDescription();
+      else if (turn.type === "message" && requestPhotos.length) {
+        setDraft(current => current === turn.text ? "" : current);
+      }
+      retryPhotos.current = [];
       retryRequest.current = null;
       setLastTurn(null);
     } catch (err) {
       if (request.signal.aborted) return;
+      restorePhotoDescription();
       recoveryRequired.current = err instanceof AgentRequestError && err.requiresRecovery;
       if (err instanceof AgentSessionExpired) {
         sessionIdentity.current = null;
@@ -485,28 +523,28 @@ export function AgentSearchApp() {
         void submit(turn);
         return;
       }
-      void submit(turn, false, canAttachPhotos ? takePhotos() : []);
+      void submit(turn, false, canAttachPhotos ? photos : []);
     } else {
       if (!canAttachPhotos) {
-        explainPhotoPlaceRequirement();
+        explainPhotoPlaceRequirement("send");
         return;
       }
-      // PRD 4.2 — 사진 첨부만 제공하며 실제 이미지 검색 완료로 처리하지 않는다.
-      const selectedPhotos = takePhotos();
-      setMessages(current => [...current, { author: "user", text: "", photos: selectedPhotos }]);
-      setDraft("");
-      revealReplies([{ author: "agent", text: currentPlace
-        ? "사진을 첨부했어요. 물건의 특징도 글로 알려주세요."
-        : "사진을 첨부했어요. 찾을 장소와 물건의 특징도 글로 알려주세요." }]);
+      // PRD 4.2 — 설명 없는 사진은 전송하지 않고, 사진을 유지한 채 대화로 설명을 요청한다.
+      explainPhotoRequirement("사진과 함께 물건의 이름이나 특징을 간단히 입력해 주세요.", "send");
     }
   }
 
-  function explainPhotoPlaceRequirement() {
-    const text = "사진을 첨부하려면 먼저 잃어버린 장소를 입력하고 선택해 주세요.";
+  function explainPhotoPlaceRequirement(target: "attach" | "send" = "attach") {
+    explainPhotoRequirement("사진을 첨부하려면 먼저 잃어버린 장소를 입력하고 선택해 주세요.", target);
+  }
+
+  function explainPhotoRequirement(text: string, target: "attach" | "send") {
+    photoAttentionTarget.current = target;
+    setPhotoAttention(current => current + 1);
     setMessages(current => {
       const last = current.at(-1);
       if (last && "author" in last && last.author === "agent" && last.text === text) return current;
-      return [...current, { author: "agent", text }];
+      return [...current, { author: "agent", text, photoGuidance: true }];
     });
     input.current?.focus();
   }
@@ -524,7 +562,7 @@ export function AgentSearchApp() {
       explainPhotoPlaceRequirement();
       return;
     }
-    if (!busy && !addingPhotos) void addPhotos(files);
+    if (!busy && !addingPhotos) void addPhotos(files).then(() => input.current?.focus());
   }
 
   function pastePhotos(event: ClipboardEvent<HTMLFormElement>) {
@@ -554,7 +592,8 @@ export function AgentSearchApp() {
     const institution = institutionIndex.get(item.institution_id);
     setFocusedInstitution(institution ? { ...institution } : null);
     setOpenItem(item);
-    void navigate(location.pathname + location.search, { replace: Boolean(detail), state: { agentItemId: item.item_id } });
+    // 선택 상태와 상세 경로를 함께 반영해 교체 중 말풍선이 잠깐 사라지지 않게 한다.
+    void navigate(location.pathname + location.search, { replace: Boolean(detail), state: { agentItemId: item.item_id }, flushSync: true });
   }
 
   function openAlerts() {
@@ -653,11 +692,10 @@ export function AgentSearchApp() {
               <strong>{message.confirmedPlace.name}</strong>
               {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
             </div>
-            : <div key={index} className={`agent-bubble agent-bubble-${message.author}${message.photos?.length ? " agent-bubble-with-photos" : ""}`}>
+            : <div key={index} className={`agent-bubble agent-bubble-${message.author}${message.photos?.length ? " agent-bubble-with-photos" : ""}${message.photoGuidance ? " agent-photo-guidance" : ""}`}>
               {Boolean(message.photos?.length) && <>
                 <div className="agent-message-photos">{message.photos?.map((photo, photoIndex) =>
                   <img key={photo.id} src={photo.url} alt={`첨부한 사진 ${photoIndex + 1}: ${photo.name}`} />)}</div>
-                <small className="agent-photo-caption">사진 첨부 · 사진 검색은 준비 중이에요</small>
               </>}
               {message.text && <p className="agent-message-text">{message.text}</p>}
             </div>)}
@@ -703,10 +741,10 @@ export function AgentSearchApp() {
             {photos.length > 0 && <ul className="agent-photo-previews" aria-label="보낼 사진">
               {photos.map((photo, index) => <li key={photo.id}>
                 <img src={photo.url} alt={`첨부 예정 사진 ${index + 1}: ${photo.name}`} />
-                <button type="button" aria-label={`사진 ${index + 1} 삭제`} onClick={() => { removePhoto(photo.id); input.current?.focus(); }}>×</button>
+                <button type="button" aria-label={`사진 ${index + 1} 삭제`} disabled={busy || addingPhotos} onClick={() => { removePhoto(photo.id); input.current?.focus(); }}>×</button>
               </li>)}
             </ul>}
-            {photos.length > 0 && <p className="agent-photo-note">사진 검색은 준비 중이에요. 첨부한 사진은 현재 대화에서만 볼 수 있어요.</p>}
+            {photos.length > 0 && <p className="agent-photo-note">사진은 대화에 첨부돼요. 검색은 입력한 설명으로 진행해요.</p>}
             {addingPhotos && <p className="agent-photo-note" role="status">사진을 불러오고 있어요.</p>}
             {photoError && <p className="agent-photo-error" role="alert">{photoError}</p>}
           </div>}
@@ -714,13 +752,13 @@ export function AgentSearchApp() {
           <label className="sr-only" htmlFor="agent-input">메시지</label>
           <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden aria-label="사진 파일 선택"
             onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; if (files.length) addDraftPhotos(files); }} />
-          <button type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos}
+          <button ref={photoButton} type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos}
             onClick={choosePhotos}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1-1.5h5.8l1 1.5h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.2" /></svg>
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
             maxLength={1000} placeholder={composePlaceholder} />
-          <button type="submit" className="agent-send" aria-label="보내기" disabled={busy || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
+          <button ref={sendButton} type="submit" className="agent-send" aria-label="보내기" disabled={busy || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
           </div>
