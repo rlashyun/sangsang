@@ -9,6 +9,8 @@ export const agentEnabled = document.getElementById("root")?.dataset.agentSearch
 
 export const router = createBrowserRouter([
   { path: "/alerts/confirm", element: <AlertConfirm /> },
+  { path: "/alerts/extend", element: <AgentSearchApp /> },
+  { path: "/alerts/cancel", element: <AgentSearchApp /> },
   {
     path: "/",
     element: agentEnabled ? <AgentSearchApp /> : <App />,
