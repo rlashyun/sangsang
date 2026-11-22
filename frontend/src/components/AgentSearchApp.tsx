@@ -520,6 +520,11 @@ export function AgentSearchApp() {
         ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
         : result.message;
       if (message) replies.push({ author: "agent", text: message });
+      if (result.photo_status === "unavailable" || result.photo_status === "no_photos") {
+        replies.push({ author: "agent", text: result.photo_status === "no_photos"
+          ? "비교할 후보 사진이 없어 글 검색 순서로 보여드려요."
+          : "사진을 비교하지 못해 글 검색 순서로 보여드려요." });
+      }
       revealReplies(replies, completedSearch && !showAlertSetup, result.conditions.radius_m ?? mappedRadius);
       if (result.status === "answered") {
         // PRD 4.3 — An informational turn advances the session without replacing results.
@@ -562,7 +567,7 @@ export function AgentSearchApp() {
         setItems([]);
         setCursor(null);
         setSelectedInstitution([]);
-        if (turn.type !== "message") setLastTurn(null);
+        if (turn.type !== "message" || turn.photos?.length) setLastTurn(null);
       }
       setError(err instanceof Error ? err.message : "대화형 검색에 연결하지 못했어요.");
     } finally {
@@ -800,7 +805,9 @@ export function AgentSearchApp() {
         void submit(turn);
         return;
       }
-      void submit(turn, false, canAttachPhotos ? photos : []);
+      const selectedPhotos = canAttachPhotos ? photos : [];
+      if (selectedPhotos.length) turn.photos = selectedPhotos.map(photo => photo.searchUrl);
+      void submit(turn, false, selectedPhotos);
     } else {
       if (!canAttachPhotos) {
         explainPhotoPlaceRequirement("send");
@@ -1080,7 +1087,7 @@ export function AgentSearchApp() {
                 <button type="button" aria-label={`사진 ${index + 1} 삭제`} disabled={busy || addingPhotos} onClick={() => { removePhoto(photo.id); input.current?.focus(); }}>×</button>
               </li>)}
             </ul>}
-            {photos.length > 0 && <p className="agent-photo-note">사진은 대화에 첨부돼요. 검색은 입력한 설명으로 진행해요.</p>}
+            {photos.length > 0 && <p className="agent-photo-note">물건의 특징도 입력해 주세요. 첨부한 사진은 검색 결과를 비교하는 데 사용해요.</p>}
             {addingPhotos && <p className="agent-photo-note" role="status">사진을 불러오고 있어요.</p>}
             {photoError && <p className="agent-photo-error" role="alert">{photoError}</p>}
           </div>}

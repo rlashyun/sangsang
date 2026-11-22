@@ -16,13 +16,16 @@ class OpenRouterAgentModel:
         self.max_tokens = max_tokens
 
     def __call__(self, instructions: str, context: dict[str, Any], schema: dict[str, Any]) -> Any:
+        return self.complete(instructions, json.dumps(context, ensure_ascii=False), schema)
+
+    def complete(self, instructions: str, content: str | list[dict[str, Any]], schema: dict[str, Any]) -> Any:
         request = Request(
             "https://openrouter.ai/api/v1/chat/completions",
             data=json.dumps({
                 "model": self.model,
                 "messages": [
                     {"role": "system", "content": instructions},
-                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                    {"role": "user", "content": content},
                 ],
                 "response_format": {
                     "type": "json_schema",

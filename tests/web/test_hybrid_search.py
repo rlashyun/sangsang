@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from retriever_lost_found.integrations.embeddings import BgeM3Client
+from retriever_lost_found.integrations.embeddings import BgeM3Client, GeminiQueryClient
 from retriever_lost_found.integrations.supabase import SupabaseFoundItemClient
 from retriever_lost_found.search.hybrid import keyword_scores, search_found_items, search_with_deadline, SearchDeadlineExceeded, query_text, query_kinds
 from retriever_lost_found.web.app import create_app
@@ -24,7 +24,7 @@ class FakeItems:
         return ITEMS
 
     def fetch_semantic_items(self, ids, vector, **kwargs):
-        # PRD 4.5 — radius-wide 1-bit semantic RPC (cos ≥ 0.60, top 200). Every in-scope row is close.
+        # PRD 4.5 — radius-wide 1-bit semantic RPC (Gemini, cos ≥ 0.525, top 200). Every in-scope row is close.
         assert ids == [7] and len(vector) == 1024
         return [{"item_id": row["id"], "similarity": 0.9, "detail": row} for row in self.fetch_items(ids)]
 
@@ -158,27 +158,33 @@ def test_description_can_support_kind_when_source_name_is_vague():
     assert 1 in keyword_scores([item], "지갑")
 
 
-def test_search_pagination_exposes_total_without_dropping_remaining_matches():
+@pytest.mark.parametrize("item_count", [55, 100, 120])
+def test_search_pagination_returns_at_most_top_100_ranked_items(item_count):
     class Items(FakeItems):
         def fetch_items(self, ids):
-            return [{"id": i, "storage_location_id": 7, "item_name": "지갑"} for i in range(1, 56)]
+            return [{"id": i, "storage_location_id": 7, "item_name": "지갑"} for i in range(1, item_count + 1)]
 
     client = TestClient(create_app(object(), "test-js", found_item_client=Items()))
     first = client.get("/api/found-items?location_ids=7&q=지갑").json()
     second = client.get("/api/found-items", params={"location_ids": 7, "q": "지갑", "cursor": first["next_cursor"]}).json()
-    assert first["match_count"] == first["total_count"] == 55
-    assert len(first["items"]) == 50 and len(second["items"]) == 5
-    assert not ({r["id"] for r in first["items"]} & {r["id"] for r in second["items"]})
+    outside = client.get("/api/found-items?location_ids=7&q=지갑&cursor=search:100").json()
+    visible_count = min(item_count, 100)
+    assert first["candidate_count"] == item_count
+    assert first["match_count"] == first["total_count"] == second["total_count"] == visible_count
+    assert len(first["items"]) == 50
+    assert [r["id"] for r in first["items"] + second["items"]] == list(range(item_count, item_count - visible_count, -1))
+    assert second["next_cursor"] is None
+    assert outside["items"] == [] and outside["next_cursor"] is None
 
 
-def test_every_keyword_match_is_preserved_without_semantic_scores():
+def test_keyword_only_matches_are_preserved_when_below_the_result_cap():
     class Items(FakeItems):
         def fetch_items(self, ids):
-            return [{"id": i,"storage_location_id":7,"item_name":"지갑"} for i in range(1,251)]
+            return [{"id": i,"storage_location_id":7,"item_name":"지갑"} for i in range(1,101)]
         def fetch_semantic_items(self, ids, vector, **kwargs):
-            return super().fetch_semantic_items(ids,vector,**kwargs)[:200]
+            return super().fetch_semantic_items(ids,vector,**kwargs)[:30]
     rows,_,status=search_found_items(Items(),"지갑",[7],FakeEmbedding())
-    assert status=="ok" and {row["id"] for row in rows}==set(range(1,251))
+    assert status=="ok" and {row["id"] for row in rows}==set(range(1,101))
 
 
 def test_supabase_compressed_json_is_decoded():
@@ -319,14 +325,14 @@ def test_semantic_search_adds_items_the_keyword_step_missed():
     client = SemanticItems([{"item_id": 9, "similarity": 0.8, "detail": extra}])
     rows, _, status = search_found_items(client, "지갑", [7], FakeEmbedding())
     assert status == "ok" and {r["id"] for r in rows} == {1, 2, 9}
-    assert client.calls[0]["min_similarity"] == 0.6 and client.calls[0]["rescore"] == 500
+    assert client.calls[0]["min_similarity"] == 0.525 and client.calls[0]["rescore"] == 500
     assert client.calls[0]["limit"] == 200
     semantic_only = next(r for r in rows if r["id"] == 9)
-    assert semantic_only["match_score"] == pytest.approx(0.25 * (0.8 - 0.6) / 0.4)
+    assert semantic_only["match_score"] == pytest.approx(0.25 * (0.8 - 0.525) / 0.475, abs=1e-6)
 
 
 def test_semantic_only_items_need_the_threshold_and_the_kind_gate():
-    rows = [{"item_id": 8, "similarity": 0.59, "detail": {"id": 8, "storage_location_id": 7, "item_name": "카드지갑"}},
+    rows = [{"item_id": 8, "similarity": 0.52, "detail": {"id": 8, "storage_location_id": 7, "item_name": "카드지갑"}},
             {"item_id": 9, "similarity": 0.9, "detail": {"id": 9, "storage_location_id": 7, "item_name": "검정 우산"}},
             {"item_id": 10, "similarity": 0.9, "detail": {"id": 10, "storage_location_id": 999, "item_name": "지갑"}}]
     results, _, _ = search_found_items(SemanticItems(rows), "지갑", [7], FakeEmbedding())
@@ -355,10 +361,65 @@ def test_semantic_rpc_sends_scope_vector_and_rescore_count():
         rows = client.fetch_semantic_items([7, 7], [0.5] * 1024, timeout=1)
     request = call.call_args.args[0]
     body = json.loads(request.data)
-    assert request.full_url.endswith("/rest/v1/rpc/semantic_found_item_candidates")
+    assert request.full_url.endswith("/rest/v1/rpc/semantic_found_item_candidates_gemini2")
     assert body["p_location_ids"] == [7] and body["p_rescore"] == 500 and body["p_limit"] == 200
-    assert body["p_min"] == 0.6 and body["p_query"].startswith("[0.5,") and rows[0]["similarity"] == 0.7
+    assert body["p_min"] == 0.525 and body["p_query"].startswith("[0.5,") and rows[0]["similarity"] == 0.7
     with patch("retriever_lost_found.integrations.supabase._request_json",
                return_value=[{"item_id": 1, "similarity": 0.7, "detail": {**detail, "storage_location_id": 9}}]):
         with pytest.raises(RuntimeError):
             client.fetch_semantic_items([7], [0.5] * 1024, timeout=1)
+
+
+# PRD 4.5 — 2026-11-22 Gemini Embedding 2 전환: 검색어 벡터는 물품 벡터와 같은 모델·경로·차원이다.
+class _GeminiResponse:
+    def __init__(self, payload):
+        self.payload = payload
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def read(self):
+        return json.dumps(self.payload).encode()
+
+
+def _gemini_payload(vector=None, **extra):
+    return {"model": "gemini-embedding-2", "provider": "Google AI Studio",
+            "data": [{"index": 0, "embedding": vector if vector is not None else [0.03125] * 1024}], **extra}
+
+
+def test_gemini_query_uses_search_task_format_and_pinned_route():
+    with patch("retriever_lost_found.integrations.embeddings.build_opener") as opener:
+        opener.return_value.open.return_value = _GeminiResponse(_gemini_payload())
+        assert len(GeminiQueryClient("test-key").embed("노란 접이식 우산")) == 1024
+        body = json.loads(opener.return_value.open.call_args.args[0].data)
+    assert body["model"] == "google/gemini-embedding-2" and body["dimensions"] == 1024
+    assert body["input"] == ["task: search result | query: 노란 접이식 우산"]
+    assert body["provider"] == {"only": ["Google AI Studio"], "allow_fallbacks": False, "data_collection": "deny"}
+
+
+def test_gemini_query_cache_reuses_only_successful_vectors():
+    client = GeminiQueryClient("test-key")
+    with patch("retriever_lost_found.integrations.embeddings.build_opener") as opener:
+        opener.return_value.open.return_value = _GeminiResponse(_gemini_payload())
+        first = client.embed("지갑")
+        first[0] = 9
+        assert client.embed("지갑")[0] == 0.03125
+        assert opener.return_value.open.call_count == 1
+
+
+@pytest.mark.parametrize("payload", [
+    _gemini_payload([1.0]), _gemini_payload([float("nan")] * 1024), _gemini_payload([0.0] * 1024),
+    {**_gemini_payload(), "provider": "Google"}, {**_gemini_payload(), "model": "baai/bge-m3"},
+])
+def test_gemini_query_rejects_invalid_or_rerouted_responses(payload):
+    with patch("retriever_lost_found.integrations.embeddings.build_opener") as opener:
+        opener.return_value.open.return_value = _GeminiResponse(payload)
+        with pytest.raises(RuntimeError, match="의미 검색용"):
+            GeminiQueryClient("test-key").embed("지갑")
+
+
+def test_app_builds_the_gemini_query_client_for_search():
+    import inspect
+    from retriever_lost_found.web import app as web_app
+    source = inspect.getsource(web_app)
+    assert "GeminiQueryClient(embedding_key)" in source and "BgeM3Client" not in source

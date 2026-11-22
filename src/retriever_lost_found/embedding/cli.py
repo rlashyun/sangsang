@@ -7,7 +7,7 @@ import sys
 import time
 
 from ..config import read_optional_env_value
-from ..integrations.embeddings import BgeM3Client
+from ..integrations.embeddings import GeminiItemClient
 from ..ingestion.service import KOREA_TIMEZONE
 from .service import run_slice
 from .store import EmbeddingStore
@@ -52,7 +52,7 @@ def main():
         if not key:
             report(store.finish(run, False, "missing_api_key"))
             return 2
-        result = run_slice(store, BgeM3Client(key), run, report=report, capture=capture)
+        result = run_slice(store, GeminiItemClient(key), run, report=report, capture=capture)
         report(result)
         if result["status"] == "succeeded":
             return 0

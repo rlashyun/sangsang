@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 
-export type ChatPhoto = { id: string; url: string; name: string };
+export type ChatPhoto = { id: string; url: string; name: string; searchUrl: string };
 
 const MAX_PHOTOS = 3;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
-// PRD 4.2 — 첨부 UI만 제공한다. 파일은 업로드·영구 저장하지 않고 현재 화면에서만 보관한다.
+function photoForSearch(image: HTMLImageElement): string {
+  const scale = Math.min(1, 512 / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("사진을 처리할 수 없어요.");
+  context.fillStyle = "white";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.8);
+}
+
+// PRD 4.2 — 검색에 보낼 축소 사진을 브라우저 메모리에서만 보관한다.
 export function useChatPhotos() {
   const [photos, setPhotos] = useState<ChatPhoto[]>([]);
   const [photoError, setPhotoError] = useState("");
@@ -56,7 +69,7 @@ export function useChatPhotos() {
           image.src = url;
           await image.decode();
           if (!mounted.current) return;
-          pending.current = [...pending.current, { id: crypto.randomUUID(), url, name: file.name || "붙여넣은 사진" }];
+          pending.current = [...pending.current, { id: crypto.randomUUID(), url, searchUrl: photoForSearch(image), name: file.name || "붙여넣은 사진" }];
           setPhotos(pending.current);
         } catch {
           URL.revokeObjectURL(url);
@@ -89,7 +102,6 @@ export function useChatPhotos() {
     pending.current = pending.current.filter(photo => !ids.includes(photo.id));
     setPhotos(pending.current);
     setPhotoError("");
-    // 전송한 말풍선에서도 URL을 사용하므로 대화 화면을 떠날 때 해제한다.
     return selected;
   }
 

@@ -47,8 +47,8 @@ async (page) => {
   const placeGuide = '사진을 첨부하려면 먼저 잃어버린 장소를 입력하고 선택해 주세요.';
   // 유효한 작은 PNG를 메모리에서 만들어 파일 선택과 클립보드에 같은 내용을 사용한다.
   const png = await page.evaluate(() => {
-    const canvas = document.createElement('canvas'); canvas.width = 60; canvas.height = 90;
-    const context = canvas.getContext('2d'); context.fillStyle = '#a87c50'; context.fillRect(0, 0, 60, 90);
+    const canvas = document.createElement('canvas'); canvas.width = 600; canvas.height = 900;
+    const context = canvas.getContext('2d'); context.fillStyle = '#a87c50'; context.fillRect(0, 0, 600, 900);
     return canvas.toDataURL('image/png').split(',')[1];
   });
   const file = name => ({name, mimeType: 'image/png', buffer: Buffer.from(png, 'base64')});
@@ -117,6 +117,10 @@ async (page) => {
     check(await input.inputValue() === '갈색 지갑' && await previews.count() === 1 && await photoMessages.count() === 1,
       'Failed search retains description, draft photo and sent photo');
     const failedRequest = requests.at(-1);
+    check(failedRequest.photos?.length === 1 && failedRequest.photos[0].startsWith('data:image/jpeg;base64,'),
+      'Search request includes resized photo rather than browser-only blob URL');
+    check(await page.evaluate(async url => {const image = new Image(); image.src = url; await image.decode(); return Math.max(image.naturalWidth, image.naturalHeight) === 512;}, failedRequest.photos[0]),
+      'Photo payload is resized to a maximum dimension of 512px');
     // 실패 후 새로 첨부한 사진을 이전 요청 재시도가 지우면 안 된다.
     await picker.setInputFiles(file('다음 사진.png'));
     await page.waitForFunction(() => document.querySelectorAll('.agent-photo-previews img').length === 2);
