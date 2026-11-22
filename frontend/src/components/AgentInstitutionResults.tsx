@@ -10,7 +10,8 @@ function toAgentItems(items: FoundItem[]): AgentItem[] {
     ? [{ ...item, item_id: item.id, institution_id: item.storage_location_id }] : []);
 }
 
-export function AgentInstitutionResults({ ids, query, institutions, onOpen, onVisibleItems, onTotalChange, pageSize }: {
+export function AgentInstitutionResults({ ids, query, institutions, onOpen, onVisibleItems, onTotalChange, pageSize, selectedItemId }: {
+  selectedItemId?: number;
   pageSize: number;
   ids: string;
   query: string;
@@ -85,7 +86,7 @@ export function AgentInstitutionResults({ ids, query, institutions, onOpen, onVi
     {loading && <p className="agent-bubble" role="status">이 기관의 결과를 확인하고 있어요.</p>}
     {error && <p className="agent-bubble" role="alert">{error}</p>}
     {!loading && !error && !items.length && <p className="agent-bubble">이 기관에는 일치하는 습득물이 없어요.</p>}
-    <AgentResultList pageSize={pageSize} items={toAgentItems(items.slice(page * pageSize, (page + 1) * pageSize))} institutions={institutions} onOpen={onOpen} />
+    <AgentResultList selectedItemId={selectedItemId} pageSize={pageSize} items={toAgentItems(items.slice(page * pageSize, (page + 1) * pageSize))} institutions={institutions} onOpen={onOpen} />
     <nav className="agent-pagination" aria-label="기관 습득물 결과 페이지">
       {pageCount <= 1 ? <button type="button" aria-label="1페이지" aria-current="page" disabled={loading}>1</button> : itemPageNumbers(page, pageCount).map((index: number) => <button type="button" key={index}
         aria-current={index === page ? "page" : undefined} disabled={loading}
