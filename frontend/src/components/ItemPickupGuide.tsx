@@ -7,13 +7,45 @@ interface ItemPickupGuideProps {
   phone?: string;
   onBack: () => void;
   onClose: () => void;
+  compact?: boolean;
+  confirmed?: boolean;
 }
 
 // PRD 4.3-C · M3 — 기관 방문 안내이며 수령 신청이나 소유 확인 완료를 처리하지 않는다.
-export function ItemPickupGuide({ itemName, institutionName, address, phone, onBack, onClose }: ItemPickupGuideProps) {
+export function ItemPickupGuide({ itemName, institutionName, address, phone, onBack, onClose, compact = false, confirmed = false }: ItemPickupGuideProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const dialNumber = phone?.replace(/[^\d+]/g, "");
   useEffect(() => { headingRef.current?.focus({ preventScroll: true }); }, []);
+  const actions = <footer className="pickup-guide-actions">
+    <button className="pickup-back" type="button" onClick={onBack}>물품 정보 다시 보기</button>
+    <button className="pickup-done" type="button" disabled={confirmed} onClick={onClose}>확인했어요</button>
+  </footer>;
+  // PRD 4.3-C — 대화에서는 핵심 연락처와 수령 순서를 한 말풍선 안에 간결하게 안내한다.
+  if (compact) return <>
+    <div className="pickup-guide-compact" role="region" aria-label="물품 수령 안내 내용">
+      <h3 ref={headingRef} tabIndex={-1}>이렇게 수령해 주세요</h3>
+      <section className="pickup-contact" aria-label="수령 문의 기관">
+        <strong>{institutionName}</strong>
+        <dl>
+          <div><dt>주소</dt><dd>{address || "주소 정보가 없어요. 기관에 위치를 확인해주세요."}</dd></div>
+          <div className="pickup-contact-phone"><dt>전화</dt><dd>{phone && dialNumber
+            ? <a href={`tel:${dialNumber}`}>{phone}</a>
+            : "연락처 정보가 없어요. 해당 기관의 공식 안내에서 확인해주세요."}</dd></div>
+        </dl>
+      </section>
+      <ol className="pickup-compact-steps" aria-label="수령 순서">
+        <li><span aria-hidden="true">1</span><p><strong>방문 전 전화</strong> 물품명·등록일을 알려주고 현재 보관 장소와 방문 시간을 확인하세요.</p></li>
+        <li><span aria-hidden="true">2</span><p><strong>신분증과 물품 특징 준비</strong> 색상·브랜드·내용물 등 내 물건임을 설명할 정보를 준비하세요.</p></li>
+        <li><span aria-hidden="true">3</span><p><strong>기관 방문 후 수령</strong> 담당자의 안내에 따라 본인과 물품을 확인한 뒤 수령하세요.</p></li>
+      </ol>
+      <details className="pickup-extra">
+        <summary>방문 전 참고사항 · 공식 안내</summary>
+        <p>물품이 다른 기관으로 옮겨졌을 수 있어요. 대리 수령이나 신분증 분실 시 필요한 준비물은 방문 전에 기관에 확인해 주세요.</p>
+        <a className="pickup-source" href="https://www.korea.kr/multi/visualNewsView.do?newsId=148913220" target="_blank" rel="noopener noreferrer">공식 수령 안내 참고 ↗</a>
+      </details>
+    </div>
+    {actions}
+  </>;
   return <>
     <div className="item-detail-content pickup-guide-content" role="region" aria-label="물품 수령 안내 내용" tabIndex={0}>
       <div className="pickup-guide-intro">
@@ -42,9 +74,6 @@ export function ItemPickupGuide({ itemName, institutionName, address, phone, onB
       <p className="pickup-note">대리 수령이나 신분증 분실 시 필요한 준비물은 방문 전에 기관에 확인해주세요.</p>
       <a className="pickup-source" href="https://www.korea.kr/multi/visualNewsView.do?newsId=148913220" target="_blank" rel="noopener noreferrer">공식 수령 안내 참고 ↗</a>
     </div>
-    <footer className="pickup-guide-actions">
-      <button className="pickup-back" type="button" onClick={onBack}>물품 정보 다시 보기</button>
-      <button className="pickup-done" type="button" onClick={onClose}>확인했어요</button>
-    </footer>
+    {actions}
   </>;
 }

@@ -4,7 +4,8 @@ import type { AgentItem, Institution } from "../types";
 
 export const AGENT_ITEM_PAGE_SIZE = 6;
 
-export function AgentResultList({ items, institutions, onOpen, pageSize }: {
+export function AgentResultList({ items, institutions, onOpen, pageSize, selectedItemId }: {
+  selectedItemId?: number;
   pageSize: number;
   items: AgentItem[];
   institutions: Map<number, Institution>;
@@ -13,7 +14,8 @@ export function AgentResultList({ items, institutions, onOpen, pageSize }: {
   return (
     <ul className={`agent-item-list${items.length < pageSize ? " is-sparse" : ""}`}>
       {items.map(item => <li key={item.item_id}>
-        <button type="button" className="agent-item" onClick={() => onOpen(item)}>
+        <button type="button" className={`agent-item${selectedItemId === item.item_id ? " is-selected" : ""}`}
+          aria-pressed={selectedItemId === item.item_id} onClick={() => onOpen(item)}>
           <FoundItemThumbnail item={item} />
           <span className="agent-item-copy">
             <strong className="agent-item-name" title={item.item_name || "이름 미상"}>{item.item_name || "이름 미상"}</strong>

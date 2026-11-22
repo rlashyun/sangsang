@@ -1208,6 +1208,22 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .institution-window small { margin-top: 4px; color: var(--color-brand-accent); font-weight: 700; }
 .institution-window p { margin: 8px 0 0; color: var(--color-text-detail); font-size: 11px; }
 
+/* PRD 4.3-A · 4.4 — 기관·후보·확정 위치에 같은 카드 팝업을 사용한다. */
+.map-popup { position: relative; width: min(360px, calc(100vw - 32px)); margin-bottom: 48px; border: 1px solid var(--color-border-card); border-radius: 14px; background: var(--color-bg-surface); color: var(--color-text-primary); box-shadow: var(--shadow-floating); white-space: normal; overflow-wrap: anywhere; }
+.map-popup-close { position: absolute; z-index: 2; top: 8px; right: 8px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--color-text-secondary); font-size: 20px; cursor: pointer; }
+.map-popup-close:hover { background: var(--color-bg-hover); }
+.map-popup button:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.map-popup .institution-window { width: auto; max-height: none; padding: 0 16px; overflow: visible; }
+.map-popup .institution-window-title { position: static; margin: 0; padding: 16px 28px 12px 0; border-bottom: 1px solid var(--color-border-separator); border-radius: 0; background: transparent; color: var(--color-text-secondary); font-size: 12px; font-weight: 600; }
+.map-popup .institution-window ul { max-height: min(280px, calc(100dvh - 260px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: 0; }
+.map-popup .institution-window li { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-color: var(--color-border-separator); }
+.institution-window-copy { flex: 1; min-width: 0; }
+.map-popup .institution-window .agent-place-confirm { flex: none; min-height: 32px; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
+.map-popup .institution-window strong { margin-bottom: 4px; padding-right: 0; font-weight: 600; }
+.map-popup .institution-window :is(span, small) { font-size: 12px; line-height: 1.5; color: var(--color-text-secondary); }
+.map-popup .institution-window small { margin-top: 4px; font-weight: 400; }
+.map-popup .info-window { width: auto; min-width: 0; max-width: none; padding: 16px 44px 16px 16px; }
+
 .theme-preview {
   position: fixed;
   z-index: 20;
@@ -1928,17 +1944,17 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .item-detail-overview .item-detail-photo { margin-bottom: 8px; }
 .item-detail-overview .item-detail-source { margin: 0 0 12px; color: var(--color-text-secondary); font-size: 10px; line-height: 1.4; }
 .item-detail-body { display: flex; flex-direction: column; }
-.item-match-confirmation { flex: 0 0 auto; margin-top: 0; padding: 16px 28px 20px; border-top: 1px solid var(--color-border-section); text-align: center; }
-.item-match-confirmation > p { margin: 0 0 10px; color: var(--color-text-primary); font-size: 14px; font-weight: 600; }
-.item-match-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(100%, 520px); margin-inline: auto; }
+.item-match-confirmation { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; margin-top: 0; padding: 16px 28px; border-top: 1px solid var(--color-border-section); text-align: left; }
+.item-match-confirmation > p { margin: 0; color: var(--color-text-primary); font-size: 14px; font-weight: 600; }
+.item-match-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: min(100%, 360px); }
 .item-match-actions button, .pickup-guide-actions button { min-height: 42px; padding: 9px 12px; border: 1px solid var(--color-border-control); border-radius: 12px; font-size: 12px; line-height: 1.4; cursor: pointer; }
 .item-match-no, .pickup-back { color: var(--color-text-secondary); background: var(--color-bg-surface); }
 .item-match-yes, .pickup-done { color: var(--color-text-on-solid); background: var(--color-action); }
 .item-match-no:hover, .pickup-back:hover { background: var(--color-bg-hover); }
 .item-match-yes:hover, .pickup-done:hover { background: var(--color-action-hover); }
 @media (min-width: 821px) {
-  .item-detail-content { grid-template-columns: minmax(260px, .9fr) minmax(0, 1.1fr); align-items: stretch; gap: 28px; }
-  .item-detail-body { padding-left: 28px; }
+  .item-detail-content { grid-template-columns: minmax(240px, .8fr) minmax(0, 1.2fr); align-items: start; gap: 32px; }
+  .item-detail-body { padding-left: 0; border-left: 0; }
 }
 .item-detail-content.pickup-guide-content { display: block; padding: 24px 28px; }
 .pickup-kicker { margin: 0 0 6px; font-size: 11px; font-weight: 500; color: var(--color-action-text); }
@@ -1970,15 +1986,22 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   .pickup-guide-actions { padding: 12px 20px max(12px, env(safe-area-inset-bottom)); }
 }
 
-@media (max-width: 820px) { .item-match-confirmation { padding: 12px 20px max(14px, env(safe-area-inset-bottom)); } }
+@media (max-width: 820px) {
+  .item-match-confirmation { flex-direction: column; align-items: stretch; gap: 12px; padding: 12px 20px max(14px, env(safe-area-inset-bottom)); }
+  .item-match-actions { width: 100%; }
+}
 
 /* PRD 4.3-C · 4.4 — 왼쪽은 큰 사진, 오른쪽은 물품 정보 전체를 순서대로 둔다. */
 .item-detail-overview .item-detail-photo { height: 340px; min-height: 340px; max-height: 340px; }
 .item-detail-body > .item-detail-name { margin: 0 0 16px; }
-.item-detail-body .item-detail-basics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 4px; }
-.item-detail-body .item-detail-basics > div { display: flex; flex-direction: column; gap: 4px; margin: 0; min-width: 0; }
-.item-detail-basics dt { font-size: 11px; }
-.item-detail-basics dd { font-size: 12px; line-height: 1.5; }
+/* PRD 4.3-C · 4.4 — 기본 정보와 기관 정보의 항목 시작선을 통일한다. */
+.item-detail-body .item-detail-name { margin-bottom: 16px; }
+.item-detail-body .item-detail-fields { display: grid; gap: 8px; margin: 0; }
+.item-detail-body .item-detail-fields > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; margin: 0; min-width: 0; align-items: baseline; }
+.item-detail-body .item-detail-fields :is(dt, dd) { font-size: 13px; line-height: 1.6; }
+.item-detail-body .item-detail-contact-row { align-items: center; }
+.item-detail-section { margin-top: 24px; min-width: 0; }
+.item-detail-section h3 { margin: 0 0 12px; }
 .item-detail-fields .item-detail-contact-row { align-items: center; }
 .item-detail-contact-row a { font-variant-numeric: tabular-nums; }
 .pickup-contact dl > .pickup-contact-phone { align-items: center; }
@@ -2023,9 +2046,20 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 
 /* PRD 4.3-A · 4.4 — 대화 패널을 기존 지도 위에 놓고 모바일에서는 지도 위쪽을 열어 둔다. */
-.agent-shell { --search-panel-width: min(450px, calc(48vw - 24px)); --agent-drawer-width: calc(var(--search-panel-width) * .85); }
+.agent-shell {
+  --search-panel-width: min(450px, calc(48vw - 24px));
+  --agent-drawer-width: calc(var(--search-panel-width) * .85);
+  --agent-footer-inset: 16px;
+  /* PRD 4.3-A · 4.4 — 파란 말풍선·선택 강조를 살리고 주변은 부드러운 중립색으로 받친다. */
+  --agent-surface-rest: #f7f8fb;
+  --agent-border-rest: #e2e7ee;
+  --agent-border-choice: #d8e2ef;
+  --agent-surface-hover: #f2f6fc;
+  --agent-border-hover: #b8cae1;
+}
 .agent-panel {
-  --agent-panel-padding: 14px;
+  /* PRD 4.3-A · 4.4 — 말풍선의 친근함을 유지하며 여백과 시작선을 정렬한다. */
+  --agent-panel-padding: 16px;
   position: relative;
   z-index: 5;
   display: flex;
@@ -2035,7 +2069,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   min-height: 0;
   margin: var(--layout-gutter);
   padding: var(--agent-panel-padding);
-  gap: 10px;
+  gap: 12px;
   overflow: hidden;
   border: 1px solid var(--color-border-panel);
   border-radius: 20px;
@@ -2044,11 +2078,12 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   color: var(--color-text-primary);
   font-size: 13px;
 }
-.agent-summary { display: grid; gap: 4px; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--color-bg-hover); }
+.agent-summary { display: grid; gap: 4px; margin: 0; padding: 12px; border-radius: 12px; background: var(--agent-surface-rest); }
 .agent-summary > div { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 4px 8px; line-height: 24px; }
 .agent-summary > div + div { border-top: 1px solid var(--color-border-card); padding-top: 4px; }
 .agent-summary dt { flex: 0 0 68px; color: var(--color-text-secondary); }
-.agent-summary dd { flex: 1 1 95px; overflow-wrap: anywhere; margin: 0; font-weight: 700; }
+.agent-summary dd { flex: 1 1 95px; overflow-wrap: anywhere; margin: 0; font-weight: 600; }
+.agent-summary .agent-summary-pending { color: var(--color-text-secondary); font-weight: 400; }
 .agent-summary button, .agent-list-heading button, .agent-status button {
   padding: 4px 2px;
   border: 0;
@@ -2057,27 +2092,27 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   cursor: pointer;
 }
 .agent-result-actions { display: flex; flex-wrap: wrap; gap: 8px; align-self: flex-start; }
-.agent-result-followup { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; }
+.agent-result-followup { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
 .agent-result-followup > p { margin: 0; line-height: 1.6; }
 .agent-action-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 7px 10px;
-  border: 1px solid var(--color-border-control);
+  border: 1px solid var(--agent-border-choice);
   border-radius: 9px;
   background: transparent;
-  color: var(--color-action-text);
+  color: var(--color-text-primary);
   font: inherit;
   text-decoration: none;
   cursor: pointer;
 }
 .action-icon { display: block; flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.agent-action-chip:hover { background: var(--color-bg-selected); }
+.agent-action-chip:hover { background: var(--agent-surface-hover); }
 .agent-action-chip:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .agent-radius-footer { margin-top: 0; }
 .agent-radius-footer .item-radius-actions { flex-wrap: wrap; }
-.agent-feed { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 9px; padding: 2px; }
+.agent-feed { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 12px; padding: 0; }
 /* PRD 4.3-A — 스크롤은 패널 오른쪽 끝에 얇게, 실제 이동 중에만 표시한다. */
 .agent-feed {
   --chat-scrollbar-thumb: transparent;
@@ -2098,6 +2133,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 /* PRD 4.3-A — 대화는 입력창 위에서 시작해 시간순으로 쌓인다. 넘치면 위로 스크롤한다. */
 .agent-feed::before { content: ""; margin-top: auto; }
 .agent-feed > * { flex-shrink: 0; }
+.agent-feed:focus { outline: none; }
 .agent-bubble {
   align-self: flex-start;
   max-width: 91%;
@@ -2121,16 +2157,16 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 .agent-pagination { justify-content: center; margin-block: 4px; }
 .agent-pagination button[aria-current="page"] { background: var(--color-bg-selected); color: var(--color-action-text); font-weight: 700; }
-.agent-candidates, .agent-item-list { display: grid; gap: 7px; padding: 0; margin: 0; list-style: none; }
-.agent-candidates .agent-place-card { display: grid; grid-template-columns: minmax(0, 1fr) 112px; height: 60px; overflow: hidden; border: 1px solid var(--color-border-card); border-radius: 12px; background: var(--color-bg-surface); }
+.agent-candidates, .agent-item-list { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.agent-candidates .agent-place-card { display: grid; grid-template-columns: minmax(0, 1fr) 88px; height: 60px; overflow: hidden; border: 1px solid var(--agent-border-rest); border-radius: 12px; background: var(--color-bg-surface); }
 .agent-place-card.is-selected { border-color: var(--color-action); background: var(--color-bg-selected); }
-.agent-candidates .agent-place-card:hover, .agent-candidates .agent-place-card:focus-within { background: var(--color-bg-selected); }
-.agent-place-card .agent-candidate { grid-area: 1 / 1 / 2 / -1; min-width: 0; padding-block: 8px; padding-right: 112px; border: 0; border-radius: 0; background: transparent; }
+.agent-candidates .agent-place-card:not(.is-selected):is(:hover, :focus-within) { background: var(--agent-surface-hover); }
+.agent-place-card .agent-candidate { grid-area: 1 / 1 / 2 / -1; min-width: 0; padding-block: 8px; padding-right: 88px; border: 0; border-radius: 0; background: transparent; }
 .agent-place-card .agent-candidate > span:last-child { min-width: 0; }
 .agent-place-card .agent-candidate :is(strong, small) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .agent-place-card-action { grid-area: 1 / 1 / 2 / -1; display: flex; justify-content: flex-end; align-items: center; padding-right: 8px; pointer-events: none; }
 .agent-place-card-action .agent-place-confirm { pointer-events: auto; min-height: 30px; padding: 5px 8px; font-size: 12px; line-height: 1.4; white-space: nowrap; }
-.agent-place-replies { display: flex; align-self: flex-start; flex-wrap: wrap; gap: 6px; padding-block: 3px; }
+.agent-place-replies { display: flex; align-self: flex-start; flex-wrap: wrap; gap: 8px; padding-block: 4px; }
 /* PRD 4.3-A — 챗봇 답안처럼 내용 길이에 맞춘 둥근 테두리 버튼. */
 .agent-place-replies .agent-action-chip {
   justify-content: center;
@@ -2142,15 +2178,15 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   font-size: 12px;
   line-height: 1.4;
 }
-.agent-place-replies .agent-place-next { background: var(--color-bg-selected); color: var(--color-action-text); }
-.agent-place-replies .agent-action-chip:hover { background: var(--color-bg-hover); border-color: var(--color-action); }
+.agent-place-replies .agent-place-next { background: var(--agent-surface-rest); color: var(--color-action-text); }
+.agent-place-replies .agent-action-chip:hover { background: var(--agent-surface-hover); border-color: var(--agent-border-hover); }
 @media (max-width: 820px) {
   .agent-place-replies .agent-action-chip { min-height: 36px; }
 }
 .agent-confirmed-card {
   display: grid;
   align-self: start;
-  gap: 3px;
+  gap: 4px;
   width: min(100%, 320px);
   padding: 9px 12px;
   border: 1px solid var(--color-border-card);
@@ -2159,7 +2195,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   overflow-wrap: anywhere;
 }
 .agent-confirmed-card small { color: var(--color-text-secondary); }
-.agent-confirmed-card small:first-child { color: var(--color-action-text); }
+.agent-confirmed-card small:first-child { color: var(--color-text-secondary); }
 .agent-candidate, .agent-item {
   display: flex;
   align-items: center;
@@ -2173,7 +2209,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   color: var(--color-text-primary);
   cursor: pointer;
 }
-.agent-item:hover { background: var(--color-bg-selected); }
+.agent-item:hover { background: var(--agent-surface-hover); }
+.agent-drawer .agent-item.is-selected { background: var(--color-bg-selected); }
 .agent-candidate > span:first-child { border-radius: 50%; width: 24px; height: 24px; display: grid; place-items: center; flex: none; background: var(--color-bg-selected); color: var(--color-action-text); }
 .agent-candidate strong, .agent-candidate small, .agent-item strong, .agent-item small { display: block; overflow-wrap: anywhere; }
 .agent-candidate small, .agent-item small { color: var(--color-text-secondary); margin-top: 2px; }
@@ -2191,7 +2228,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-status { padding: 7px 9px; border-radius: 9px; background: var(--color-bg-hover); }
 .agent-status-error { color: var(--color-error); }
 .agent-compose { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border-separator); }
-.agent-compose-row { display: flex; align-items: center; gap: 7px; }
+.agent-compose-row { display: flex; align-items: center; gap: 8px; }
 .agent-compose .agent-photo, .agent-compose .agent-send { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; }
 .agent-compose .agent-photo { background: var(--color-bg-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border-input); border-radius: 10px; }
 .agent-compose .agent-photo:hover { background: var(--color-bg-selected); color: var(--color-action-text); }
@@ -2234,28 +2271,44 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
   color: var(--color-text-primary);
   font-size: 13px;
 }
-.agent-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 14px 12px; border-bottom: 1px solid var(--color-border-separator); }
-.agent-drawer-scope { display: flex; flex: none; min-height: 40px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-border-separator); }
+.agent-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 4px; }
+.agent-drawer-scope { display: flex; flex: none; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 12px 8px; border-bottom: 1px solid transparent; }
 .agent-drawer-scope > div { min-width: 0; }
 .agent-drawer-scope strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-drawer-scope strong { font-size: 12px; font-weight: 600; }
 .agent-drawer-scope button { flex: none; border: 0; background: transparent; padding: 5px 0; font: inherit; font-size: 11px; color: var(--color-action-text); cursor: pointer; }
-.agent-drawer-body { --agent-item-row-height: 84px; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
+.agent-drawer-body { --agent-item-row-height: 84px; flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 0; padding: 4px 0 var(--agent-footer-inset); }
 /* PRD 4.3-A — 제목 아래부터 채우고 남은 높이는 결과 행에 고르게 배분한다. */
 .agent-drawer-body > * { flex-shrink: 0; }
 .agent-drawer .agent-item-list { flex: 1; min-height: 0; gap: 0; grid-auto-rows: minmax(var(--agent-item-row-height), 1fr); }
 .agent-drawer .agent-item-list.is-sparse { grid-auto-rows: var(--agent-item-row-height); align-content: start; }
-.agent-drawer .agent-item { height: 100%; gap: 12px; padding: 4px 12px; border: 0; border-bottom: 1px solid var(--color-border-separator); border-radius: 0; }
+.agent-drawer .agent-item { height: 100%; gap: 12px; padding: 4px 12px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; }
+/* PRD 4.3-A · 4.4 — 구분선은 사진과 같은 시작선에 맞추고 양끝을 비운다. */
+.agent-drawer-scope, .agent-drawer .agent-item, .agent-drawer .agent-pagination { position: relative; }
+.agent-drawer-scope::after, .agent-drawer .agent-item::after, .agent-drawer .agent-pagination::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: var(--color-border-separator);
+  pointer-events: none;
+}
+.agent-drawer-scope::after, .agent-drawer .agent-item::after { bottom: -1px; }
+.agent-drawer .agent-pagination::before { top: 0; }
+/* PRD 4.3-A — 목록 끝은 페이지 영역의 구분선 하나만 사용한다. */
+.agent-drawer .agent-item-list > li:last-child .agent-item { border-bottom: 0; }
+.agent-drawer .agent-item-list > li:last-child .agent-item::after { display: none; }
 /* PRD 4.3-C — 원본은 자르지 않고 고정 영역의 가로·세로 중 먼저 닿는 쪽에 맞춘다. */
-.agent-drawer .agent-item .item-thumbnail { align-self: center; flex: 0 0 72px; width: 72px; height: 72px; min-height: 0; padding: 0; border-radius: 10px; background: var(--color-bg-hover); border-color: var(--color-border-separator); }
+.agent-drawer .agent-item .item-thumbnail { align-self: center; flex: 0 0 72px; width: 72px; height: 72px; min-height: 0; padding: 0; border-radius: 10px; background: var(--agent-surface-rest); border-color: var(--agent-border-rest); }
 .agent-item .item-thumbnail-visual { height: 100%; aspect-ratio: auto; }
 .agent-item .item-thumbnail-visual img { width: 100%; height: 100%; object-fit: contain; }
 .agent-item .item-thumbnail-visual svg { width: 30px; height: 30px; opacity: .65; }
 .agent-item-copy { flex: 1; min-width: 0; }
 .agent-item .agent-item-name { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13px; font-weight: 600; line-height: 1.3; }
-.agent-item-attributes { display: flex; align-items: center; gap: 4px 6px; margin-top: 3px; font-size: 10.5px; color: var(--color-text-secondary); }
+.agent-item-attributes { display: flex; align-items: center; gap: 4px 8px; margin-top: 4px; font-size: 10.5px; color: var(--color-text-secondary); }
 .agent-item-category { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-item-color { padding: 1px 5px; border-radius: 4px; background: var(--color-bg-hover); }
+.agent-item-color { padding: 1px 5px; border-radius: 4px; background: var(--agent-surface-rest); }
 .agent-item .agent-item-meta { display: flex; align-items: baseline; gap: 4px; margin-top: 4px; font-size: 10.5px; line-height: 1.35; }
 .agent-item-storage { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-item-date { flex: none; white-space: nowrap; }
@@ -2264,7 +2317,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-drawer .agent-pagination button[aria-current="page"] { background: transparent; color: var(--color-text-primary); font-weight: 700; }
 .agent-drawer .agent-pagination button:hover { color: var(--color-action-text); }
 .agent-drawer .agent-list-heading, .agent-drawer .agent-bubble, .agent-drawer .agent-pagination { margin-inline: 12px; }
-.agent-drawer .agent-pagination { height: 48px; min-height: 48px; flex-wrap: nowrap; margin: 0; padding: 7px 12px; border-top: 1px solid var(--color-border-separator); align-items: center; }
+.agent-drawer .agent-pagination { height: 49px; min-height: 49px; flex-wrap: nowrap; margin: 0; padding: 8px 12px; border-top: 0; align-items: center; }
 .agent-drawer .agent-radius-footer { padding: 8px 12px; }
 .agent-drawer .agent-status { flex: none; margin: 0 12px 6px; }
 /* 결과 서랍 손잡이 — 채팅 패널(닫힘) 또는 서랍(열림)의 오른쪽 면에 붙어 열고 닫는다(사용자 선택 시안 A). */
@@ -2333,28 +2386,108 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 }
 
 @media (max-width: 820px) {
-  .app-shell.agent-shell { --layout-gutter: 9px; height: calc(100dvh - 64px); min-height: 0; overflow: hidden; display: flex; align-items: stretch; justify-content: end; }
+  .app-shell.agent-shell { --layout-gutter: 9px; --agent-footer-inset: 12px; height: calc(100dvh - 64px); min-height: 0; overflow: hidden; display: flex; align-items: stretch; justify-content: end; }
   .agent-shell .map-panel, .agent-shell #map { min-height: 0; }
   .agent-shell .map-panel { position: absolute; inset: 0 0 56%; }
-  .agent-panel { --agent-panel-padding: 10px; width: calc(100% - 2 * var(--layout-gutter)); height: 56%; margin-bottom: var(--layout-gutter); padding: var(--agent-panel-padding); gap: 6px; }
+  .agent-panel { --agent-panel-padding: 12px; width: calc(100% - 2 * var(--layout-gutter)); height: 56%; margin-bottom: var(--layout-gutter); padding: var(--agent-panel-padding); gap: 8px; }
   .agent-compose input { font-size: 16px; }
   .agent-shell .map-toolbar { bottom: 10px; }
 }
 
-/* 보관기관 핀 정보창 안의 더블클릭 안내 */
-.info-hint {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--color-border, #e5e7eb);
-  color: var(--color-action-text, #2563eb);
-  font-size: 12px;
-  font-weight: 700;
-}
 
 /* 대화 시작 전 첫 화면 안내: 이용 방법 제목, 단계, 구분선, 첫 질문 말풍선 */
-.agent-welcome-title { margin: 2px 2px 0; font-size: 14px; font-weight: 700; color: var(--color-text); }
+/* PRD 4.3-A · 4.3-C — 대화를 보존한 채 상세 카드 한 개만 교체한다. */
+.agent-summary[hidden], .agent-feed[hidden], .agent-compose[hidden] { display: none; }
+.agent-detail-view { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.agent-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--color-border-separator); }
+.agent-detail-heading h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.agent-detail-heading h2:focus { outline: none; }
+.agent-detail-heading > button { flex: none; padding: 6px 0; border: 0; background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.agent-detail-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 12px; scrollbar-width: thin; padding: 2px; }
+.agent-detail-scroll > * { flex-shrink: 0; }
+.agent-detail-view .item-detail-content { overflow: visible; padding: 0; display: block; }
+.agent-detail-view .item-detail-photo { height: 220px; min-height: 220px; max-height: 220px; margin-bottom: 8px; }
+.agent-detail-view .item-detail-source { margin: 0 0 16px; color: var(--color-text-secondary); font-size: 11px; }
+.agent-detail-view .item-detail-body { padding: 0; border: 0; }
+.agent-detail-view .item-detail-name { margin: 8px 0 16px; font-size: 18px; font-weight: 600; }
+.agent-detail-view .item-detail-section h3 { font-size: 14px; font-weight: 600; }
+.agent-detail-view .item-detail-description { font-size: 13px; line-height: 1.6; }
+.agent-detail-view .item-detail-fields dd { overflow-wrap: anywhere; }
+.agent-detail-answers { display: flex; gap: 8px; }
+.agent-detail-answers button { min-width: 64px; justify-content: center; }
+.agent-detail-view .agent-action-chip { align-self: flex-start; }
+.agent-detail-view .pickup-guide-columns { grid-template-columns: 1fr; gap: 20px; }
+.agent-detail-view .pickup-guide-actions { padding: 12px 0; gap: 8px; flex-wrap: wrap; }
+.agent-detail-view .pickup-guide-intro h3 { font-size: 18px; }
+.agent-detail-view .pickup-item-name { margin-bottom: 16px; }
+.agent-chat-detail { flex: none; width: 100%; }
+.agent-chat-detail .agent-detail-answers .agent-action-chip { color: var(--color-text-primary); }
+.agent-survey-reply { color: var(--color-text-primary); }
+.agent-chat-detail .agent-detail-scroll { flex: none; overflow: visible; padding: 0; }
+.agent-detail-card, .agent-pickup-card { width: 91%; max-width: 91%; padding: 12px; }
+.agent-detail-card .agent-detail-heading { margin-bottom: 12px; padding-bottom: 8px; }
+.agent-detail-card .agent-detail-heading h2 { font-size: 12px; color: var(--color-text-secondary); font-weight: 400; }
+.agent-detail-card .item-detail-content { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 10px 12px; align-items: start; }
+.agent-detail-card .item-detail-overview { grid-column: 1; grid-row: 1; }
+.agent-detail-card .item-detail-photo { height: 112px; min-height: 112px; max-height: 112px; margin: 0 0 4px; }
+.agent-detail-card .item-detail-photo { background: var(--agent-surface-rest); }
+.agent-detail-card .item-detail-source { margin: 0; font-size: 10px; line-height: 1.4; }
+.agent-detail-card .item-detail-body { display: contents; }
+.agent-detail-card .item-detail-summary { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.agent-detail-card .item-detail-name { margin: 0; font-size: 15px; line-height: 1.4; }
+.agent-detail-card .item-detail-fields { gap: 4px; }
+.agent-detail-card .item-detail-fields > div { grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+.agent-detail-card .item-detail-fields :is(dt, dd) { font-size: 12px; line-height: 1.5; }
+.agent-detail-card .item-detail-fields a { min-height: 28px; }
+.agent-detail-card .item-detail-section { grid-column: 1 / -1; margin: 0; }
+.agent-detail-card .item-detail-section h3 { margin: 0 0 4px; font-size: 12px; }
+.agent-detail-card .item-detail-description { font-size: 12px; line-height: 1.5; }
+.agent-detail-card > .agent-action-chip { margin-top: 12px; }
+.agent-pickup-card .pickup-contact { padding: 0; border: 0; background: transparent; }
+.agent-pickup-card .pickup-guide-actions { padding-bottom: 0; }
+.pickup-guide-compact { display: grid; gap: 12px; }
+.pickup-guide-compact h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.5; }
+.pickup-guide-compact h3:focus { outline: none; }
+.pickup-guide-compact .pickup-contact > strong { font-size: 13px; line-height: 1.5; }
+.pickup-guide-compact .pickup-contact dl { display: grid; gap: 4px; margin: 4px 0 0; }
+.pickup-guide-compact .pickup-contact dl > div { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; margin: 0; }
+.pickup-guide-compact .pickup-contact a { min-height: 24px; }
+.pickup-compact-steps { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pickup-compact-steps li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.pickup-compact-steps li > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--color-bg-selected); color: var(--color-action-text); font-size: 11px; }
+.pickup-compact-steps p, .pickup-extra p { margin: 0; font-size: 12px; line-height: 1.5; }
+.pickup-compact-steps strong { font-weight: 600; }
+.pickup-extra { font-size: 11px; color: var(--color-text-secondary); }
+.pickup-extra summary { padding: 4px 0; cursor: pointer; }
+.pickup-extra p { margin: 8px 0; }
+.agent-pickup-card .pickup-guide-actions { margin-top: 12px; padding-top: 8px; display: grid; grid-template-columns: 1fr auto; }
+.agent-pickup-card .pickup-guide-actions button { min-height: 32px; padding: 6px 8px; font-size: 12px; }
+.agent-photo-lightbox { width: min(900px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--color-border-card); border-radius: 16px; background: var(--color-bg-surface); }
+.agent-photo-lightbox::backdrop { background: rgb(0 0 0 / 55%); }
+.agent-photo-lightbox button { display: block; margin: 0 0 12px auto; padding: 8px 12px; border: 1px solid var(--color-border-control); border-radius: 8px; background: transparent; color: var(--color-text-primary); cursor: pointer; }
+.agent-photo-lightbox img { display: block; width: 100%; height: min(70dvh, 700px); object-fit: contain; }
+.item-detail-photo-open { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.item-detail-photo-open:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -4px; }
+@media (max-width: 820px) {
+  .agent-panel:has(.agent-chat-detail:not(.is-recorded)) { z-index: 8; }
+  .agent-shell:has(.agent-chat-detail:not(.is-recorded)) .agent-handle { visibility: hidden; }
+}
+/* PRD 4.3-A · 4.4 — 친근한 색면과 형태를 유지하고 글자의 역할만 구분한다. */
+.agent-panel, .agent-drawer, .map-popup, .item-detail {
+  --color-text-primary: #343d46;
+  --color-text-secondary: #66717d;
+  font-weight: 400;
+}
+.map-popup { --color-text-popup: #66717d; --color-text-detail: #66717d; }
+.agent-bubble-agent, .agent-welcome-steps li { color: var(--color-text-primary); font-weight: 400; }
+.agent-candidate strong, .agent-confirmed-card strong, .agent-drawer-head strong { color: var(--color-text-primary); font-weight: 600; }
+.agent-candidate small, .agent-confirmed-card small, .agent-item-attributes, .agent-item .agent-item-meta { color: var(--color-text-secondary); font-weight: 400; }
+.agent-place-confirm { font-weight: 600; }
+.item-detail-fields, .item-detail-description { font-weight: 400; }
+.item-detail-fields dt, .item-detail-basics dd { color: var(--color-text-secondary); }
+.agent-welcome-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
 .agent-welcome-divider { width: 100%; margin: 4px 0; border: 0; border-top: 1px dashed var(--color-border-control); }
-.agent-welcome-steps { display: grid; gap: 10px; margin: 4px 0 0; padding: 0 2px; list-style: none; }
+.agent-welcome-steps { display: grid; gap: 12px; margin: 4px 0 0; padding: 0; list-style: none; }
 .agent-welcome-steps li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.5; color: var(--color-text); }
 .agent-welcome-steps li span {
   flex: none; display: inline-flex; align-items: center; justify-content: center;

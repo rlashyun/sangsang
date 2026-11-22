@@ -51,7 +51,7 @@ export function UsageGuide({ searchPath, surveyUrl, onDismiss, variant = "classi
           <section className="usage-guide-card" aria-labelledby="usage-find-title">
             <h2 id="usage-find-title">물건 찾기</h2>
             <ol>
-              <li>대화창에 물건을 잃어버린 장소를 말해 주세요. 지도에서 보관기관 핀을 두 번 눌러 고를 수도 있어요.</li>
+              <li>대화창에 물건을 잃어버린 장소를 말해 주세요. 지도에서 보관기관 핀을 누른 뒤 ‘장소선택’을 눌러 고를 수도 있어요.</li>
               <li>후보 장소를 확인하고 ‘장소선택’을 눌러요. 다른 장소도 대화로 알려주면 최대 3곳까지 선택할 수 있어요.</li>
               <li>‘검은색 반지갑’, ‘빨간 케이스를 낀 삼성 휴대폰’처럼 물건의 이름이나 특징을 알려주세요. 사진을 첨부하거나 붙여넣을 수도 있어요.</li>
               <li>일치하는 물건이 없으면 1km → 1.5km → 2km까지 자동으로 넓혀 찾아요.</li>
