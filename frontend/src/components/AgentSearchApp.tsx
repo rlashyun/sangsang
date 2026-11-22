@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { AgentRequestError, AgentSessionExpired, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
+import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
 import { DEFAULT_SEARCH_RADIUS_METERS, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
@@ -12,7 +12,7 @@ import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
 import { AgentItemDetail } from "./AgentItemDetail";
 import { KakaoMap } from "./KakaoMap";
-import { NewItemAlert } from "./NewItemAlert";
+import { CONSENT_DETAILS, NewItemAlert } from "./NewItemAlert";
 import { UsageGuide } from "./UsageGuide";
 
 // PRD 4.3-A — 2026-11-21 사용자 피드백: 대화와 확정 버튼의 공간을 확보해 5곳씩 보여준다.
@@ -38,6 +38,10 @@ export function AgentSearchApp() {
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [alertDraft, setAlertDraft] = useState<{ query: string; places: Place[]; radius: number } | null>(null);
+  const [alertConsent, setAlertConsent] = useState(false);
+  const [alertSending, setAlertSending] = useState(false);
+  const alertPending = useRef(false);
   const { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos, retainPhotosInChat, restorePhotos } = useChatPhotos();
   const photoInput = useRef<HTMLInputElement>(null);
   const photoButton = useRef<HTMLButtonElement>(null);
@@ -54,7 +58,7 @@ export function AgentSearchApp() {
   const [tab, setTab] = useState<"chat" | "results">("chat");
   const [progress, setProgress] = useState("");
   const [revealingReplies, setRevealingReplies] = useState(false);
-  const [followupVisible, setFollowupVisible] = useState(false);
+  const [followup, setFollowup] = useState<"hidden" | "prompt" | "actions">("hidden");
   const replyTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const [pendingScope, setPendingScope] = useState<Scope | null>(null);
   const [confirmingPlace, setConfirmingPlace] = useState<AgentPlace | null>(null);
@@ -124,7 +128,7 @@ export function AgentSearchApp() {
   function hideFollowup() {
     replyTimers.current.forEach(clearTimeout);
     replyTimers.current = [];
-    setFollowupVisible(false);
+    setFollowup("hidden");
   }
 
   function revealReplies(replies: ChatMessage[], showFollowup = false) {
@@ -139,7 +143,7 @@ export function AgentSearchApp() {
       setRevealingReplies(false);
     }, Math.max(1, replies.length) * 300));
     if (showFollowup) {
-      replyTimers.current.push(setTimeout(() => setFollowupVisible(true), Math.max(1, replies.length) * 300 + 700));
+      replyTimers.current.push(setTimeout(() => setFollowup("prompt"), Math.max(1, replies.length) * 300 + 700));
     }
   }
 
@@ -283,7 +287,7 @@ export function AgentSearchApp() {
 
   useEffect(() => {
     if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [messages, selectedCandidate, followupVisible, photos.length, photoError]);
+  }, [messages, selectedCandidate, followup, photos.length, photoError, alertDraft]);
 
   function changePlaceCandidates(page: number) {
     setPlacePage(page);
@@ -375,6 +379,11 @@ export function AgentSearchApp() {
       }, request.signal, identity.id);
       sessionIdentity.current = result;
       recoveryRequired.current = false;
+      if (result.prepare_alert && result.conditions.item_query && result.conditions.radius_m) {
+        const places = result.conditions.places ?? (result.conditions.place ? [result.conditions.place] : []);
+        setAlertDraft({ query: result.conditions.item_query, places: places.map(mapPlace), radius: result.conditions.radius_m });
+        setAlertConsent(false); setTab("chat");
+      }
       if (result.status === "error") {
         restorePhotoDescription();
         recoveryRequired.current = ["state_unavailable", "state_conflict"].includes(result.error?.code ?? "");
@@ -511,9 +520,37 @@ export function AgentSearchApp() {
 
   function send(event: FormEvent) {
     event.preventDefault();
-    if (busy || addingPhotos) return;
+    if (busy || addingPhotos || alertPending.current) return;
     const text = draft.trim();
     if (!text && !photos.length) return;
+    // PRD 3.3 · 4.3-E — 이메일은 모델·대화 기록을 거치지 않고 기존 예약 API로만 보낸다.
+    if (alertDraft && !text.includes("@")) {
+      // PRD 4.3-E — 이메일 대기 중에도 취소·질문·검색 조건 변경을 허용한다.
+      setAlertDraft(null); setAlertConsent(false); setError("");
+      if (/취소|그만|안\s*할|안\s*받|하지\s*마/.test(text)) {
+        setDraft("");
+        setMessages(current => [...current, { author: "user", text }, { author: "agent", text: "진행 중인 알림 신청을 취소했어요. 기존에 신청한 알림은 변경되지 않아요." }]);
+        return;
+      }
+    }
+    if (alertDraft && text.includes("@")) {
+      if (!alertConsent) { setError("먼저 개인정보 수집·이용에 동의해 주세요."); return; }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) || text.length > 254) { setError("올바른 이메일 주소만 입력해 주세요."); return; }
+      if (alertPending.current) return;
+      alertPending.current = true; setAlertSending(true); setDraft(""); setError("");
+      void createAlertReservation({ email: text, query: alertDraft.query, places: alertDraft.places.map(({name, latitude, longitude}) => ({name, latitude, longitude})), radius_m: alertDraft.radius, consent: true })
+        .then(() => {
+          setAlertDraft(null);
+          setAlertConsent(false);
+          // PRD 4.3-E — 확인 링크 안내 뒤에는 검색 결과 행동만 표시한다.
+          setFollowup("actions");
+          setMessages(current => [...current, { author: "agent", text: "확인 메일을 보냈어요. 24시간 안에 메일의 확인 링크를 눌러야 알림이 시작돼요." }]);
+        })
+        .catch(error => setError(error instanceof Error && !(error instanceof TypeError) ? error.message : "연결하지 못했어요. 확인 메일이 도착했는지 확인하고, 없다면 이메일을 다시 입력해 주세요."))
+        .finally(() => { alertPending.current = false; setAlertSending(false); });
+      return;
+    }
+    if (text.includes("@")) { setDraft(""); setError("이메일은 알림 신청 안내 뒤 입력해 주세요."); return; }
     if (text) {
       const visibleItemIds = selectedInstitution.length
         ? institutionItemIds
@@ -597,7 +634,11 @@ export function AgentSearchApp() {
   }
 
   function openAlerts() {
-    void navigate(location.pathname + location.search, { state: { agentAlert: true } });
+    if (!conditions?.item_query || !searchCenters.length || placeChanging || conditions.place_operation) {
+      setError("먼저 장소를 확정하고 물품을 검색해 주세요."); return;
+    }
+    setAlertDraft({ query: conditions.item_query, places: [...searchCenters], radius: mappedRadius });
+    setAlertConsent(false); setTab("chat");
   }
 
   function answerItem(answer: "yes" | "no") {
@@ -609,7 +650,7 @@ export function AgentSearchApp() {
     } }]);
     detailRejected.current = true;
     if (window.matchMedia("(max-width: 820px)").matches) setTab("chat");
-    setFollowupVisible(answer === "no");
+    setFollowup(answer === "no" ? "prompt" : "hidden");
     void navigate(-1);
   }
 
@@ -717,10 +758,10 @@ export function AgentSearchApp() {
             {(placePage + 1) * PLACE_PAGE_SIZE < numberedPlaces.length && <button type="button" className="agent-action-chip agent-place-next" disabled={busy}
               onClick={() => changePlaceCandidates(placePage + 1)}>다른 장소 살펴보기</button>}
           </nav>}
-          {followupVisible && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
-            <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
+          {followup !== "hidden" && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
+            {followup === "prompt" && <p className="agent-bubble agent-bubble-agent">{nextRadius !== null
               ? "찾으시는 물건이 없나요? 반경을 넓혀보거나, 비슷한 물건 알림을 받아보세요."
-              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>
+              : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요."}</p>}
             <div className="agent-place-replies agent-result-actions">
               {nextRadius !== null && <button type="button" className="agent-action-chip" disabled={busy}
                   onClick={() => void submit({ type: "change_radius", radius_m: nextRadius })}>
@@ -732,11 +773,21 @@ export function AgentSearchApp() {
             </a>}
             </div>
           </div>}
+        {alertDraft && <section className="agent-bubble agent-bubble-agent agent-alert-setup" aria-label="알림 신청 조건">
+          <p>물건: {alertDraft.query} · 장소: {alertDraft.places.map(place => place.name).join(", ")} · 반경: {radiusKilometersLabel(alertDraft.radius)}</p>
+          <p>등록 다음날부터 7일간 새 유사 물품이 있는 날에만 알려드리고, 마지막 날에는 종료·연장을 안내해요.</p>
+          <details><summary>{CONSENT_DETAILS.title}</summary>
+            <p>수집 항목: {CONSENT_DETAILS.items}</p><p>이용 목적: {CONSENT_DETAILS.purpose}</p>
+            <p>보관 기간: {CONSENT_DETAILS.retention}</p><p>{CONSENT_DETAILS.refusal}</p>
+          </details>
+          <label><input type="checkbox" checked={alertConsent} onChange={event => setAlertConsent(event.target.checked)} disabled={alertSending} /> 개인정보 수집·이용에 동의해요</label>
+          <p>동의 후 아래에 이메일 주소를 입력해 보내 주세요. 확인 메일을 보내드릴게요.</p>
+        </section>}
           {detail && <AgentItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)}
             onBack={() => void navigate(-1)} onAccept={() => answerItem("yes")} onReject={() => answerItem("no")} />}
         </div>
         {!drawerOpen && requestStatus}
-        <form className="agent-compose" onSubmit={send} onPaste={pastePhotos}>
+        <form className="agent-compose" onSubmit={send} onPaste={alertDraft ? undefined : pastePhotos}>
           {canAttachPhotos && (photos.length > 0 || addingPhotos || photoError) && <div className="agent-photo-draft">
             {photos.length > 0 && <ul className="agent-photo-previews" aria-label="보낼 사진">
               {photos.map((photo, index) => <li key={photo.id}>
@@ -752,13 +803,13 @@ export function AgentSearchApp() {
           <label className="sr-only" htmlFor="agent-input">메시지</label>
           <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden aria-label="사진 파일 선택"
             onChange={event => { const files = Array.from(event.currentTarget.files ?? []); event.currentTarget.value = ""; if (files.length) addDraftPhotos(files); }} />
-          <button ref={photoButton} type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos}
+          <button ref={photoButton} type="button" className="agent-photo" aria-label="사진 추가" title="사진 첨부" disabled={busy || addingPhotos || Boolean(alertDraft)}
             onClick={choosePhotos}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1-1.5h5.8l1 1.5h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.2" /></svg>
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
-            maxLength={1000} placeholder={composePlaceholder} />
-          <button ref={sendButton} type="submit" className="agent-send" aria-label="보내기" disabled={busy || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
+            maxLength={alertDraft ? 254 : 1000} disabled={alertSending} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : composePlaceholder} />
+          <button ref={sendButton} type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || (!draft.trim() && (!canAttachPhotos || !photos.length))}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
           </div>
