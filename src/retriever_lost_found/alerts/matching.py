@@ -3,7 +3,10 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Protocol
+
+from ..config import read_optional_env_value
 
 from .errors import safe_error
 from .judge import search_judge
@@ -18,6 +21,16 @@ class SimilarityJudge(Protocol):
 
 # 설계 3.2 — 1번 검색(동의어·BM25)의 키워드 단계로 판정한다(2026-11-15, alerts/judge.py).
 SIMILARITY_JUDGE: SimilarityJudge = search_judge
+
+
+def cron_judge() -> SimilarityJudge:
+    """2026-11-23 사용자 결정 — 알림 크론은 Jev 제외를 더한 판정을 쓴다. 키가 없으면 기존 판정 그대로."""
+    key = read_optional_env_value("OPENROUTER_API_KEY")
+    if not key:
+        return SIMILARITY_JUDGE
+    from ..integrations.jev import OpenRouterDecisions
+    from ..search.jev_filter import JevFilter
+    return partial(search_judge, jev=JevFilter(OpenRouterDecisions(key)))
 
 
 @dataclass(frozen=True)
