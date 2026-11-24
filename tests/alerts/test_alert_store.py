@@ -76,14 +76,21 @@ class SupabaseAlertStoreTests(unittest.TestCase):
     @patch(URLOPEN)
     def test_get_reservation_embeds_the_places_in_screen_order(self, urlopen) -> None:
         urlopen.return_value = FakeResponse(
-            [{"id": 7, "places": [{"name": "시청", "position": 2}, {"name": "서울역", "position": 1}]}]
+            [{"id": 7, "places": [
+                {"name": "시청", "position": 2, "latitude": 37.5663, "longitude": 126.9779},
+                {"name": "서울역", "position": 1, "latitude": 37.5547, "longitude": 126.9707},
+            ]}]
         )
 
         reservation = self.store.get_reservation(7)
 
-        self.assertEqual(reservation["places"], [{"name": "서울역"}, {"name": "시청"}])
+        # 결과 링크 화면이 지도를 저장된 장소로 옮기도록 좌표도 함께 읽는다.
+        self.assertEqual(reservation["places"], [
+            {"name": "서울역", "latitude": 37.5547, "longitude": 126.9707},
+            {"name": "시청", "latitude": 37.5663, "longitude": 126.9779},
+        ])
         url = urllib.parse.unquote(urlopen.call_args.args[0].full_url)
-        self.assertIn("places:alert_reservation_places(name:place_name,position)", url)
+        self.assertIn("places:alert_reservation_places(name:place_name,position,latitude,longitude)", url)
         self.assertNotIn("place_name,", url.split("places:")[0])
 
     @patch(URLOPEN)
