@@ -291,7 +291,7 @@ supabase/migrations/         운영 적용 이력과 새 변경 SQL
 tests/                       기능 영역별 테스트
 ```
 
-**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/alerts`·`/api/alerts/{summary,confirm,extend,cancel}`(무캐시, ③ 스케줄러) · `/alerts/{confirm,extend,cancel}`(메일 링크 화면) · `/api/cron/{partner,police}-sync` · `/api/cron/alert-send`(Bearer 인증)
+**엔드포인트** — `/` · `/api/geocode` · `/api/institutions`(CDN 5분 캐시) · `/api/found-items`(무캐시) · `/api/places` · `/api/alerts`·`/api/alerts/{summary,results,confirm,extend,cancel}`(무캐시, ③ 스케줄러) · `/alerts/{confirm,extend,cancel,results}`(메일 링크 화면) · `/api/cron/{partner,police}-sync` · `/api/cron/alert-send`(Bearer 인증)
 
 ---
 

@@ -137,6 +137,40 @@ class TemplateTests(unittest.TestCase):
         self.assertIn("1. 에어팟 1", email.text)
         self.assertIn("2. 에어팟 2", email.text)
 
+    def test_view_link_opens_that_mails_items_and_points_to_them_for_the_rest(self) -> None:
+        # PRD 4.3-E(2026-11-24) — "리트리버에서 보기"는 홈이 아니라 그 메일의 물품 화면을 연다.
+        reservation = reservation_row()
+        links = mail_links(TEST_SETTINGS, reservation, NOW, message_id=42)
+
+        email = match_email("user@example.com", reservation, links, [item(i) for i in range(1, 7)])
+
+        self.assertTrue(links.results.startswith("https://retriever.example/alerts/results?token=7."))
+        self.assertTrue(links.results.endswith("&message=42"))
+        self.assertIn(f"리트리버에서 보기: {links.results}", email.text)
+        self.assertNotIn("리트리버에서 보기: https://retriever.example/\n", email.text)
+        self.assertIn("그 밖에 1개가 더 있습니다. '리트리버에서 보기'에서 모두 확인할 수 있어요.", email.text)
+        self.assertNotIn("같은 조건으로 검색해", email.text)
+
+    def test_final_notice_with_items_opens_that_mails_items(self) -> None:
+        reservation = reservation_row()
+        links = mail_links(TEST_SETTINGS, reservation, NOW, message_id=43)
+
+        with_items = expiry_notice_email("user@example.com", reservation, links, [item(1)])
+        without_items = expiry_notice_email("user@example.com", reservation, links)
+
+        self.assertIn(f"리트리버에서 보기: {links.results}", with_items.text)
+        # 물품이 없는 마지막 날 안내에는 결과 화면 링크를 넣지 않는다.
+        self.assertNotIn("/alerts/results", without_items.text)
+
+    def test_links_without_a_mail_number_keep_the_home_link(self) -> None:
+        # 메일 번호를 모르는 경로(발송 테스트 등)는 예전처럼 홈으로 간다.
+        reservation = reservation_row()
+
+        email = match_email("user@example.com", reservation, links_for(reservation), [item(1)])
+
+        self.assertIsNone(links_for(reservation).results)
+        self.assertIn("리트리버에서 보기: https://retriever.example/\n", email.text)
+
     def test_user_input_is_escaped_in_html_and_kept_out_of_the_subject(self) -> None:
         reservation = reservation_row(query="<script>alert(1)</script>", places=[{"name": "서울역 <b>"}])
 

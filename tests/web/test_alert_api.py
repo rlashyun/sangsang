@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -54,14 +55,14 @@ class AlertApiTests(unittest.TestCase):
     def test_mail_link_paths_open_the_app_without_leaking_the_token(self) -> None:
         # 설계 5.4 — 메일 링크가 404가 아니라 React 앱(index.html)을 연다. 토큰이 든 주소가
         # 외부 요청의 Referer로 나가지 않고, 캐시되지 않는다.
-        for path in ("/alerts/confirm", "/alerts/extend", "/alerts/cancel"):
+        for path in ("/alerts/confirm", "/alerts/extend", "/alerts/cancel", "/alerts/results"):
             with self.subTest(path=path):
                 response = self.client.get(f"{path}?token=7.{'0' * 32}")
                 self.assertEqual(response.status_code, 200)
                 self.assertIn("text/html", response.headers["content-type"])
                 self.assertEqual(response.headers["referrer-policy"], "no-referrer")
                 self.assertEqual(response.headers["cache-control"], "no-store")
-        # 정한 세 경로 밖은 그대로 404다.
+        # 정한 네 경로 밖은 그대로 404다.
         self.assertEqual(self.client.get("/alerts/other").status_code, 404)
 
     def test_opening_a_link_page_changes_nothing(self) -> None:
@@ -118,6 +119,41 @@ class AlertApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["error"], "링크가 올바르지 않습니다.")
 
+    def queue_mail(self, *, description: str = "") -> tuple[str, int]:
+        self.store.add_location(1, 37.5547, 126.9707)
+        reservation_id = self.store.add_active_reservation(query="블랙 에어팟")
+        self.store.add_found_item(1, storage_location_id=1, item_name="검정 에어팟", description=description)
+        message_id = self.store.queue_match(reservation_id, [1], score=0.9)
+        return link_token(TEST_SETTINGS.secret, reservation_id, "nonce-1"), message_id
+
+    def test_results_return_the_mailed_items_in_the_chat_item_shape(self) -> None:
+        # PRD 4.3-E(2026-11-24) — 메일 링크 화면이 같은 물품 카드로 그 메일의 물품을 보여 준다.
+        token, message_id = self.queue_mail(description="주인 연락처 010-1234-5678")
+
+        response = self.client.get("/api/alerts/results", params={"token": token, "message": str(message_id)})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        body = response.json()
+        self.assertEqual(body["query"], "블랙 에어팟")
+        (item,) = body["items"]
+        self.assertEqual((item["item_id"], item["institution_id"], item["item_name"]), (1, 1, "검정 에어팟"))
+        # PRD 3.3 · Q5 — 브라우저로 나가는 물품은 가린 사본이다. D2 — 점수는 내보내지 않는다.
+        self.assertNotIn("010-1234-5678", json.dumps(body, ensure_ascii=False))
+        self.assertNotIn("score", item)
+
+    def test_results_with_a_bad_link_are_400(self) -> None:
+        token, message_id = self.queue_mail()
+
+        self.assertEqual(
+            self.client.get("/api/alerts/results", params={"token": token, "message": str(message_id)}).status_code, 200
+        )
+        for params in ({"token": token, "message": "999"}, {"token": token}, {"token": "garbage", "message": "1"}):
+            with self.subTest(params=params):
+                response = self.client.get("/api/alerts/results", params=params)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["error"], "링크가 올바르지 않습니다.")
+
 
 class AlertApiWithoutSettingsTests(unittest.TestCase):
     def test_every_alert_endpoint_is_503_when_mail_is_not_configured(self) -> None:
@@ -125,6 +161,9 @@ class AlertApiWithoutSettingsTests(unittest.TestCase):
 
         self.assertEqual(client.post("/api/alerts", json=PAYLOAD).status_code, 503)
         self.assertEqual(client.get("/api/alerts/summary", params={"token": "1." + "0" * 32}).status_code, 503)
+        self.assertEqual(
+            client.get("/api/alerts/results", params={"token": "1." + "0" * 32, "message": "1"}).status_code, 503
+        )
         for action in ("confirm", "extend", "cancel"):
             self.assertEqual(client.post(f"/api/alerts/{action}", json={"token": "x"}).status_code, 503)
 

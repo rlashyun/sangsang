@@ -11,6 +11,7 @@ import { useMobileChatSheet } from "../lib/useMobileChatSheet";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AlertManagementChat } from "./AlertManagementChat";
+import { AlertResultsChat } from "./AlertResultsChat";
 import { AgentSheetGrip } from "./AgentSheetGrip";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
@@ -69,7 +70,8 @@ export function AgentSearchApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const sheet = useMobileChatSheet();
-  const mailAction = location.pathname === "/alerts/extend" ? "extend" : location.pathname === "/alerts/cancel" ? "cancel" : null;
+  const mailAction = location.pathname === "/alerts/extend" ? "extend" : location.pathname === "/alerts/cancel" ? "cancel"
+    : location.pathname === "/alerts/results" ? "results" : null;
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const returned = location.state?.alertReturn;
@@ -921,6 +923,14 @@ export function AgentSearchApp() {
     void navigate(location.pathname + location.search, { replace: Boolean(detail), state: { agentItemId: item.item_id }, flushSync: true });
   }
 
+  // PRD 4.3-E(2026-11-24) — 메일 결과 화면의 "전체 검색 결과도 보기"는 저장된 조건을 평소 검색 문장으로 보낸다.
+  function searchSavedAlert(text: string) {
+    if (busy || controller.current || revealingRepliesRef.current || alertPending.current) return false;
+    void submit({ type: "message", text, changing_place: false, visible_item_ids: [],
+      dialogue: { task: "search", alert: null, awaiting: null, last_message: "" } });
+    return true;
+  }
+
   function openAlerts() {
     if (!conditions?.item_query || !searchCenters.length || placeChanging || conditions.place_operation) {
       setError("먼저 장소를 확정하고 물품을 검색해 주세요."); return;
@@ -1044,7 +1054,10 @@ export function AgentSearchApp() {
             <hr className="agent-welcome-divider" /></>}
             {/* PRD 4.3-A — 첫 안내 문장은 대화가 시작돼도 기록 맨 위에 남긴다. */}
             {!mailAction && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
-            {mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
+            {mailAction === "results"
+              ? <AlertResultsChat institutions={institutionIndex} selectedItemId={openItem?.item_id} onOpen={openDetail}
+                onSearchAll={searchSavedAlert} searchDisabled={busy || Boolean(activeRun)} />
+              : mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
           {messages.map((message, index) => <Fragment key={index}>
             {alertDraft && alertAnchor === index && alertSetup}
             {"itemConversation" in message

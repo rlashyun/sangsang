@@ -1,5 +1,5 @@
 import type {
-  AgentEvent, AgentMatches, AgentResponse, AgentTurn,
+  AgentEvent, AgentItem, AgentMatches, AgentResponse, AgentTurn,
   FoundItemsPayload,
   InstitutionPayload,
   Place,
@@ -145,6 +145,13 @@ export type AlertSummary = {
 };
 export function fetchAlertSummary(token: string, signal?: AbortSignal) {
   return fetchJson<AlertSummary>(`/api/alerts/summary?${new URLSearchParams({ token })}`, signal);
+}
+// PRD 4.3-E(2026-11-24) — 결과 메일 한 통이 알린 물품. 대화 검색과 같은 물품 모양이며 점수는 없다.
+export type AlertResults = {
+  status: string; query: string; places: { name: string }[]; radius_m: number; items: AgentItem[];
+};
+export function fetchAlertResults(token: string, message: string, signal?: AbortSignal) {
+  return fetchJson<AlertResults>(`/api/alerts/results?${new URLSearchParams({ token, message })}`, signal);
 }
 // PRD 4.3-E — 토큰은 예약 API에만 보내며 검색 대화·모델에 전달하지 않는다.
 export async function manageAlertReservation(action: "extend" | "cancel", token: string) {
