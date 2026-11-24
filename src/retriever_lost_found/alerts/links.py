@@ -20,6 +20,8 @@ LINK_PATHS = {
     "confirm": "/alerts/confirm",
     "extend": "/alerts/extend",
     "cancel": "/alerts/cancel",
+    # PRD 4.3-E(2026-11-24 결정) — 결과 메일의 "리트리버에서 보기"는 그 메일이 알린 물품을 바로 연다.
+    "results": "/alerts/results",
 }
 _TOKEN_PATTERN = re.compile(r"([1-9]\d{0,17})\.([0-9a-f]{32})")
 
@@ -30,6 +32,7 @@ class MailLinks:
     cancel: str
     confirm: str | None = None
     extend: str | None = None
+    results: str | None = None  # 결과 메일 한 통의 물품 화면. 메일 번호를 알 때만 만든다.
 
 
 def new_link_nonce() -> str:
@@ -96,7 +99,9 @@ def last_alert_day(expires_at: str | datetime) -> date:
     return (parse_timestamp(expires_at).astimezone(KOREA_TIMEZONE) - timedelta(seconds=1)).date()
 
 
-def mail_links(settings: AlertSettings, reservation: dict[str, Any], now: datetime) -> MailLinks:
+def mail_links(
+    settings: AlertSettings, reservation: dict[str, Any], now: datetime, message_id: int | None = None
+) -> MailLinks:
     token = link_token(settings.secret, int(reservation["id"]), str(reservation["link_nonce"]))
     base = settings.public_base_url
 
@@ -113,4 +118,5 @@ def mail_links(settings: AlertSettings, reservation: dict[str, Any], now: dateti
         cancel=url("cancel"),
         confirm=url("confirm") if reservation["status"] == "pending" else None,
         extend=url("extend") if can_extend else None,
+        results=f"{url('results')}&message={int(message_id)}" if message_id is not None else None,
     )

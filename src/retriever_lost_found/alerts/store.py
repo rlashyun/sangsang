@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from ..config import read_env_value, read_optional_env_value
+from ..integrations.supabase import SupabaseFoundItemClient
 from ..integrations.supabase_rest import SupabaseRestClient
 
 # 설계 16장 — 장소는 alert_reservation_places에서 화면 순서(position)대로 함께 읽는다.
@@ -54,6 +55,10 @@ class AlertStore(Protocol):
     def extend_reservation(self, reservation_id: int) -> dict[str, Any]: ...
 
     def cancel_reservation(self, reservation_id: int) -> str: ...
+
+    def message_items(self, reservation_id: int, message_id: int) -> list[dict[str, Any]] | None:
+        """결과 메일 한 통이 알린 물품(기관이 연결된 것만). 그 예약의 결과 메일이 아니면 None."""
+        ...
 
     def match_queue(self, item_source_code: str) -> list[dict[str, Any]]: ...
 
@@ -163,6 +168,45 @@ class SupabaseAlertStore(SupabaseRestClient):
 
     def cancel_reservation(self, reservation_id: int) -> str:
         return str(self._rpc("cancel_alert_reservation", {"p_reservation_id": int(reservation_id)}))
+
+    def message_items(self, reservation_id: int, message_id: int) -> list[dict[str, Any]] | None:
+        """PRD 4.3-E — 메일 링크 화면(2026-11-24). 읽기만 하며 새 DB 함수 없이 기존 표를 본다.
+
+        메일 번호가 이 예약의 결과 메일(match·expiry_notice)인지 먼저 확인한다(남의 메일 번호 차단).
+        기관이 끊긴 물품은 빼고 돌려준다(AGENTS.md 절대 규칙 5).
+        """
+        scope = {"reservation_id": f"eq.{int(reservation_id)}"}
+        messages = self._request(
+            "GET",
+            "alert_messages",
+            query={"select": "id", "id": f"eq.{int(message_id)}", "kind": "in.(match,expiry_notice)", **scope},
+        )
+        if not isinstance(messages, list):
+            raise RuntimeError("Supabase 알림 API 응답 형식이 올바르지 않습니다.")
+        if not messages:
+            return None
+        notes = self._request(
+            "GET",
+            "alert_notified_items",
+            query={"select": "found_item_id,score", "message_id": f"eq.{int(message_id)}", **scope},
+        )
+        if not isinstance(notes, list):
+            raise RuntimeError("Supabase 알림 API 응답 형식이 올바르지 않습니다.")
+        scores = {int(note["found_item_id"]): note.get("score") for note in notes}
+        if not scores:
+            return []
+        rows = self._request(
+            "GET",
+            "found_items",
+            query={
+                "select": SupabaseFoundItemClient.SELECT_FIELDS,
+                "id": f"in.({','.join(str(item_id) for item_id in sorted(scores))})",
+                "storage_location_id": "not.is.null",
+            },
+        )
+        if not isinstance(rows, list):
+            raise RuntimeError("Supabase 알림 API 응답 형식이 올바르지 않습니다.")
+        return [{**row, "score": scores.get(int(row["id"]))} for row in rows if isinstance(row, dict)]
 
     def match_queue(self, item_source_code: str) -> list[dict[str, Any]]:
         return list(self._rpc("alert_match_queue", {"p_item_source_code": item_source_code}) or [])

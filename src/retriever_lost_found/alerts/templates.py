@@ -20,6 +20,7 @@ OWNERSHIP_NOTICE = "본인 물건인지는 보관기관에 직접 확인해 주�
 # PRD 4.3-E — 마지막 날 종료·연장 안내 문구(2026-11-08 결정)
 FINAL_NOTICE = "이번 알림은 종료되며 이후에는 메일이 발송되지 않아요."
 EXTEND_INVITATION = "계속 받고 싶다면 연장해 주세요."
+VIEW_LABEL = "리트리버에서 보기"
 _WEEKDAYS = "월화수목금토일"
 
 
@@ -113,14 +114,23 @@ def confirmation_email(to: str, reservation: dict[str, Any], links: MailLinks) -
     return _render(to, CONFIRM_SUBJECT, paragraphs, [(label, url) for label, url in actions if url])
 
 
-def _item_lines(reservation: dict[str, Any], items: Sequence[dict[str, Any]]) -> str:
+def _item_lines(reservation: dict[str, Any], items: Sequence[dict[str, Any]], links: MailLinks) -> str:
     shown = items[:MAX_ITEMS_PER_MAIL]
     show_place = len(reservation["places"]) > 1
     lines = [f"{index}. {_item_line(item, show_place=show_place)}" for index, item in enumerate(shown, start=1)]
     hidden = len(items) - len(shown)
     if hidden > 0:
-        lines.append(f"그 밖에 {hidden}개가 더 있습니다. 리트리버에서 같은 조건으로 검색해 확인해 주세요.")
+        # PRD 4.3-E(2026-11-24) — 결과 화면 링크가 있으면 메일이 알린 물품을 모두 그 화면에서 본다.
+        rest = (
+            f"'{VIEW_LABEL}'에서 모두 확인할 수 있어요." if links.results
+            else "리트리버에서 같은 조건으로 검색해 확인해 주세요."
+        )
+        lines.append(f"그 밖에 {hidden}개가 더 있습니다. {rest}")
     return "\n".join(lines)
+
+
+def _view_link(links: MailLinks) -> str:
+    return links.results or links.home
 
 
 def match_email(
@@ -129,8 +139,10 @@ def match_email(
     links: MailLinks,
     items: list[dict[str, Any]],
 ) -> OutgoingEmail:
-    paragraphs = [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _condition_lines(reservation), _item_lines(reservation, items)]
-    actions = [("리트리버에서 보기", links.home)]
+    paragraphs = [
+        f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _condition_lines(reservation), _item_lines(reservation, items, links)
+    ]
+    actions = [(VIEW_LABEL, _view_link(links))]
     if links.extend:
         actions.append((f"알림 1주 연장 (남은 연장 {_extensions_left(reservation)}회)", links.extend))
     actions.append(("예약 취소", links.cancel))
@@ -159,7 +171,7 @@ def expiry_notice_email(
         )
     paragraphs = [closing]
     if items:
-        paragraphs += [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _item_lines(reservation, items)]
+        paragraphs += [f"{MATCH_HEADLINE} {OWNERSHIP_NOTICE}", _item_lines(reservation, items, links)]
     paragraphs.append(_condition_lines(reservation))
     actions: list[tuple[str, str]] = []
     if links.extend:
@@ -167,6 +179,6 @@ def expiry_notice_email(
     else:
         actions.append(("리트리버에서 새로 예약하기", links.home))
     if items:
-        actions.append(("리트리버에서 보기", links.home))
+        actions.append((VIEW_LABEL, _view_link(links)))
     actions.append(("예약 취소", links.cancel))
     return _render(to, EXPIRY_SUBJECT, paragraphs, actions)

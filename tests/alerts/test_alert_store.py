@@ -132,6 +132,38 @@ class SupabaseAlertStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SupabaseAlertStore("", "")
 
+    @patch(URLOPEN)
+    def test_message_items_are_scoped_to_the_reservation_and_skip_unmatched_items(self, urlopen) -> None:
+        # PRD 4.3-E(2026-11-24) — 메일 번호는 이 예약의 결과 메일이어야 하고, 기관 끊긴 물품은 받지 않는다.
+        urlopen.side_effect = [
+            FakeResponse([{"id": 11}]),
+            FakeResponse([{"found_item_id": 5, "score": 0.9}, {"found_item_id": 3, "score": None}]),
+            FakeResponse([{"id": 5, "storage_location_id": 1, "item_name": "검정 에어팟"}]),
+        ]
+
+        rows = self.store.message_items(7, 11)
+
+        self.assertEqual(rows, [{"id": 5, "storage_location_id": 1, "item_name": "검정 에어팟", "score": 0.9}])
+        message_query, notes_query, items_query = (
+            dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(call.args[0].full_url).query))
+            for call in urlopen.call_args_list
+        )
+        self.assertEqual(message_query["reservation_id"], "eq.7")
+        self.assertEqual(message_query["id"], "eq.11")
+        self.assertEqual(message_query["kind"], "in.(match,expiry_notice)")
+        self.assertEqual(notes_query["reservation_id"], "eq.7")
+        self.assertEqual(notes_query["message_id"], "eq.11")
+        self.assertEqual(items_query["id"], "in.(3,5)")
+        self.assertEqual(items_query["storage_location_id"], "not.is.null")
+        self.assertTrue(all(call.args[0].get_method() == "GET" for call in urlopen.call_args_list))
+
+    @patch(URLOPEN)
+    def test_message_items_of_another_reservation_return_none_without_reading_items(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse([])
+
+        self.assertIsNone(self.store.message_items(7, 99))
+        self.assertEqual(urlopen.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

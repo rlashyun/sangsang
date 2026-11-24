@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..alerts.errors import AlertLimitError
 from ..alerts.reservations import AlertService
+from .agent_adapters import adapt_search_item
 
 UNAVAILABLE = {"error": "분실물 알림 예약을 지금은 사용할 수 없습니다."}
 
@@ -40,7 +41,10 @@ async def _json_object(request: Request) -> dict[str, Any]:
     return payload
 
 
-def create_alert_router(service: AlertService | None) -> APIRouter:
+def create_alert_router(
+    service: AlertService | None,
+    add_thumbnails: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
+) -> APIRouter:
     """설계 5.4 — 예약 API. 오류는 앱의 ValueError(400)·RuntimeError(502) 처리기를 따른다."""
     router = APIRouter(prefix="/api/alerts", include_in_schema=False)
 
@@ -64,6 +68,19 @@ def create_alert_router(service: AlertService | None) -> APIRouter:
         if service is None:
             return JSONResponse(status_code=503, content=UNAVAILABLE)
         return JSONResponse(content=await run_in_threadpool(service.summary, token))
+
+    @router.get("/results")
+    async def results(token: str = "", message: str = "") -> JSONResponse:
+        """PRD 4.3-E(2026-11-24) — 결과 메일 한 통이 알린 물품을 대화 검색과 같은 물품 모양으로 준다."""
+        if service is None:
+            return JSONResponse(status_code=503, content=UNAVAILABLE)
+        payload = await run_in_threadpool(service.results, token, message)
+        rows = payload["items"]
+        if add_thumbnails is not None:
+            rows = await run_in_threadpool(add_thumbnails, rows)
+        # PRD 3.3 · Q5 — adapt_search_item이 가린 사본을 만든다. D2 — 점수는 순서에만 쓰고 내보내지 않는다.
+        items = [{key: value for key, value in adapt_search_item(row).items() if key != "score"} for row in rows]
+        return JSONResponse(content={**payload, "items": items})
 
     @router.post("/confirm")
     async def confirm(request: Request) -> JSONResponse:
