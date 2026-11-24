@@ -56,12 +56,10 @@ def test_conversation_retains_place_and_applies_item_correction():
     assert events[-1]["recommended_item_ids"] == [7]
 
 
-@pytest.mark.parametrize("asks_for", ["item", None])
-def test_known_item_searches_even_when_model_requests_optional_details(asks_for):
+def test_known_item_searches_without_optional_details():
     place = PlaceCandidate("p1", "강남역", "", 37.5, 127.03)
     changes = {"kind": "지갑", "color": None, "brand": None, "features": None}
-    model = Mock(return_value={**decision("clarify", asks_for=asks_for,
-        message="지갑의 색상이나 브랜드, 특징을 알려주실 수 있나요?"), "item_changes": changes})
+    model = Mock(return_value={**decision("search", message=""), "item_changes": changes})
     turn = respond_to_message(Conversation("강남역", confirmed=place), "지갑이요", model=model, find_places=Mock())
     assert turn.status == "ready_to_search"
     assert turn.pending.query == "지갑"

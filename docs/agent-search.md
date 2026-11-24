@@ -299,3 +299,20 @@ PRD 4.3-A·4.5의 사용자 승인으로 장소는 최대 3곳이다. 첫 장소
 2026-11-22 후속 결정: 위의 기관 핀 두 번 클릭 확정 설명은 폐기한다. 핀 클릭으로 정보를 확인하고 각 기관 행 오른쪽 장소선택 버튼으로만 확정한다. 기관 결과 조회 동작은 유지한다.
 
 2026-11-22 대화형 상세: 물품 클릭은 에이전트 요청을 새로 보내지 않고, 이미 받은 정보와 검증된 기관 정보를 상세 말풍선 한 개에 표시한다. 지도 포커스와 검색 범위·목록·페이지를 유지하고 반복 클릭은 상세 말풍선을 교체한다. 예·아니요는 화면 내 분기로 처리하며 API나 물품 소유 확인 상태를 변경하지 않는다. 새 검색을 보내면 기존 상세는 닫는다.
+
+
+### 공통 대화 맥락 — 2026-11-23 사용자 승인
+
+PRD 4.3-A·4.3-E. 기존 POST /api/search-chat/turns의 message 요청에 선택적인 dialogue를 추가한다. task는 search/alert, alert는 query·places(name/latitude/longitude)·radius, awaiting은 email/item/places/radius/conditions 또는 null, last_message는 직전 안내(최대 200자)다. 기존 요청은 검색 맥락으로 호환한다. 맥락의 개인정보는 차단하거나 번호를 마스킹하며 허용 좌표·반경·장소 수·물품 길이를 검증한다.
+
+모델은 기존 행동과 task·alert_changes·awaiting을 JSON으로 반환한다. update_alert는 query/radius/remove_places(현재 초안의 1부터 시작하는 순번)를 함께 적용한다. 알림 응답은 answered와 dialogue(task/alert/awaiting/changed)를 반환한다. 초안 질문·안내·변경·종료는 검색 결과와 커서를 보존하고 기존 요청 ID 재생·revision 검증을 사용한다. 변경 불가·모델 장애 시 기존 초안을 유지한다. 모델 실패는 기존 error 형식, 잘못된 요청 맥락은 기존 400 invalid_request, 허용되지 않은 초안 변경은 answered와 한국어 안내다. 검색 복귀의 실제 결과에도 dialogue를 이어 전달해 화면을 전환한다.
+
+자유 입력 한 턴은 공통 대화 모델을 한 번 호출한다. 기존 검색의 0건 재작성은 기존 별도 예산이다. 조건 변경과 사용법 질문이 함께 있으면 변경값과 message를 함께 반영한다. 메일 발송은 기존 동의와 /api/alerts의 검증을 통과한 이메일 입력 경로에서만 수행한다.
+
+검색 실행과 함께 받은 사용법 답변은 응답의 선택적 explanation 필드로 전달하고 실제 검색 완료 안내 앞에 표시한다. 기존 결과 안내·카드 표시를 보존하면서 복합 요청의 설명을 누락하지 않는다.
+
+### 대화 범위·말투 고정 — 2026-11-23 사용자 승인
+
+PRD 4.3-A·4.3-E. TurnDecision.action에 decline을 추가한다. 모델이 범위 밖 요청(말투·페르소나 변경, 랩·노래·농담·역할극, 무관한 질문)을 decline으로 고르면 서버는 모델 문장을 버리고 OFF_TOPIC_MESSAGE 고정 문장을 answered로 반환한다. 검색 작업에서는 조건·결과·커서를 유지하고, 알림 작성 중에는 apply_alert_decision이 초안·awaiting을 그대로 둔 dialogue(task=alert, changed=false)를 반환한다. 습득물·기관·장소 API는 호출하지 않는다.
+
+안전망: 모델 message에 이모지가 있으면 answer·clarify·end는 decline으로 바꾸고, 그 밖의 실행 행동(search·update_alert 등)은 message만 비운다. 따라서 explanation이 빠지고 알림 변경은 고정 확인 문장만 남는다. recent에는 고정 문장만 저장한다. 반말·사투리 어미 검사는 하지 않는다.

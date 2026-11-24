@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +35,7 @@ LATITUDE_RANGE = (33.0, 38.7)
 LONGITUDE_RANGE = (124.5, 132.0)
 PENDING_MESSAGE = "확인 메일을 보냈습니다. 24시간 안에 링크를 눌러 주세요."
 BAD_LINK = "링크가 올바르지 않습니다."
+_MESSAGE_ID = re.compile(r"[1-9]\d{0,17}")  # 결과 링크의 메일 번호(alert_messages.id)
 _FORBIDDEN_EMAIL_CHARACTERS = set('<>,;:"()[]\\')
 
 
@@ -222,6 +224,34 @@ class AlertService:
             # PRD 4.3-E — 화면이 자정 만료 시각을 날짜로 바꾸지 않아도 되게 마지막 알림 날짜를 준다.
             "last_day": last_alert_day(reservation["expires_at"]).isoformat(),
             "extensions_left": MAX_EXTENSIONS - int(reservation["extension_count"]),
+        }
+
+    def results(self, token: Any, message_id: Any) -> dict[str, Any]:
+        """PRD 4.3-E(2026-11-24 결정) — 결과 메일 한 통이 알린 물품을 모두 돌려준다. 상태를 바꾸지 않는다.
+
+        메일에는 5건까지만 싣지만 이 화면은 그 메일의 물품 전부를 메일과 같은 순서로 보여 준다.
+        예약이 끝난 뒤에도 알린 기록은 남으므로 열린다(이메일만 지운다, 설계 6.2 ③).
+        """
+        reservation = self._reservation(token)
+        if not isinstance(message_id, str) or not _MESSAGE_ID.fullmatch(message_id):
+            raise ValueError(BAD_LINK)
+        rows = self.store.message_items(int(reservation["id"]), int(message_id))
+        if rows is None:
+            raise ValueError(BAD_LINK)
+        # message_payload SQL과 같은 순서 — 점수 높은 순(NULL 마지막) → 최근 등록 순 → id 큰 순.
+        rows = sorted(rows, key=lambda row: int(row["id"]), reverse=True)
+        rows.sort(key=lambda row: str(row.get("registered_on") or ""), reverse=True)
+        rows.sort(key=lambda row: row["score"] if row.get("score") is not None else -1.0, reverse=True)
+        return {
+            "status": reservation["status"],
+            "query": reservation["query"],
+            # 화면이 지도를 저장된 장소·반경으로 맞추도록 좌표를 준다. 링크 토큰을 가진 본인이 고른 장소다.
+            "places": [
+                {"name": place["name"], "latitude": float(place["latitude"]), "longitude": float(place["longitude"])}
+                for place in reservation["places"]
+            ],
+            "radius_m": int(reservation["radius_m"]),
+            "items": rows,
         }
 
     def confirm(self, token: Any) -> dict[str, str]:

@@ -11,16 +11,18 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from ..integrations.agent_model import OpenRouterAgentModel
 from ..search.photo_rerank import MAX_PHOTO_LENGTH, MAX_USER_PHOTOS, prepare_user_photos
 
 from .agent_conversation import ITEM_QUESTION, PLACE_ITEM_QUESTION, Conversation, ItemDetails, Model, PlaceSelectionError, advance_place_selection, confirm_place, edit_places, respond_to_message, search_conversation
-from .agent_search import Institution, PlaceCandidate, SearchPage, resolve_institution_scope
+from .agent_search import Institution, PlaceCandidate, SearchPage, _validated_query, resolve_institution_scope
+from .agent_conversation import DialogueContext, apply_alert_decision
 from .agent_store import AgentStore, MemoryAgentStore
 from ..agent_diagnostics import trace_id, start_trace, record, failure_fields
+from ..privacy.masking import contains_identifier
 
 
 class RunCancelled(Exception):
@@ -31,13 +33,21 @@ class Payload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+class SavedPlace(Payload):
+    # PRD 4.3-E — 알림에 저장된 장소. 지도에서 고른 지점과 같은 국내 좌표 범위만 받는다.
+    name: str = Field(min_length=1, max_length=100)
+    latitude: float = Field(ge=33.0, le=39.0)
+    longitude: float = Field(ge=124.0, le=132.0)
+
+
 class Turn(Payload):
-    type: Literal["message", "select_place", "select_point", "change_radius", "end", "add_place", "replace_place", "remove_place", "cancel_place_selection", "skip_place"]
+    type: Literal["message", "select_place", "select_point", "change_radius", "end", "add_place", "replace_place", "remove_place", "cancel_place_selection", "skip_place", "saved_search"]
     request_id: str = Field(min_length=1, max_length=80)
     session_id: str | None = Field(default=None, max_length=80)
     revision: int | None = Field(default=None, ge=0)
     text: str | None = Field(default=None, min_length=1, max_length=1000)
     changing_place: bool = False
+    dialogue: DialogueContext | None = None
     place_target: int | None = Field(default=None, ge=1, le=3)
     visible_item_ids: list[int] = Field(default_factory=list, max_length=10)
     candidate_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -48,6 +58,8 @@ class Turn(Payload):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     address: str | None = Field(default=None, max_length=200)
     photos: list[Annotated[str, Field(max_length=MAX_PHOTO_LENGTH)]] = Field(default_factory=list, max_length=MAX_USER_PHOTOS)
+    # saved_search 전용 — 결과 메일의 '전체 검색'이 보내는 저장된 장소 1~3곳.
+    places: list[SavedPlace] = Field(default_factory=list, max_length=3)
 
 
 class NextPage(Payload):
@@ -225,12 +237,23 @@ def create_agent_router(
         if isinstance(turn, JSONResponse):
             return turn
         if (turn.type == "message" and not (turn.text or "").strip()
-                or turn.photos and (turn.type != "message" or not turn.session_id or turn.changing_place)
+                or turn.photos and (turn.type != "message" or not turn.session_id or turn.changing_place or turn.dialogue and turn.dialogue.task == "alert")
+                or turn.dialogue and turn.type != "message"
                 or turn.type == "change_radius" and turn.radius_m is None
                 or turn.type == "select_place" and turn.candidate_id is None
                 or turn.type == "select_point" and (turn.latitude is None or turn.longitude is None)
-                or turn.session_id is None and (turn.type not in ("message", "select_point") or turn.revision is not None)):
+                or bool(turn.places) != (turn.type == "saved_search")
+                or turn.type == "saved_search" and (
+                    turn.session_id is not None or turn.radius_m is None or turn.text is None
+                    or len({(place.latitude, place.longitude) for place in turn.places}) != len(turn.places))
+                or turn.session_id is None and (turn.type not in ("message", "select_point", "saved_search") or turn.revision is not None)):
             return _json({"error": _error("invalid_turn", "대화 요청에 필요한 값이 없습니다.")}, 400)
+        saved_query = None
+        if turn.type == "saved_search":
+            try:
+                saved_query = _validated_query(turn.text or "")
+            except ValueError as error:
+                return _json({"error": _error("invalid_turn", str(error))}, 400)
         try:
             photos = await run_in_threadpool(prepare_user_photos, turn.photos) if turn.photos else ()
         except ValueError:
@@ -344,6 +367,18 @@ def create_agent_router(
                             result = {"status": "ready_to_search"} if state.confirmed and state.item_query else {
                                 "status": "awaiting_clarification", "message": ITEM_QUESTION if state.confirmed else "어디서 잃어버렸어요?",
                             }
+                    elif turn.type == "saved_search":
+                        # PRD 4.3-E — 알림에 저장된 장소·물품·반경은 이미 사용자가 확정한 조건이라
+                        # 장소 후보 확인과 모델 해석 없이 바로 검색한다.
+                        points = tuple(
+                            PlaceCandidate(f"point:{place.latitude:.6f},{place.longitude:.6f}", place.name, "",
+                                           place.latitude, place.longitude)
+                            for place in turn.places
+                        )
+                        state = Conversation(place_query=points[0].name, item_query=saved_query, confirmed=points[0],
+                                             places=points, awaiting_answer=None)
+                        manual_radius, scope, radius = turn.radius_m, (), None
+                        result = {"status": "ready_to_search"}
                     elif turn.type == "message":
                         def deferred_places(query: str) -> Sequence[PlaceCandidate]:
                             # Place lookup progress is streamed below, before doing real I/O.
@@ -368,7 +403,7 @@ def create_agent_router(
                             state, turn.text, model=call_model, find_places=deferred_places,
                             changing_place=turn.changing_place, radius_m=radius,
                             match_count=session.match_count, last_search_query=session.last_search_query,
-                            visible_items=visible_items,
+                            visible_items=visible_items, dialogue=turn.dialogue,
                         )
                         if session.cancelled.is_set():
                             raise RunCancelled
@@ -384,11 +419,24 @@ def create_agent_router(
                         if places_changed:
                             scope = ()
                         result = {"status": reply.status, "message": reply.message}
+                        if (turn.dialogue and turn.dialogue.task == "alert" and reply.decision is None
+                                and "@" not in turn.text and not contains_identifier(turn.text)):
+                            result["dialogue"] = {"task": "search", "alert": None, "awaiting": None, "changed": False}
                         if reply.decision is not None:
                             decision = reply.decision
                             target = decision.target or 0
                             # PRD 4.3 — Use only server-owned candidates, visible result IDs and allowed radii.
-                            if decision.action == "prepare_alert":
+                            task = decision.task or (turn.dialogue.task if turn.dialogue else "search")
+                            starting_alert = decision.action == "prepare_alert" and (turn.dialogue is None or turn.dialogue.alert is None)
+                            if (task == "alert" or decision.action == "update_alert") and not starting_alert:
+                                try:
+                                    dialogue = apply_alert_decision(turn.dialogue, decision)
+                                    result = {"status": "answered", "message": dialogue.pop("message"), "dialogue": dialogue}
+                                except ValidationError:
+                                    result = {"status": "answered", "message": "알림 조건을 반영하지 못했어요. 기존 조건을 유지했으니 변경할 내용을 다시 알려주세요."}
+                                except ValueError as error:
+                                    result = {"status": "answered", "message": str(error)}
+                            elif decision.action == "prepare_alert":
                                 # PRD 4.3-E — 실제 신청은 브라우저에서 동의 후 기존 알림 API로 보낸다.
                                 ready = bool(state.selected_places() and state.item_query and radius and not state.place_operation)
                                 result = {"status": "answered", "prepare_alert": ready, "message": "알림 조건을 확인하고 개인정보 이용에 동의한 뒤 이메일을 입력해 주세요." if ready else "먼저 장소를 확정하고 물품을 검색해 주세요."}
@@ -430,6 +478,8 @@ def create_agent_router(
                                     result = {"status": "ready_to_search"}
                             if result["status"] == "answered":
                                 state = replace(state, recent=(*state.recent, (turn.text, result["message"]))[-4:])
+                            if turn.dialogue and turn.dialogue.task == "alert" and task == "search":
+                                result["dialogue"] = {"task": "search", "alert": None, "awaiting": None, "changed": False}
                     elif turn.type == "select_place":
                         state, pending = confirm_place(state, turn.candidate_id)
                         result = {"status": "ready_to_search"} if pending else {
@@ -481,16 +531,18 @@ def create_agent_router(
                         state = replace(state, recent=(*state.recent, (turn.text or "장소 확인", message))[-4:])
 
                     actions = None
+                    decision_message = result.get("message") if result["status"] == "ready_to_search" else None
                     if result["status"] == "ready_to_search":
                         actions = search_conversation(
                             state, model=call_model, get_institutions=get_institutions,
                             search_items=search_current, radius_m=manual_radius,
                         )
-                    elif state.confirmed is not None and (result["status"] == "awaiting_clarification" or places_changed or turn.type in ("select_place", "select_point", "skip_place")):
+                    elif state.confirmed is not None and (result["status"] == "awaiting_clarification" and not scope or places_changed or turn.type in ("select_place", "select_point", "skip_place")):
                         # PRD 4.3-A — 장소 확정 직후 물품 입력 전에도 기관과 반경을 표시한다.
                         actions = resolve_institution_scope(state.confirmed, get_institutions=get_institutions,
                                                             search_centers=state.selected_places(), radius_m=radius)
                     if actions is not None:
+                        dialogue_result = result.get("dialogue")
                         while not session.cancelled.is_set():
                             event = next(actions, None)
                             if event is None:
@@ -507,6 +559,10 @@ def create_agent_router(
                             else:
                                 state = event.pop("state")
                                 result = event
+                        if dialogue_result is not None:
+                            result["dialogue"] = dialogue_result
+                        if decision_message and result.get("status") in {"results", "no_matches"}:
+                            result["explanation"] = decision_message
                     if photos and result["status"] == "results":
                         result["photo_status"] = photo_page.photo_status if photo_page else "unavailable"
                     if not state.selected_places() and state.place_operation is None:

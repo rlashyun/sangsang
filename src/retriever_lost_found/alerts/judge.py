@@ -18,11 +18,15 @@ BGE-M3 재정렬은 판정에 쓰지 않는다. 운영 검색에서도 재정렬
    - 색을 하나도 알 수 없는 물품은 색 조건을 통과시킨다(색을 안 적어 진짜 물건을 놓치지 않게).
    - 특징은 물품 글에 실제로 적히는 이어폰 방향(왼쪽·오른쪽)과 맥세이프만 조건으로 쓴다. 가죽·캐릭터·
      남성용 같은 특징, 사전에 없는 단어, 카드 상품은 조건으로 쓰지 않는다(거의 안 적혀 진짜 물건을 놓친다).
+4. Jev 제외(2026-11-23 사용자 결정) — 검색 화면과 같은 search/jev_filter.py로 점수 상위 30건 중 명백히 다른
+   물건만 뺀다. 크론(cron_judge)에서만 켜고, OpenRouter 키가 없거나 호출이 실패하면 아무것도 빼지 않는다.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from ..search.jev_filter import JevFilter
 
 from ..search import color_filter, hybrid, synonyms
 
@@ -97,7 +101,19 @@ def meets_conditions(search_text: str, conditions: dict[str, list[str]]) -> bool
     return True
 
 
-def search_judge(query: str, candidates: list[dict[str, Any]]) -> list[tuple[dict[str, Any], float]]:
+# 2026-11-23 사용자 결정 — 예약 하나당 Jev에 줄 시간. 크론 매칭 단계 전체 마감(120초)은 run_match_pass가 지킨다.
+JEV_ALERT_BUDGET_SECONDS = 3.0
+
+
+def _with_palette_color(item: dict[str, Any]) -> dict[str, Any]:
+    """알림 후보에는 색상 칸이 따로 없다. search_text의 경찰청 팔레트 값을 꺼내 보정 때와 같은 입력을 만든다."""
+    found = color_filter._PALETTE_PATTERN.search(str(item.get("search_text") or ""))
+    label = next((key for key in color_filter.PALETTE if found and key.casefold() == found[0]), "")
+    return {**item, "color_name": label, "description": ""}
+
+
+def search_judge(query: str, candidates: list[dict[str, Any]], *,
+                 jev: JevFilter | None = None) -> list[tuple[dict[str, Any], float]]:
     """설계 3.2 — matching.SimilarityJudge. 후보는 반경·출처·커서로 이미 좁혀져 있다(공간 1차 필터)."""
     terms, words = candidate_terms(query)
     # keyword_found_item_candidates와 같은 포함 판정(PRD 4.5 — 검색 화면과 같은 후보).
@@ -113,4 +129,12 @@ def search_judge(query: str, candidates: list[dict[str, Any]]) -> list[tuple[dic
         if int(item["id"]) in scores and meets_conditions(str(item.get("search_text") or ""), conditions)
     ]
     matched.sort(key=lambda pair: (-pair[1], -int(pair[0]["id"])))
+    if jev is not None and matched:
+        # 4. Jev 제외(2026-11-23) — 점수 상위 30건 중 명백히 다른 물건만 뺀다. 실패하면 아무것도 빼지 않는다.
+        _, status, excluded = jev.apply(hybrid.query_text(query), [_with_palette_color(item) for item, _ in matched],
+                                        budget=JEV_ALERT_BUDGET_SECONDS)
+        if status in {"unavailable", "skipped"}:
+            from ..agent_diagnostics import record
+            record("jev.fallback", stage="alert_jev_filter", reason=status, final_status="fallback")
+        matched = [pair for pair in matched if int(pair[0]["id"]) not in excluded]
     return matched

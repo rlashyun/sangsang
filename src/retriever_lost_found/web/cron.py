@@ -124,11 +124,12 @@ def _run_alert_matching(store: AlertStore, *, deadline: float) -> dict[str, Any]
     한 출처가 실패해도 다른 출처의 매칭과 발송은 계속한다.
     """
     results: dict[str, Any] = {}
+    judge = matching.cron_judge()  # 2026-11-23 — Jev 제외 포함(키가 없으면 기존 판정)
     for source in SOURCE_ORDER:
         code = SOURCE_CODES[source]
         try:
             results[code] = run_match_pass(
-                store, matching.SIMILARITY_JUDGE, item_source_code=code, deadline=deadline
+                store, judge, item_source_code=code, deadline=deadline
             )
         except Exception as error:  # 실행 기록조차 남기지 못한 경우 — 비밀값이 섞이지 않게 형식만 남긴다
             print(f"[alerts] {code} 매칭 단계 실패: {type(error).__name__}", file=sys.stderr)

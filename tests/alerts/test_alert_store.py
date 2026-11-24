@@ -76,14 +76,21 @@ class SupabaseAlertStoreTests(unittest.TestCase):
     @patch(URLOPEN)
     def test_get_reservation_embeds_the_places_in_screen_order(self, urlopen) -> None:
         urlopen.return_value = FakeResponse(
-            [{"id": 7, "places": [{"name": "시청", "position": 2}, {"name": "서울역", "position": 1}]}]
+            [{"id": 7, "places": [
+                {"name": "시청", "position": 2, "latitude": 37.5663, "longitude": 126.9779},
+                {"name": "서울역", "position": 1, "latitude": 37.5547, "longitude": 126.9707},
+            ]}]
         )
 
         reservation = self.store.get_reservation(7)
 
-        self.assertEqual(reservation["places"], [{"name": "서울역"}, {"name": "시청"}])
+        # 결과 링크 화면이 지도를 저장된 장소로 옮기도록 좌표도 함께 읽는다.
+        self.assertEqual(reservation["places"], [
+            {"name": "서울역", "latitude": 37.5547, "longitude": 126.9707},
+            {"name": "시청", "latitude": 37.5663, "longitude": 126.9779},
+        ])
         url = urllib.parse.unquote(urlopen.call_args.args[0].full_url)
-        self.assertIn("places:alert_reservation_places(name:place_name,position)", url)
+        self.assertIn("places:alert_reservation_places(name:place_name,position,latitude,longitude)", url)
         self.assertNotIn("place_name,", url.split("places:")[0])
 
     @patch(URLOPEN)
@@ -131,6 +138,38 @@ class SupabaseAlertStoreTests(unittest.TestCase):
     def test_requires_url_and_secret(self) -> None:
         with self.assertRaises(ValueError):
             SupabaseAlertStore("", "")
+
+    @patch(URLOPEN)
+    def test_message_items_are_scoped_to_the_reservation_and_skip_unmatched_items(self, urlopen) -> None:
+        # PRD 4.3-E(2026-11-24) — 메일 번호는 이 예약의 결과 메일이어야 하고, 기관 끊긴 물품은 받지 않는다.
+        urlopen.side_effect = [
+            FakeResponse([{"id": 11}]),
+            FakeResponse([{"found_item_id": 5, "score": 0.9}, {"found_item_id": 3, "score": None}]),
+            FakeResponse([{"id": 5, "storage_location_id": 1, "item_name": "검정 에어팟"}]),
+        ]
+
+        rows = self.store.message_items(7, 11)
+
+        self.assertEqual(rows, [{"id": 5, "storage_location_id": 1, "item_name": "검정 에어팟", "score": 0.9}])
+        message_query, notes_query, items_query = (
+            dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(call.args[0].full_url).query))
+            for call in urlopen.call_args_list
+        )
+        self.assertEqual(message_query["reservation_id"], "eq.7")
+        self.assertEqual(message_query["id"], "eq.11")
+        self.assertEqual(message_query["kind"], "in.(match,expiry_notice)")
+        self.assertEqual(notes_query["reservation_id"], "eq.7")
+        self.assertEqual(notes_query["message_id"], "eq.11")
+        self.assertEqual(items_query["id"], "in.(3,5)")
+        self.assertEqual(items_query["storage_location_id"], "not.is.null")
+        self.assertTrue(all(call.args[0].get_method() == "GET" for call in urlopen.call_args_list))
+
+    @patch(URLOPEN)
+    def test_message_items_of_another_reservation_return_none_without_reading_items(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse([])
+
+        self.assertIsNone(self.store.message_items(7, 99))
+        self.assertEqual(urlopen.call_count, 1)
 
 
 if __name__ == "__main__":

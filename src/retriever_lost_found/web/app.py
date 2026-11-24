@@ -241,7 +241,7 @@ def create_app(
         return client.search_keyword(query, longitude=longitude, latitude=latitude)
 
     # 설계 5.4 — 메일 설정이 없으면 서비스가 None이고 /api/alerts*는 503이다.
-    app.include_router(create_alert_router(alert_service))
+    app.include_router(create_alert_router(alert_service, getattr(found_item_client, "add_thumbnails", None)))
     return app
 
 

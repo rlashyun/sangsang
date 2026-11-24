@@ -1601,3 +1601,23 @@
 
 2026-11-22 PR #108 통합 재검증: main의 PR #103 상세 카드 줄바꿈 및 PR #109 파비콘 변경을 함께 반영한 뒤 프런트엔드 빌드와 전체 pytest를 확인했다. 결과: 837 passed, 기존 Starlette/httpx 경고 1개. 생성 CSS는 프런트엔드 소스에서 다시 빌드했다.
 
+
+
+## 대화 의도 JSON 시제품 비교 — 2026-11-22 KST
+
+- 조건: 체크아웃 07eb1e9, 기존 OpenRouterAgentModel(openai/gpt-6-luna, timeout 5초, max_tokens 400, reasoning none), 가상 서울역·검은 지갑·1km 조건, 동시 최대 3개 작업. 실제 장소·DB·알림 API는 호출하지 않았다. 사용자 승인에 따라 기존 API 키로 모델 비교를 실행했고 비밀값은 출력하지 않았다.
+- 서버 경로 재현: 모델 응답을 clarify/asks_for=item/clear_item_query=false로 고정했을 때 기존 서버는 ready_to_search 및 기존 지갑 질의를 반환했다. 모델 이해와 서버 실행을 분리해 확인한 결과다.
+- 1차 탐색: 검색 입력 4개는 실제 기존 대화 처리와 공통 맥락 JSON 시제품을 비교, 알림 입력 6개는 시제품만 호출했다(총 모델 요청 14회). 기존 검색 물건 변경 1회는 RuntimeError, 색상 정정은 검은 지갑 갈색으로 반환했다. 시제품은 행동 선택만 보면 10개를 맞혔으나 ask 이외에도 awaiting=item을 반환하고 실행 전 완료 표현을 사용했다. 이를 근거로 출력 상태와 완료 표현 원칙을 보완했다.
+- 2차 확인: 1차와 다른 문장 8개를 각 1회 실행. 기존 검색 서버 경로 4개 중 행동·질의 기준 3개 통과, 색상 정정 1개는 검은 지갑 갈색으로 실패. 시제품 8개(검색 4·알림 4)는 행동·질의 및 ask에서만 대기 항목 지정 기준 8개 통과. 모델 요청 총 12회, 시제품 응답 1.202~1.574초.
+- 한계: 기존 방식은 서버 실행 후 결과, 시제품은 모델 JSON만 평가했다. 알림 기존 UI와 시제품의 실행 성공률 비교 및 다중 턴·동시성·실제 도구 실행 검증은 하지 않았다. 프롬프트·문맥·스키마를 함께 바꿨으므로 개선 원인을 단일 요인으로 귀속할 수 없다. 소수 단회 사례이며 비용·토큰 사용량은 측정하지 않았다. Tool calling이 필요하다는 근거는 이번 사례에서 나오지 않았고 프로토콜 비교는 수행하지 않았다.
+- 원자료와 실행 스크립트(임시): /private/tmp/retriever-dialogue-eval/results.json, /private/tmp/retriever-dialogue-eval-round2/results.json, /private/tmp/retriever-dialogue-eval.py, /private/tmp/retriever-dialogue-eval-round2.py. 제품 코드와 운영 DB는 변경하지 않았다.
+
+## 공통 대화 판단 통합 검증 — 2026-11-23 KST
+
+- 조건: codex/dialogue-intent-context, 기준 07eb1e9. PRD 4.3-A·4.3-E 사용자 승인에 따라 검색/알림 작업 맥락을 기존 턴 API에 연결했다. 단위/API/브라우저 검사에서 DB·장소·메일은 페이크를 썼다.
+- pytest 실행 이력: 첫 전체 실행 834 통과·3 실패(기존 모델 질문을 강제로 검색으로 바꾸도록 기대하던 검사). 승인된 새 책임에 맞춰 충분한 물품의 모델 스텁을 search로 교체하고 결과·호출 횟수 assertion은 유지했다. 질문 보존과 다음 답, 알림 격리·잘못된 변경·개인정보·재생 검사를 추가했다. 이후 전체 847 통과(1.73초), 849 통과(1.91초), 최종 850 통과(1.76초). 기존 Starlette/httpx 경고 1개. 초기 관련 테스트 37 통과(0.42초).
+- 타입 검사·Vite 빌드 성공. 순서대로 JS 436.52kB/gzip135.17kB·97ms, 436.46kB/135.15kB·70ms, 436.47kB/135.16kB·82ms, 최종 436.52kB/135.17kB·68ms. 기존 잠금 의존성을 사용했다. index.html의 줄바꿈만 바뀐 출력은 원래 바이트를 복원했다.
+- Playwright CLI headless Chromium, 모의 지도/API, 1440×1000·390×844 각각 완료 검사. 부정문을 포함한 알림 물건 변경·다음 답, 장소 제거·반경 변경, 재동의, 중복 제출, 기존 검색 보존, 발송 실패/재시도/성공, 이메일 미포함, 검색 복귀, 검색 물품 질문·답변을 검증했다. pageerror 0. 콘솔 오류는 의도한 503 모의 발송 실패다.
+- 기존 전송 회귀는 1440×768·390×844에서 통과했다. 실시간에 의존하는 표시 잠금 assertion이 2회 실패해 해당 구간만 가상 시계로 300ms 진행 후 검사하고 시계를 재개했다. 기존 assertion·IME·연속 Enter·동기 10회 제출·요청 ID 재시도·중복 이벤트·과거 기록 검증을 유지했다. 스크립트 끝 세미콜론은 CLI 표현식 실행 형식에 맞췄다.
+- 실제 모델 수동 점검: OpenRouterAgentModel(openai/gpt-6-luna, timeout 5초, max_tokens400, reasoning none) 8회, 가상 서울역·검은 지갑·1km 맥락. 검색 물품 변경 질문→우산, 색상 정정, 부정문 장소 변경 질문, 알림 물품 변경 질문→우산, 반경 변경+종료 시점 질문, 알림에서 검색 복귀를 확인했다. 실제 상품 데이터·이메일은 전송하지 않았다. 단회 소수 표본이며 실사용 성공률·비용 측정은 아니다.
+- 실제 모델 원자료(임시): /private/tmp/retriever-integrated-dialogue-results.json, 스크립트 /private/tmp/retriever-integrated-dialogue-eval.py. 전송 회귀 Vite용 사본 /private/tmp/retriever-dialogue-submission.browser.cjs. CLI 로그는 /private/tmp/.playwright-cli 및 작업 중 생성된 무시 경로에 있다. 실제 메일 발송과 운영 배포는 검증 범위 밖이다.

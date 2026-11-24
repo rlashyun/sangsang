@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
-import { DEFAULT_SEARCH_RADIUS_METERS, SEARCH_RADIUS_OPTIONS_METERS, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
+import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn, type AlertResults } from "../api/client";
+import { DEFAULT_SEARCH_RADIUS_METERS, SEARCH_RADIUS_OPTIONS_METERS, isWithinRadius, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
 import { ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib/alert-return";
@@ -11,6 +11,7 @@ import { useMobileChatSheet } from "../lib/useMobileChatSheet";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
 import { AgentInstitutionResults } from "./AgentInstitutionResults";
 import { AlertManagementChat } from "./AlertManagementChat";
+import { AlertResultsChat } from "./AlertResultsChat";
 import { AgentSheetGrip } from "./AgentSheetGrip";
 import { AGENT_ITEM_PAGE_SIZE, AgentResultList } from "./AgentResultList";
 import { FeedbackIcon } from "./FeedbackIcon";
@@ -49,12 +50,9 @@ function followupText(radius: number) {
     : "찾으시는 물건이 없나요? 비슷한 물건 알림을 받거나 당근에서 찾아보세요.";
 }
 
-function requestedAlertField(text: string): "places" | "radius" | "item" | null {
-  const field = text.replace(/\s+/g, "").match(/^(장소|위치|검색반경|반경|물건|물품)(?:를|을)?(?:변경|수정|바꿔|바꾸기|바꿀래|바꾸고싶어)(?:해줘|해주세요|하고싶어|할게|할래|줘)?요?[.!?~]*$/)?.[1];
-  return !field ? null : field.includes("반경") ? "radius" : field === "물건" || field === "물품" ? "item" : "places";
-}
-
-function AlertConditionSummary({ conditions, recorded = false }: { conditions: AlertConditions; recorded?: boolean }) {
+function AlertConditionSummary({ conditions, recorded = false, onEdit, editDisabled = false }: {
+  conditions: AlertConditions; recorded?: boolean; onEdit?: () => void; editDisabled?: boolean;
+}) {
   return <div className="agent-bubble agent-bubble-agent agent-alert-conditions" aria-label={recorded ? "이전 알림 조건" : undefined}>
     <p>이 조건으로 새 물건 소식을 알려드릴게요.</p>
     <dl className="agent-alert-fields">
@@ -62,6 +60,8 @@ function AlertConditionSummary({ conditions, recorded = false }: { conditions: A
       <div><dt>장소</dt><dd>{conditions.places.map(place => place.name).join(", ")}</dd></div>
       <div><dt>반경</dt><dd>{radiusKilometersLabel(conditions.radius)}</dd></div>
     </dl>
+    {/* PRD 4.3-E — 조건 수정은 조건 목록 바로 아래, 발송 안내 위에 둔다. */}
+    {onEdit && <button type="button" className="agent-action-chip" disabled={editDisabled} onClick={onEdit}>조건 수정</button>}
     <p className="agent-alert-note">신청 다음 날부터 7일간 새 유사 물품이 있는 날에만 알려드려요. 마지막 날에는 종료·연장을 안내해요.</p>
   </div>;
 }
@@ -70,7 +70,8 @@ export function AgentSearchApp() {
   const location = useLocation();
   const navigate = useNavigate();
   const sheet = useMobileChatSheet();
-  const mailAction = location.pathname === "/alerts/extend" ? "extend" : location.pathname === "/alerts/cancel" ? "cancel" : null;
+  const mailAction = location.pathname === "/alerts/extend" ? "extend" : location.pathname === "/alerts/cancel" ? "cancel"
+    : location.pathname === "/alerts/results" ? "results" : null;
   // 첫 화면은 인사와 이용 순서 안내(messages가 비었을 때)로 시작한다.
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     const returned = location.state?.alertReturn;
@@ -96,12 +97,25 @@ export function AgentSearchApp() {
   }, []);
   const [draft, setDraft] = useState("");
   const [alertDraft, setAlertDraft] = useState<AlertConditions | null>(null);
+  const [alertAnchor, setAlertAnchor] = useState<number | null>(null);
+  const alertActive = useRef(false);
+  // PRD 4.3-E — 신청 안내를 대화 순서에 고정하고 이후 발화는 그 아래에 표시한다.
+  useEffect(() => {
+    if (alertDraft && !alertActive.current) {
+      alertActive.current = true;
+      setMessages(current => { setAlertAnchor(current.length); return current; });
+    } else if (!alertDraft) {
+      alertActive.current = false;
+      setAlertAnchor(null);
+    }
+  }, [alertDraft]);
   const recordedAlertDrafts = useRef(new WeakSet<AlertConditions>());
   const [alertConsent, setAlertConsent] = useState(false);
   const [alertSending, setAlertSending] = useState(false);
   const alertPending = useRef(false);
   const editingAlert = useRef(false);
   const [alertEditingDraft, setAlertEditingDraft] = useState<AlertConditions | null>(null);
+  const [alertAwaiting, setAlertAwaiting] = useState<"email" | "item" | "places" | "radius" | "conditions" | null>(null);
   const [alertEditField, setAlertEditField] = useState<"places" | "radius" | "item" | null>(null);
   const { photos, photoError, addingPhotos, addPhotos, removePhoto, takePhotos, retainPhotosInChat, restorePhotos } = useChatPhotos();
   const photoInput = useRef<HTMLInputElement>(null);
@@ -110,6 +124,7 @@ export function AgentSearchApp() {
   const [photoAttention, setPhotoAttention] = useState(0);
   const photoAttentionTarget = useRef<"attach" | "send">("attach");
   const [response, setResponse] = useState<AgentResponse | null>(null);
+  const [mailScope, setMailScope] = useState<{ centers: Place[]; radius: number } | null>(null);
   const [items, setItems] = useState<AgentItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [itemPage, setItemPage] = useState(0);
@@ -126,7 +141,6 @@ export function AgentSearchApp() {
   const completedRequests = useRef(new Set<string>());
   const announcedExpansions = useRef(new Set<string>());
   const lastLocalAction = useRef<{ key: string; at: number } | null>(null);
-  const consumedLocalDraft = useRef<string | null>(null);
   const [followup, setFollowup] = useState<"hidden" | "prompt" | "actions">("hidden");
   const followupPrompt = useRef<string | null>(null);
   const replyTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -249,6 +263,7 @@ export function AgentSearchApp() {
     if (showFollowup) {
       replyTimers.current.push(setTimeout(() => {
         if (generation !== replyGeneration.current) return;
+        // PRD 4.3-A — 검색 완료 뒤에는 후속 안내 문장과 선택지를 함께 보여준다.
         followupPrompt.current = followupText(radius);
         setFollowup("prompt");
       }, Math.max(1, messagesToReveal.length) * 300 + 700));
@@ -322,6 +337,17 @@ export function AgentSearchApp() {
     const scope = new Set(institutionIds);
     return institutions.filter(row => row.storage_location_id !== undefined && scope.has(row.storage_location_id));
   }, [institutions, institutionIds, selectedPlace, searchCenters]);
+  // PRD 4.3-E — 결과 메일 링크로 들어오면 대화가 시작되기 전까지 지도를 저장된 장소·반경에 맞춘다.
+  const mailMapScope = response ? null : mailScope;
+  const mapSelectedPlace = mailMapScope ? mailMapScope.centers[0] : selectedPlace;
+  const mapCenters = mailMapScope ? mailMapScope.centers : searchCenters;
+  const mapRadius = mailMapScope ? mailMapScope.radius : mappedRadius;
+  const mapVisibleInstitutions = useMemo(() => mailMapScope
+    ? institutions.filter(row => mailMapScope.centers.some(center => isWithinRadius(center, row, mailMapScope.radius)))
+    : visibleInstitutions, [institutions, mailMapScope, visibleInstitutions]);
+  const showMailScope = useCallback((places: AlertResults["places"], radius: number) => {
+    if (places.length) setMailScope({ centers: places.map(place => ({ ...place, address: "", phone: "", category: "", url: "" })), radius });
+  }, []);
   const institutionIndex = useMemo(() => new Map(institutions.flatMap(row =>
     row.storage_location_id === undefined ? [] : [[row.storage_location_id, row] as const])), [institutions]);
   const onMapPlaceSelect = useCallback((place: Place) => {
@@ -400,6 +426,13 @@ export function AgentSearchApp() {
     if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
   }, [messages, selectedCandidate, followup, photos.length, photoError, alertDraft, alertEditField]);
 
+  // PRD 4.3-E — 안내가 실제로 렌더링된 뒤 채팅의 마지막으로 이동한다.
+  useLayoutEffect(() => {
+    if (alertDraft && alertAnchor !== null && feed.current) {
+      feed.current.scrollTop = feed.current.scrollHeight;
+    }
+  }, [alertAnchor, Boolean(alertDraft)]);
+
   function changePlaceCandidates(page: number) {
     setPlacePage(page);
     setSelectedCandidate(null);
@@ -455,7 +488,6 @@ export function AgentSearchApp() {
       void navigate(searchPath, { replace: true, state: null });
     }
     controller.current = request;
-    setAlertEditField(null);
     hideFollowup();
     if (!retry || !retryRequest.current) {
       retryRequest.current = { id: crypto.randomUUID(), session: sessionIdentity.current };
@@ -465,7 +497,7 @@ export function AgentSearchApp() {
     setLastTurn(turn);
     if (error) setMessages(current => [...current, { author: "agent", text: error }]);
     setError("");
-    setProgress("검색 조건을 확인하고 있어요.");
+    setProgress("입력하신 내용을 확인하고 있어요.");
     if (turn.type === "message" && !retry) {
       retainPhotosInChat(attachedPhotos);
       setMessages(current => [...current, { author: "user", text: turn.text, photos: attachedPhotos }]);
@@ -536,6 +568,27 @@ export function AgentSearchApp() {
         setError(result.error?.message || result.message || "검색 중 문제가 생겼어요.");
         return;
       }
+      if (result.dialogue) {
+        const next = result.dialogue;
+        if (next.task === "search") {
+          recordAlertConditions();
+          editingAlert.current = false;
+          setAlertDraft(null); setAlertEditingDraft(null); setAlertEditField(null); setAlertAwaiting(null);
+          setAlertConsent(false);
+        } else if (next.alert) {
+          const places = next.alert.places.map(place => ({ ...place, phone: "", category: "", url: "", address: "" }));
+          const updated = { query: next.alert.query, radius: next.alert.radius, places };
+          const waiting = next.awaiting !== "email";
+          if (next.changed || waiting && alertDraft) recordAlertConditions();
+          if (next.changed) setAlertConsent(false);
+          editingAlert.current = waiting;
+          setAlertAwaiting(next.awaiting);
+          setAlertEditField(next.awaiting === "email" || next.awaiting === "conditions" ? null : next.awaiting);
+          setAlertDraft(waiting ? null : updated);
+          setAlertEditingDraft(waiting ? updated : null);
+          setTab("chat");
+        }
+      }
       const replies: ChatMessage[] = [];
       if ((turn.type === "select_place" || turn.type === "select_point") && result.status !== "cancelled" && result.conditions.place) {
         // PRD 4.3-A — Show the confirmed location before asking for item details.
@@ -552,6 +605,7 @@ export function AgentSearchApp() {
         && selectedPlaces.length < 3 && confirmedPlaces.length === 3) {
         replies.push({ author: "agent", text: "장소는 최대 3곳까지 선택할 수 있어요." });
       }
+      if (result.explanation) replies.push({ author: "agent", text: result.explanation });
       const message = result.status === "results" && (result.matches?.total_count ?? 0) > 0
         ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
         : result.message;
@@ -666,7 +720,6 @@ export function AgentSearchApp() {
   }
 
   function fill(text: string) {
-    consumedLocalDraft.current = null;
     setDraft(text);
     input.current?.focus();
   }
@@ -692,24 +745,13 @@ export function AgentSearchApp() {
     return true;
   }
 
-  function cancelAlertSetup(text = "알림 신청 취소") {
-    if (alertPending.current) return;
-    recordAlertConditions();
-    editingAlert.current = false;
-    setAlertEditingDraft(null);
-    setAlertEditField(null);
-    setAlertDraft(null); setAlertConsent(false); setError(""); setDraft("");
-    setMessages(current => [...current, { author: "user", text }, { author: "agent", text: "진행 중인 알림 신청을 취소했어요. 기존에 신청한 알림은 변경되지 않아요." }]);
-    input.current?.focus();
-  }
-
   function editAlertConditions() {
     if (!alertDraft || busy || controller.current || revealingRepliesRef.current || alertPending.current || repeatedLocalAction("조건 수정")) return;
     // PRD 4.3-E — 알림 조건은 현재 검색·지도와 분리해 수정하며 물품을 재조회하지 않는다.
     recordAlertConditions();
     editingAlert.current = true;
     setAlertEditingDraft({ ...alertDraft, places: alertDraft.places.map(place => ({ ...place })) });
-    setAlertEditField(null);
+    setAlertEditField(null); setAlertAwaiting("conditions");
     setAlertDraft(null); setAlertConsent(false); setError(""); setDraft(""); setTab("chat");
     hideFollowup();
     setMessages(current => [...current, { author: "user", text: "조건 수정" },
@@ -721,7 +763,7 @@ export function AgentSearchApp() {
     if (busy || controller.current || revealingRepliesRef.current || alertPending.current || repeatedLocalAction("돌아가기")) return;
     if (!alertEditingDraft) return;
     editingAlert.current = false;
-    setAlertEditField(null); setAlertConsent(false); setDraft(""); setError("");
+    setAlertEditField(null); setAlertAwaiting("email"); setAlertConsent(false); setDraft(""); setError("");
     setAlertDraft(alertEditingDraft); setAlertEditingDraft(null);
     setMessages(current => [...current, { author: "user", text: "돌아가기" }]);
     input.current?.focus();
@@ -730,6 +772,7 @@ export function AgentSearchApp() {
   function chooseAlertEditField(field: "places" | "radius" | "item", text?: string) {
     if (busy || controller.current || revealingRepliesRef.current || alertPending.current || repeatedLocalAction(`조건 항목:${field}`)) return;
     setAlertEditField(field);
+    setAlertAwaiting(field);
     setDraft(""); setError("");
     const label = field === "places" ? "장소 변경" : field === "radius" ? "반경 변경" : "물건 변경";
     const message = field === "places"
@@ -761,57 +804,13 @@ export function AgentSearchApp() {
     }
   }
 
-  function editAlertFromText(text: string, current: AlertConditions) {
-    consumedLocalDraft.current = text;
-    if (text.includes("@")) { setError("조건 수정을 마친 뒤 이메일을 입력해 주세요."); return; }
-    const field = requestedAlertField(text);
-    if (field) { chooseAlertEditField(field, text); return; }
-    const radius = alertEditField === "item" ? null : text.match(/(\d+(?:\.\d+)?)\s*(?:km|킬로(?:미터)?|키로(?:미터)?)/i)
-      ?? (alertEditField === "radius" ? text.match(/^(\d+(?:\.\d+)?)$/) : null);
-    if (radius && SEARCH_RADIUS_OPTIONS_METERS.includes(Number(radius[1]) * 1000)) {
-      finishAlertEdit({ ...current, radius: Number(radius[1]) * 1000 }, text, `알림 반경을 ${radius[1]}km로 바꿨어요.`); return;
-    }
-    if (radius || alertEditField === "radius" || alertEditField !== "item" && /반경|거리/.test(text)) {
-      chooseAlertEditField("radius", text);
-      if (radius) setError("알림 반경은 1km, 1.5km, 2km 중에서 골라 주세요.");
-      return;
-    }
-    if (alertEditField !== "item" && (/장소|위치/.test(text) || alertEditField === "places")) { chooseAlertEditField("places", text); return; }
-    if (text.length > 30) { setError("알림에 사용할 물건 설명은 30자 이내로 입력해 주세요."); return; }
-    finishAlertEdit({ ...current, query: text }, text, "알림에 사용할 물건 설명을 바꿨어요.");
-  }
-
   function send(event: FormEvent) {
     event.preventDefault();
     if (busy || controller.current || revealingRepliesRef.current || composing.current || addingPhotos || alertPending.current) return;
     const text = draft.trim();
     if (!text && !photos.length) return;
     if (!text && (alertDraft || editingAlert.current)) return;
-    if (text && consumedLocalDraft.current === text) return;
-    if (editingAlert.current && /취소|그만|안\s*할|안\s*받|하지\s*마/.test(text) && !text.includes("@")) {
-      cancelAlertSetup(text); return;
-    }
-    if (editingAlert.current) {
-      if (text === "돌아가기") { returnFromAlertEdit(); return; }
-      if (alertEditingDraft && text) editAlertFromText(text, alertEditingDraft);
-      return;
-    }
-    if (alertDraft && !text.includes("@") && (requestedAlertField(text) || /반경|장소|위치/.test(text)) && !/취소|그만|안\s*할|안\s*받|하지\s*마/.test(text)) {
-      recordAlertConditions(); editingAlert.current = true;
-      setAlertEditingDraft({ ...alertDraft, places: alertDraft.places.map(place => ({ ...place })) });
-      setAlertDraft(null); setAlertConsent(false);
-      editAlertFromText(text, alertDraft); return;
-    }
-    // PRD 3.3 · 4.3-E — 이메일은 모델·대화 기록을 거치지 않고 기존 예약 API로만 보낸다.
-    if (alertDraft && !text.includes("@")) {
-      // PRD 4.3-E — 이메일 대기 중에도 취소·질문·검색 조건 변경을 허용한다.
-      recordAlertConditions();
-      setAlertDraft(null); setAlertConsent(false); setError("");
-      if (/취소|그만|안\s*할|안\s*받|하지\s*마/.test(text)) {
-        cancelAlertSetup(text);
-        return;
-      }
-    }
+    // PRD 4.3-A · 4.3-E — 자유 입력은 현재 작업과 함께 공통 모델 판단으로 보낸다.
     if (alertDraft && text.includes("@")) {
       if (!alertConsent) { setError("먼저 개인정보 수집·이용에 동의해 주세요."); return; }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text) || text.length > 254) { setError("올바른 이메일 주소만 입력해 주세요."); return; }
@@ -845,12 +844,21 @@ export function AgentSearchApp() {
       const visibleItemIds = selectedInstitution.length
         ? institutionItemIds
         : items.slice(itemPage * itemPageSize, (itemPage + 1) * itemPageSize).map(item => item.item_id);
-      const turn: AgentTurn = { type: "message", text, changing_place: placeChanging, visible_item_ids: visibleItemIds };
+      const currentAlert = alertDraft ?? alertEditingDraft;
+      const lastReply = [...messages].reverse().find(message => "author" in message && message.author === "agent" && Boolean(message.text.trim()) && !message.text.includes("@"));
+      const turn: AgentTurn = { type: "message", text, changing_place: placeChanging, visible_item_ids: visibleItemIds,
+        dialogue: {
+          task: currentAlert ? "alert" : "search",
+          alert: currentAlert ? { ...currentAlert, places: currentAlert.places.map(({name, latitude, longitude}) => ({name, latitude, longitude})) } : null,
+          awaiting: currentAlert ? (alertDraft ? "email" : alertAwaiting ?? alertEditField ?? "conditions") : null,
+          last_message: lastReply && "text" in lastReply ? lastReply.text.slice(0, 200) : "",
+        },
+      };
       if (recoveryRequired.current) {
         void submit(turn);
         return;
       }
-      const selectedPhotos = canAttachPhotos ? photos : [];
+      const selectedPhotos = canAttachPhotos && !currentAlert ? photos : [];
       if (selectedPhotos.length) turn.photos = selectedPhotos.map(photo => photo.searchUrl);
       void submit(turn, false, selectedPhotos);
     } else {
@@ -927,6 +935,17 @@ export function AgentSearchApp() {
     void navigate(location.pathname + location.search, { replace: Boolean(detail), state: { agentItemId: item.item_id }, flushSync: true });
   }
 
+  // PRD 4.3-E(2026-11-24) — 메일 결과 화면의 "전체 검색 결과도 보기"는 저장된 조건을 평소 검색 문장으로 보낸다.
+  // PRD 4.3-E — 저장된 조건은 이미 확정한 것이라 장소 후보를 다시 묻지 않고 바로 검색한다.
+  function searchSavedAlert(saved: AlertResults, text: string) {
+    if (busy || controller.current || revealingRepliesRef.current || alertPending.current) return false;
+    void submit({
+      type: "saved_search", text: saved.query, radius_m: saved.radius_m,
+      places: saved.places.map(({ name, latitude, longitude }) => ({ name, latitude, longitude })),
+    }, false, [], text);
+    return true;
+  }
+
   function openAlerts() {
     if (!conditions?.item_query || !searchCenters.length || placeChanging || conditions.place_operation) {
       setError("먼저 장소를 확정하고 물품을 검색해 주세요."); return;
@@ -984,6 +1003,28 @@ export function AgentSearchApp() {
     {progress && <button type="button" onClick={() => void cancel()} disabled={!activeRun || cancelling}>취소</button>}
     {error && lastTurn && !busy && <button type="button" onClick={() => void submit(lastTurn, true)}>다시 시도</button>}
   </div>;
+  const alertSetup = alertDraft && <section className="agent-alert-setup" aria-label="알림 신청 조건">
+          <AlertConditionSummary conditions={alertDraft} onEdit={editAlertConditions} editDisabled={busy || alertSending} />
+          <div className="agent-bubble agent-bubble-agent agent-alert-consent">
+            <p>안내를 확인하고 동의한 뒤, 아래에 이메일을 입력해 주세요.</p>
+            <details className="agent-alert-privacy" onToggle={event => {
+              if (event.currentTarget.open && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
+            }}><summary>{CONSENT_DETAILS.title}</summary>
+              <dl className="agent-alert-fields">
+                <div><dt>수집 항목</dt><dd>{CONSENT_DETAILS.items}</dd></div>
+                <div><dt>이용 목적</dt><dd>{CONSENT_DETAILS.purpose}</dd></div>
+                <div><dt>보관 기간</dt><dd>{CONSENT_DETAILS.retention}</dd></div>
+              </dl>
+              <p>{CONSENT_DETAILS.refusal}</p>
+            </details>
+            <label className="agent-alert-agree"><input type="checkbox" checked={alertConsent} onChange={event => {
+              setAlertConsent(event.target.checked);
+              if (event.target.checked) input.current?.focus({ preventScroll: true });
+            }} disabled={alertSending} /> 개인정보 수집·이용에 동의해요</label>
+            {alertSending && <p className="agent-alert-note" role="status">확인 메일을 보내고 있어요.</p>}
+          </div>
+        </section>;
+
   return <>
     <header className="app-header">
       <a className="app-wordmark" href={`/${location.search}`} aria-label="RETRIEVER 홈">RETRIEVER</a>
@@ -1026,9 +1067,15 @@ export function AgentSearchApp() {
               <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
             </ol>
             <hr className="agent-welcome-divider" /></>}
-            {messages.length === 0 && !mailAction && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
-            {mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
-          {messages.map((message, index) => "itemConversation" in message
+            {/* PRD 4.3-A — 첫 안내 문장은 대화가 시작돼도 기록 맨 위에 남긴다. */}
+            {!mailAction && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
+            {mailAction === "results"
+              ? <AlertResultsChat institutions={institutionIndex} selectedItemId={openItem?.item_id} onOpen={openDetail}
+                onSearchAll={searchSavedAlert} onScope={showMailScope} searchDisabled={busy || Boolean(activeRun)} />
+              : mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
+          {messages.map((message, index) => <Fragment key={index}>
+            {alertDraft && alertAnchor === index && alertSetup}
+            {"itemConversation" in message
             ? <AgentItemDetail key={message.itemConversation.id} item={message.itemConversation.item}
               institution={message.itemConversation.institution} answer={message.itemConversation.answer}
               acknowledged={message.itemConversation.acknowledged} onAcknowledge={() => acknowledgeItem(message.itemConversation.id)} />
@@ -1048,7 +1095,10 @@ export function AgentSearchApp() {
               {message.survey && <a className="agent-survey-link" href={SURVEY_URL} target="_blank" rel="noopener noreferrer">
                 이용 경험 설문 참여하기<span className="sr-only"> (새 창에서 열림)</span>
               </a>}
-            </div>)}
+            </div>}
+          </Fragment>)}
+          {/* PRD 4.3-E — 위치가 정해지기 전 한 번의 렌더에서도 신청 안내가 사라지지 않게 맨 아래에 둔다. */}
+          {alertDraft && (alertAnchor === null || alertAnchor >= messages.length) && alertSetup}
           {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates" aria-label="장소 후보" start={placePage * PLACE_PAGE_SIZE + 1}>
             {pagePlaces.map(({ id, place, number }) => <li className={`agent-place-card${id === selectedCandidate ? " is-selected" : ""}`} key={id} id={`agent-place-${id}`}>
               <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
@@ -1102,28 +1152,7 @@ export function AgentSearchApp() {
           </div>}
           <button type="button" className="agent-action-chip" disabled={busy} onClick={returnFromAlertEdit}>돌아가기</button>
         </section>}
-        {alertDraft && <section className="agent-alert-setup" aria-label="알림 신청 조건">
-          <AlertConditionSummary conditions={alertDraft} />
-          <button type="button" className="agent-action-chip" disabled={busy || alertSending} onClick={editAlertConditions}>조건 수정</button>
-          <div className="agent-bubble agent-bubble-agent agent-alert-consent">
-            <p>안내를 확인하고 동의한 뒤, 아래에 이메일을 입력해 주세요.</p>
-            <details className="agent-alert-privacy" onToggle={event => {
-              if (event.currentTarget.open && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-            }}><summary>{CONSENT_DETAILS.title}</summary>
-              <dl className="agent-alert-fields">
-                <div><dt>수집 항목</dt><dd>{CONSENT_DETAILS.items}</dd></div>
-                <div><dt>이용 목적</dt><dd>{CONSENT_DETAILS.purpose}</dd></div>
-                <div><dt>보관 기간</dt><dd>{CONSENT_DETAILS.retention}</dd></div>
-              </dl>
-              <p>{CONSENT_DETAILS.refusal}</p>
-            </details>
-            <label className="agent-alert-agree"><input type="checkbox" checked={alertConsent} onChange={event => {
-              setAlertConsent(event.target.checked);
-              if (event.target.checked) input.current?.focus({ preventScroll: true });
-            }} disabled={alertSending} /> 개인정보 수집·이용에 동의해요</label>
-            {alertSending && <p className="agent-alert-note" role="status">확인 메일을 보내고 있어요.</p>}
-          </div>
-        </section>}
+
           {detail && <AgentItemDetail key={detail.item_id} item={detail} institution={institutionIndex.get(detail.institution_id)}
             onBack={() => void navigate(-1)} onAccept={() => answerItem("yes")} onReject={() => answerItem("no")} />}
         </div>
@@ -1152,9 +1181,9 @@ export function AgentSearchApp() {
             onClick={choosePhotos}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1-1.5h5.8l1 1.5h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z" /><circle cx="12" cy="12.5" r="3.2" /></svg>
           </button>
-          <input id="agent-input" ref={input} value={draft} onChange={event => { consumedLocalDraft.current = null; setDraft(event.target.value); }}
+          <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
             onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
-            maxLength={alertDraft ? 254 : editingAlert.current && alertEditField === "item" ? 30 : 1000} disabled={alertSending} inputMode={alertDraft ? "email" : "text"} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : editingAlert.current ? "바꿀 알림 조건을 입력하세요" : composePlaceholder} />
+            maxLength={1000} disabled={alertSending} inputMode={alertDraft ? "email" : "text"} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : editingAlert.current ? "바꿀 알림 조건을 입력하세요" : composePlaceholder} />
           <button ref={sendButton} type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || (!draft.trim() && (Boolean(alertDraft) || editingAlert.current || !canAttachPhotos || !photos.length))}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
@@ -1200,8 +1229,8 @@ export function AgentSearchApp() {
 
       <KakaoMap themeKey="retriever-blue" focusedInstitution={focusedInstitution} institutions={institutions} institutionsLoaded={institutionsLoaded}
         institutionError={institutionError} countsAvailable={countsAvailable} places={mapPlaces} placeNumbers={placeNumbers}
-        selectedPlace={selectedPlace} searchCenters={searchCenters} previewPlace={previewPlace} radiusMeters={mappedRadius}
-        leftInset={mapInset} bottomInset={sheet.mapBottomInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={mapBadge}
+        selectedPlace={mapSelectedPlace} searchCenters={mapCenters} previewPlace={previewPlace} radiusMeters={mapRadius}
+        leftInset={mapInset} bottomInset={sheet.mapBottomInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={mapVisibleInstitutions} mapBadge={mapBadge}
         showInstitutionCounts={scopeReady} onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect}
         onResetRadius={selectedInstitution.length ? showFullScope : undefined} />
     </main>

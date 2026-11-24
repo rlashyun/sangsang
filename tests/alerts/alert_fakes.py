@@ -293,7 +293,13 @@ class FakeAlertStore:
 
     def get_reservation(self, reservation_id):
         reservation = self.reservations.get(reservation_id)
-        return None if reservation is None else self._public_reservation(reservation)
+        if reservation is None:
+            return None
+        # REST get_reservation과 같은 모양 — 장소 이름과 좌표를 화면 순서대로 준다.
+        return {**self._public_reservation(reservation), "places": [
+            {"name": place["name"], "latitude": place["latitude"], "longitude": place["longitude"]}
+            for place in reservation["places"]
+        ]}
 
     def confirm_reservation(self, reservation_id):
         reservation = self.reservations.get(reservation_id)
@@ -332,6 +338,31 @@ class FakeAlertStore:
             return "already_ended"
         self._end(reservation, "cancelled")
         return "cancelled"
+
+    def message_items(self, reservation_id, message_id):
+        # SupabaseAlertStore.message_items와 같은 규칙 — 이 예약의 결과 메일만, 기관이 연결된 물품만.
+        message = self.messages.get(message_id)
+        if (
+            message is None or message["reservation_id"] != reservation_id
+            or message["kind"] not in ("match", "expiry_notice")
+        ):
+            return None
+        rows = []
+        for (owner, item_id), note in self.notified.items():
+            item = self.found_items.get(item_id)
+            if owner != reservation_id or note["message_id"] != message_id or item is None:
+                continue
+            if item["storage_location_id"] is None:
+                continue
+            rows.append({
+                "id": item_id, "storage_location_id": item["storage_location_id"],
+                "item_source_code": item["item_source_code"], "item_name": item["item_name"],
+                "raw_category_name": item["raw_category_name"], "color_name": item["color_name"],
+                "description": item["description"], "image_url": None, "raw_storage_name": "",
+                "registered_on": item["registered_on"], "normalized_search_text": item["normalized_search_text"],
+                "score": note["score"],
+            })
+        return rows
 
     def _kst_date(self, value):
         return value.astimezone(KOREA_TIMEZONE).date()

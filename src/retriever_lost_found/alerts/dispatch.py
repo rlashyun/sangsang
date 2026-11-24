@@ -43,8 +43,9 @@ def compose_message(
     # 설계 6.2 — 보내기 직전 상태만 다시 본다. 만료 시각은 보지 않는다(만료일 아침 매칭분을 보낸다).
     if not email or status not in ("pending", "active"):
         return None
-    links = mail_links(settings, reservation, now)
     kind = message["kind"]
+    # PRD 4.3-E(2026-11-24) — 결과 메일은 이 메일 번호로 "리트리버에서 보기" 화면을 연다.
+    links = mail_links(settings, reservation, now, int(message["id"]) if kind != "confirm" else None)
     if kind == "confirm":
         if status != "pending":
             return None

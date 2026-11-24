@@ -93,7 +93,10 @@ class AlertSendEndpointTests(unittest.TestCase):
         match_calls = self.steps.match.call_args_list
         self.assertEqual([c.kwargs["item_source_code"] for c in match_calls], ["partner_api", "police_api"])
         self.assertTrue(all(c.args[0] is from_environment.return_value for c in match_calls))
-        self.assertTrue(all(c.args[1] is matching.SIMILARITY_JUDGE for c in match_calls))
+        # 2026-11-23 사용자 결정 — OpenRouter 키가 있으면 같은 판정에 Jev 제외를 더한다(matching.cron_judge).
+        judge = match_calls[0].args[1]
+        self.assertTrue(all(c.args[1] is judge for c in match_calls))
+        self.assertIs(getattr(judge, "func", judge), matching.SIMILARITY_JUDGE)
         self.assertIs(run_send.call_args.args[0], from_environment.return_value)
         self.assertIs(run_send.call_args.args[2], TEST_SETTINGS)
         self.assertLess(match_calls[0].kwargs["deadline"], run_send.call_args.kwargs["deadline"])

@@ -57,6 +57,16 @@ class SendPassTests(unittest.TestCase):
         self.assertEqual([email.subject for email in self.sender.sent], [MATCH_SUBJECT])
         self.assertEqual(self.match_statuses(), ["sent"])
 
+    def test_alert_mail_view_link_opens_the_items_of_that_mail(self) -> None:
+        # PRD 4.3-E(2026-11-24) — 링크가 이 메일 번호를 담아, 화면이 이 메일이 알린 물품을 그대로 연다.
+        _, message_id = self.reservation_with_alert("a@example.com")
+
+        self.run_pass()
+
+        (email,) = self.sender.sent
+        self.assertIn(f"/alerts/results?token=", email.text)
+        self.assertIn(f"&message={message_id}\n", email.text)
+
     def test_alert_mail_names_the_nearest_of_several_places(self) -> None:
         # 설계 16장 — 장소가 여러 곳이면 물품마다 보관기관에서 가장 가까운 장소를 붙인다.
         self.store.add_location(2, 37.5658 + 0.0045, 126.9772, name="시청 유실물센터")
