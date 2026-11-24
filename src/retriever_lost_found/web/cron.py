@@ -117,6 +117,17 @@ def thumbnail_callback(request: Request, background_tasks: BackgroundTasks) -> J
     return JSONResponse(status_code=202, content={"status": "accepted"}, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/thumbnail-sync")
+@router.get("/thumbnail-sync-afternoon")
+def thumbnail_recovery(request: Request) -> JSONResponse:
+    """PRD 4.5 — 수집 직후 콜백이 유실되거나 연쇄가 끊겨도 한 시간 뒤 축소본 처리를 다시 잇는다."""
+    authorization_error = _authorized(request)
+    if authorization_error is not None:
+        return authorization_error
+    result = process_pending_thumbnails()
+    return JSONResponse(status_code=200, content=result, headers={"Cache-Control": "no-store"})
+
+
 def _run_alert_matching(store: AlertStore, *, deadline: float) -> dict[str, Any]:
     """설계 6.1 — 출처마다 새 물품을 활성 예약과 비교한다(2026-11-15: 수집 크론 끝에서 발송 크론 앞으로).
 

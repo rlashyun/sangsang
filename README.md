@@ -238,6 +238,13 @@ DB 트리거 적용 이후 최종 저장 결과를 기준으로 기록합니다.
 | `/api/cron/partner-sync-afternoon`, `/api/cron/police-sync-afternoon` | 12:00 | 21시대 | 오늘까지 증분 수집, 삭제 생략 |
 | `/api/cron/embedding-sync` | 02:00 | 11시대 | 누락 임베딩 복구 |
 | `/api/cron/embedding-sync-afternoon` | 14:00 | 23시대 | 누락 임베딩 복구 |
+| `/api/cron/thumbnail-sync` | 01:00 | 10시대 | 끊긴 목록 축소본 처리 재개 |
+| `/api/cron/thumbnail-sync-afternoon` | 13:00 | 22시대 | 끊긴 목록 축소본 처리 재개 |
+
+목록 축소본도 임베딩처럼 수집이 끝나면 바로 인증된 POST 콜백(`/api/cron/thumbnail-sync`)으로
+시작하고, 한 묶음이 끝날 때마다 다음 묶음을 스스로 호출합니다. 두 복구 크론은 그 연쇄가
+끊긴 경우에만 이어 주며, 이미 처리 중이면 `already_running`으로 끝납니다.
+`thumbnail_worker_guard.enabled`가 false이면 콜백과 복구 크론 모두 아무것도 하지 않습니다.
 
 수집 종료 후에도 완료 트리거와 인증된 POST 콜백으로 임베딩을 연결합니다.
 오전·오후 각각 두 출처의 종료를 기다리며 오전 이력으로 오후 완료를 대신하지 않습니다.
