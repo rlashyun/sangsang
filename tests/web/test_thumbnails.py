@@ -81,3 +81,20 @@ def test_thumbnail_cron_requires_secret_and_runs_worker():
         assert response.status_code == 202
         assert response.headers["cache-control"] == "no-store"
         assert process.call_count == 1
+
+
+@pytest.mark.parametrize("path", ["/api/cron/thumbnail-sync", "/api/cron/thumbnail-sync-afternoon"])
+def test_thumbnail_recovery_cron_requires_secret_and_runs_worker_inline(path):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    with patch.dict("os.environ", {"CRON_SECRET": "test-secret"}), patch(
+        "retriever_lost_found.web.cron.process_pending_thumbnails", return_value={"status": "already_running"}
+    ) as process:
+        assert client.get(path).status_code == 401
+        assert process.call_count == 0
+        response = client.get(path, headers={"Authorization": "Bearer test-secret"})
+        assert response.status_code == 200
+        assert response.json() == {"status": "already_running"}
+        assert response.headers["cache-control"] == "no-store"
+        assert process.call_count == 1

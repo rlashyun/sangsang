@@ -18,9 +18,12 @@ class VercelConfigTests(unittest.TestCase):
                 {"path": "/api/cron/partner-sync", "schedule": "0 0 * * *"},
                 {"path": "/api/cron/police-sync", "schedule": "0 0 * * *"},
                 {"path": "/api/cron/embedding-sync", "schedule": "0 2 * * *"},
+                # PRD 4.5 — 축소본은 수집 직후 콜백으로 시작하고, 이 크론은 유실 복구용이다.
+                {"path": "/api/cron/thumbnail-sync", "schedule": "0 1 * * *"},
                 {"path": "/api/cron/partner-sync-afternoon", "schedule": "0 12 * * *"},
                 {"path": "/api/cron/police-sync-afternoon", "schedule": "0 12 * * *"},
                 {"path": "/api/cron/embedding-sync-afternoon", "schedule": "0 14 * * *"},
+                {"path": "/api/cron/thumbnail-sync-afternoon", "schedule": "0 13 * * *"},
                 # 설계 3장 — 발송 전용 크론. Hobby 크론은 지정 시간대 안 아무 때나 돌므로
                 # 09시대 수집과 겹치지 않게 KST 11시(UTC 02시)에 둔다(2026-11-06 팀 결정).
                 {"path": "/api/cron/alert-send", "schedule": "0 2 * * *"},
