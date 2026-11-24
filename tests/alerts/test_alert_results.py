@@ -37,7 +37,8 @@ class AlertResultsTests(unittest.TestCase):
         # 메일 본문은 5건까지만 싣는다. 링크 화면은 그 메일이 알린 7건을 모두 보여 준다.
         self.assertEqual([item["id"] for item in result["items"]], [7, 6, 5, 4, 3, 2, 1])
         self.assertEqual(result["query"], "블랙 에어팟")
-        self.assertEqual(result["places"], [{"name": "서울역"}])
+        # 지도가 저장된 장소로 옮겨 가도록 좌표도 준다(링크 토큰을 가진 본인만 읽는다).
+        self.assertEqual(result["places"], [{"name": "서울역", "latitude": 37.5547, "longitude": 126.9707}])
         self.assertEqual(result["radius_m"], 1000)
         self.assertEqual(result["status"], "active")
 

@@ -245,7 +245,11 @@ class AlertService:
         return {
             "status": reservation["status"],
             "query": reservation["query"],
-            "places": [{"name": place["name"]} for place in reservation["places"]],
+            # 화면이 지도를 저장된 장소·반경으로 맞추도록 좌표를 준다. 링크 토큰을 가진 본인이 고른 장소다.
+            "places": [
+                {"name": place["name"], "latitude": float(place["latitude"]), "longitude": float(place["longitude"])}
+                for place in reservation["places"]
+            ],
             "radius_m": int(reservation["radius_m"]),
             "items": rows,
         }

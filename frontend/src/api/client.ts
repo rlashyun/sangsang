@@ -148,7 +148,7 @@ export function fetchAlertSummary(token: string, signal?: AbortSignal) {
 }
 // PRD 4.3-E(2026-11-24) — 결과 메일 한 통이 알린 물품. 대화 검색과 같은 물품 모양이며 점수는 없다.
 export type AlertResults = {
-  status: string; query: string; places: { name: string }[]; radius_m: number; items: AgentItem[];
+  status: string; query: string; places: Pick<Place, "name" | "latitude" | "longitude">[]; radius_m: number; items: AgentItem[];
 };
 export function fetchAlertResults(token: string, message: string, signal?: AbortSignal) {
   return fetchJson<AlertResults>(`/api/alerts/results?${new URLSearchParams({ token, message })}`, signal);

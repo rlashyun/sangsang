@@ -1,8 +1,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn } from "../api/client";
-import { DEFAULT_SEARCH_RADIUS_METERS, SEARCH_RADIUS_OPTIONS_METERS, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
+import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelAgentTurn, fetchAgentPage, fetchInstitutions, runAgentTurn, type AlertResults } from "../api/client";
+import { DEFAULT_SEARCH_RADIUS_METERS, SEARCH_RADIUS_OPTIONS_METERS, isWithinRadius, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
 import { ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib/alert-return";
@@ -124,6 +124,7 @@ export function AgentSearchApp() {
   const [photoAttention, setPhotoAttention] = useState(0);
   const photoAttentionTarget = useRef<"attach" | "send">("attach");
   const [response, setResponse] = useState<AgentResponse | null>(null);
+  const [mailScope, setMailScope] = useState<{ centers: Place[]; radius: number } | null>(null);
   const [items, setItems] = useState<AgentItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [itemPage, setItemPage] = useState(0);
@@ -336,6 +337,17 @@ export function AgentSearchApp() {
     const scope = new Set(institutionIds);
     return institutions.filter(row => row.storage_location_id !== undefined && scope.has(row.storage_location_id));
   }, [institutions, institutionIds, selectedPlace, searchCenters]);
+  // PRD 4.3-E — 결과 메일 링크로 들어오면 대화가 시작되기 전까지 지도를 저장된 장소·반경에 맞춘다.
+  const mailMapScope = response ? null : mailScope;
+  const mapSelectedPlace = mailMapScope ? mailMapScope.centers[0] : selectedPlace;
+  const mapCenters = mailMapScope ? mailMapScope.centers : searchCenters;
+  const mapRadius = mailMapScope ? mailMapScope.radius : mappedRadius;
+  const mapVisibleInstitutions = useMemo(() => mailMapScope
+    ? institutions.filter(row => mailMapScope.centers.some(center => isWithinRadius(center, row, mailMapScope.radius)))
+    : visibleInstitutions, [institutions, mailMapScope, visibleInstitutions]);
+  const showMailScope = useCallback((places: AlertResults["places"], radius: number) => {
+    if (places.length) setMailScope({ centers: places.map(place => ({ ...place, address: "", phone: "", category: "", url: "" })), radius });
+  }, []);
   const institutionIndex = useMemo(() => new Map(institutions.flatMap(row =>
     row.storage_location_id === undefined ? [] : [[row.storage_location_id, row] as const])), [institutions]);
   const onMapPlaceSelect = useCallback((place: Place) => {
@@ -1056,7 +1068,7 @@ export function AgentSearchApp() {
             {!mailAction && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
             {mailAction === "results"
               ? <AlertResultsChat institutions={institutionIndex} selectedItemId={openItem?.item_id} onOpen={openDetail}
-                onSearchAll={searchSavedAlert} searchDisabled={busy || Boolean(activeRun)} />
+                onSearchAll={searchSavedAlert} onScope={showMailScope} searchDisabled={busy || Boolean(activeRun)} />
               : mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
           {messages.map((message, index) => <Fragment key={index}>
             {alertDraft && alertAnchor === index && alertSetup}
@@ -1214,8 +1226,8 @@ export function AgentSearchApp() {
 
       <KakaoMap themeKey="retriever-blue" focusedInstitution={focusedInstitution} institutions={institutions} institutionsLoaded={institutionsLoaded}
         institutionError={institutionError} countsAvailable={countsAvailable} places={mapPlaces} placeNumbers={placeNumbers}
-        selectedPlace={selectedPlace} searchCenters={searchCenters} previewPlace={previewPlace} radiusMeters={mappedRadius}
-        leftInset={mapInset} bottomInset={sheet.mapBottomInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={visibleInstitutions} mapBadge={mapBadge}
+        selectedPlace={mapSelectedPlace} searchCenters={mapCenters} previewPlace={previewPlace} radiusMeters={mapRadius}
+        leftInset={mapInset} bottomInset={sheet.mapBottomInset} onPointSelect={busy ? undefined : onMapPointSelect} visibleInstitutions={mapVisibleInstitutions} mapBadge={mapBadge}
         showInstitutionCounts={scopeReady} onPlaceSelect={onMapPlaceSelect} onInstitutionSelect={onMapInstitutionSelect}
         onResetRadius={selectedInstitution.length ? showFullScope : undefined} />
     </main>

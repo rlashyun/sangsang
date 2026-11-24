@@ -11,7 +11,7 @@ from ..integrations.supabase_rest import SupabaseRestClient
 # 설계 16장 — 장소는 alert_reservation_places에서 화면 순서(position)대로 함께 읽는다.
 RESERVATION_FIELDS = (
     "id,email,query,radius_m,status,link_nonce,created_at,expires_at,extension_count,"
-    "places:alert_reservation_places(name:place_name,position)"
+    "places:alert_reservation_places(name:place_name,position,latitude,longitude)"
 )
 
 
@@ -24,9 +24,13 @@ class AlertPlace:
     longitude: float
 
 
-def _ordered_place_names(places: Any) -> list[dict[str, str]]:
+def _ordered_places(places: Any) -> list[dict[str, Any]]:
+    # 좌표는 결과 링크 화면의 지도에만 쓴다(링크 토큰을 가진 본인). 요약·메일은 이름만 꺼낸다.
     rows = sorted(places or [], key=lambda place: place.get("position") or 0)
-    return [{"name": str(place["name"])} for place in rows]
+    return [
+        {"name": str(place["name"]), "latitude": float(place["latitude"]), "longitude": float(place["longitude"])}
+        for place in rows
+    ]
 
 
 class AlertStore(Protocol):
@@ -158,7 +162,7 @@ class SupabaseAlertStore(SupabaseRestClient):
             raise RuntimeError("Supabase 알림 API 응답 형식이 올바르지 않습니다.")
         if not rows:
             return None
-        return {**rows[0], "places": _ordered_place_names(rows[0].get("places"))}
+        return {**rows[0], "places": _ordered_places(rows[0].get("places"))}
 
     def confirm_reservation(self, reservation_id: int) -> str:
         return str(self._rpc("confirm_alert_reservation", {"p_reservation_id": int(reservation_id)}))

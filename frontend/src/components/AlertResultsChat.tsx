@@ -12,11 +12,13 @@ export function alertSearchText(results: Pick<AlertResults, "places" | "query" |
   return `${results.places.map(place => place.name).join(", ")} 반경 ${radiusKilometersLabel(results.radius_m)}에서 ${results.query} 찾아줘`;
 }
 
-export function AlertResultsChat({ institutions, selectedItemId, onOpen, onSearchAll, searchDisabled }: {
+export function AlertResultsChat({ institutions, selectedItemId, onOpen, onSearchAll, onScope, searchDisabled }: {
   institutions: Map<number, Institution>;
   selectedItemId?: number;
   onOpen: (item: AgentItem) => void;
   onSearchAll: (text: string) => boolean;
+  // 결과를 받으면 지도를 저장된 장소·반경으로 맞추도록 알린다.
+  onScope: (places: AlertResults["places"], radiusMeters: number) => void;
   searchDisabled: boolean;
 }) {
   const location = useLocation();
@@ -40,7 +42,9 @@ export function AlertResultsChat({ institutions, selectedItemId, onOpen, onSearc
     const controller = new AbortController();
     if (!link.token || !link.message) { setLoading(false); setError("메일의 ‘리트리버에서 보기’ 링크를 다시 열어 주세요."); return; }
     void fetchAlertResults(link.token, link.message, controller.signal).then(value => {
-      if (!controller.signal.aborted) setResults(value);
+      if (controller.signal.aborted) return;
+      setResults(value);
+      onScope(value.places, value.radius_m);
     }).catch(error => {
       if (!controller.signal.aborted) setError(error instanceof Error && !(error instanceof TypeError) ? `${error.message} 메일의 링크를 다시 열어 주세요.` : "알림 결과를 불러오지 못했어요. 메일의 링크를 다시 열어 주세요.");
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });

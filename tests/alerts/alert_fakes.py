@@ -293,7 +293,13 @@ class FakeAlertStore:
 
     def get_reservation(self, reservation_id):
         reservation = self.reservations.get(reservation_id)
-        return None if reservation is None else self._public_reservation(reservation)
+        if reservation is None:
+            return None
+        # REST get_reservation과 같은 모양 — 장소 이름과 좌표를 화면 순서대로 준다.
+        return {**self._public_reservation(reservation), "places": [
+            {"name": place["name"], "latitude": place["latitude"], "longitude": place["longitude"]}
+            for place in reservation["places"]
+        ]}
 
     def confirm_reservation(self, reservation_id):
         reservation = self.reservations.get(reservation_id)
