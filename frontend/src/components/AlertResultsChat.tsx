@@ -16,7 +16,8 @@ export function AlertResultsChat({ institutions, selectedItemId, onOpen, onSearc
   institutions: Map<number, Institution>;
   selectedItemId?: number;
   onOpen: (item: AgentItem) => void;
-  onSearchAll: (text: string) => boolean;
+  // 저장된 조건과 말풍선에 보일 문장을 넘긴다. 검색을 시작하지 못하면 false.
+  onSearchAll: (saved: AlertResults, text: string) => boolean;
   // 결과를 받으면 지도를 저장된 장소·반경으로 맞추도록 알린다.
   onScope: (places: AlertResults["places"], radiusMeters: number) => void;
   searchDisabled: boolean;
@@ -60,7 +61,7 @@ export function AlertResultsChat({ institutions, selectedItemId, onOpen, onSearc
   }
   function searchAll() {
     if (!results || searched) return;
-    if (onSearchAll(alertSearchText(results))) setSearched(true);
+    if (onSearchAll(results, alertSearchText(results))) setSearched(true);
   }
 
   return <>

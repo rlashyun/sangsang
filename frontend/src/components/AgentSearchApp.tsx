@@ -936,10 +936,13 @@ export function AgentSearchApp() {
   }
 
   // PRD 4.3-E(2026-11-24) — 메일 결과 화면의 "전체 검색 결과도 보기"는 저장된 조건을 평소 검색 문장으로 보낸다.
-  function searchSavedAlert(text: string) {
+  // PRD 4.3-E — 저장된 조건은 이미 확정한 것이라 장소 후보를 다시 묻지 않고 바로 검색한다.
+  function searchSavedAlert(saved: AlertResults, text: string) {
     if (busy || controller.current || revealingRepliesRef.current || alertPending.current) return false;
-    void submit({ type: "message", text, changing_place: false, visible_item_ids: [],
-      dialogue: { task: "search", alert: null, awaiting: null, last_message: "" } });
+    void submit({
+      type: "saved_search", text: saved.query, radius_m: saved.radius_m,
+      places: saved.places.map(({ name, latitude, longitude }) => ({ name, latitude, longitude })),
+    }, false, [], text);
     return true;
   }
 

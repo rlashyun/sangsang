@@ -126,6 +126,54 @@ def test_chat_api_confirms_map_point_before_and_after_item():
     assert client.post("/api/search-chat/turns", json=outside).status_code == 400
 
 
+def test_saved_alert_search_runs_at_once_with_saved_places_item_and_radius():
+    # PRD 4.3-E — 결과 메일의 '전체 검색'은 장소 후보 확인·모델 해석 없이 저장된 조건으로 바로 검색한다.
+    model = Mock()
+    find_places = Mock(return_value=[])
+    search = Mock(return_value=SearchPage(({"item_id": 1, "institution_id": 42},), 1))
+    client = TestClient(create_app(Mock(), "dummy", agent_router=create_agent_router(
+        model=model, find_places=find_places, search_items=search,
+        get_institutions=lambda: [Institution(42, 37.5, 127.03), Institution(77, 37.56, 126.97), Institution(99, 35.1, 129.0)],
+    )))
+    saved = {"type": "saved_search", "request_id": "saved", "text": "블랙 에어팟", "radius_m": 1500, "places": [
+        {"name": "강남역", "latitude": 37.5, "longitude": 127.03}, {"name": "서울역", "latitude": 37.56, "longitude": 126.97},
+    ]}
+
+    result = json.loads(client.post("/api/search-chat/turns", json=saved).text.splitlines()[-1])["response"]
+
+    assert result["status"] == "results"
+    assert [place["name"] for place in result["conditions"]["places"]] == ["강남역", "서울역"]
+    assert result["conditions"]["item_query"] == "블랙 에어팟"
+    assert result["conditions"]["radius_m"] == 1500
+    assert sorted(result["conditions"]["institution_ids"]) == [42, 77]
+    assert sorted(search.call_args.args[0]) == [42, 77]
+    assert search.call_args.args[1] == "블랙 에어팟"
+    find_places.assert_not_called()
+    model.assert_not_called()
+
+
+def test_saved_alert_search_rejects_malformed_requests():
+    client = TestClient(create_app(Mock(), "dummy", agent_router=create_agent_router(
+        model=Mock(), find_places=lambda _: [], get_institutions=lambda: [], search_items=Mock(),
+    )))
+    place = {"name": "서울역", "latitude": 37.56, "longitude": 126.97}
+    saved = {"type": "saved_search", "request_id": "ok", "text": "지갑", "radius_m": 1000, "places": [place]}
+    for index, bad in enumerate([
+        {**saved, "places": []},
+        {**saved, "places": [place] * 4},
+        {**saved, "places": [place, {**place, "name": "같은 지점"}]},
+        {**saved, "radius_m": None},
+        {**saved, "text": None},
+        {**saved, "text": "가" * 31},
+        {**saved, "text": "010-1234-5678"},
+        {**saved, "session_id": "s", "revision": 0},
+        {**saved, "places": [{**place, "latitude": 10.0}]},
+        {"type": "message", "request_id": "m", "text": "지갑", "places": [place]},
+    ]):
+        response = client.post("/api/search-chat/turns", json={**bad, "request_id": f"bad-{index}"})
+        assert response.status_code == 400, bad
+
+
 def test_chat_api_resolves_scope_before_item_when_confirming_candidate():
     model = Mock(return_value={
         "action": "search", "message": "", "place_query": "강남역", "item_query": None,
