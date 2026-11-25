@@ -14,7 +14,7 @@ from ..thumbnails.resize import resize_image
 MAX_PHOTO_LENGTH = 400_000
 MAX_USER_PHOTOS = 3
 JPEG_PREFIX = "data:image/jpeg;base64,"
-ADJUSTMENTS = {"same": 0.02, "similar": 0.0, "unsure": 0.0, "different": -0.02, "very_different": -0.05}
+ADJUSTMENTS = {"same": 0.10, "similar": 0.05, "unsure": 0.0, "different": -0.05, "very_different": -0.10}
 PHOTO_BATCH_SIZE = 5
 _photo_search_slots = BoundedSemaphore(2)
 

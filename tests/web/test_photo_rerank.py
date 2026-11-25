@@ -86,12 +86,12 @@ def test_user_and_candidate_content_rerank_only_top_100_and_keep_page_order():
 
 
 def test_photo_rerank_applies_penalties_and_preserves_order_when_photo_comparison_fails():
-    ranked = [{"id": i, "match_score": score} for i, score in [(3, .52), (2, .50), (1, .485)]]
+    ranked = [{"id": i, "match_score": score} for i, score in [(3, .57), (2, .50), (1, .485)]]
     candidates = [{"id": i, "storage_location_id": 42, "thumbnail_url": THUMBNAIL_URL} for i in (3, 2)]
     fetch = Mock(return_value=candidates)
     compare = Mock(return_value={"results": [{"id": "3", "label": "very_different"}, {"id": "2", "label": "different"}]})
     items, status = rerank_photos(ranked, [42], "지갑", ("photo",), fetch, compare)
-    assert [row["id"] for row in items] == [1, 2, 3] and status == "applied"
+    assert [row["id"] for row in items] == [1, 3, 2] and status == "applied"
 
     compare.side_effect = RuntimeError
     assert rerank_photos(ranked, [42], "지갑", ("photo",), fetch, compare) == (ranked, "unavailable")
@@ -108,19 +108,21 @@ def test_photo_rerank_applies_penalties_and_preserves_order_when_photo_compariso
 def test_photo_rerank_keeps_successful_batch_when_another_batch_fails():
     last_id = PHOTO_BATCH_SIZE + 1
     ids = range(1, last_id + 1)
-    ranked = [{"id": i, "match_score": .5 + i * .001} for i in reversed(ids)]
+    scores = [.50, .528, .545, .55, .56, .58]
+    ranked = [{"id": i, "match_score": scores[i - 1]} for i in reversed(ids)]
     candidates = [{"id": i, "storage_location_id": 42, "thumbnail_url": THUMBNAIL_URL} for i in ids]
 
     def compare(_, content, schema):
         batch_ids = [json.loads(part["text"])["id"] for part in content[2::2]]
         if str(last_id) in batch_ids:
             raise RuntimeError("provider timeout")
-        return {"results": [{"id": item_id, "label": "same" if item_id == "1" else "unsure"} for item_id in batch_ids]}
+        labels = {"1": "same", "2": "similar"}
+        return {"results": [{"id": item_id, "label": labels.get(item_id, "unsure")} for item_id in batch_ids]}
 
     items, status = rerank_photos(ranked, [42], "지갑", ("photo",), Mock(return_value=candidates), compare)
 
     assert status == "applied"
-    assert [row["id"] for row in items] == [1, *range(last_id, 1, -1)]
+    assert [row["id"] for row in items] == [1, last_id, 2, 5, 4, 3]
 
 
 def test_photo_rerank_keeps_valid_unique_verdicts_from_an_incomplete_batch():
