@@ -150,7 +150,7 @@ def _run_alert_matching(store: AlertStore, *, deadline: float) -> dict[str, Any]
 
 @router.get("/alert-send")
 def alert_send(request: Request) -> JSONResponse:
-    """설계 6.2 — 매칭 → 종료 안내 → 발송(450통 한도) → 정리. KST 11시대에 한 번 돈다."""
+    """설계 6.2 — 매칭 → 종료 안내 → 발송(450통 한도) → 정리. KST 12시대에 한 번 돈다."""
     started = time.monotonic()
     authorization_error = _authorized(request)
     if authorization_error is not None:
