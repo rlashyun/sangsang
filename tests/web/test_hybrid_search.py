@@ -165,15 +165,17 @@ def test_search_pagination_returns_at_most_top_100_ranked_items(item_count):
             return [{"id": i, "storage_location_id": 7, "item_name": "지갑"} for i in range(1, item_count + 1)]
 
     client = TestClient(create_app(object(), "test-js", found_item_client=Items()))
+    # 2026-11-25 — 상위 100건을 한 응답에 보낸다. 옛 50건 커서도 그 뒤를 이어 준다.
     first = client.get("/api/found-items?location_ids=7&q=지갑").json()
-    second = client.get("/api/found-items", params={"location_ids": 7, "q": "지갑", "cursor": first["next_cursor"]}).json()
+    old_second = client.get("/api/found-items?location_ids=7&q=지갑&cursor=search:50").json()
     outside = client.get("/api/found-items?location_ids=7&q=지갑&cursor=search:100").json()
     visible_count = min(item_count, 100)
+    expected = list(range(item_count, item_count - visible_count, -1))
     assert first["candidate_count"] == item_count
-    assert first["match_count"] == first["total_count"] == second["total_count"] == visible_count
-    assert len(first["items"]) == 50
-    assert [r["id"] for r in first["items"] + second["items"]] == list(range(item_count, item_count - visible_count, -1))
-    assert second["next_cursor"] is None
+    assert first["match_count"] == first["total_count"] == visible_count
+    assert [r["id"] for r in first["items"]] == expected
+    assert first["next_cursor"] is None
+    assert [r["id"] for r in old_second["items"]] == expected[50:] and old_second["next_cursor"] is None
     assert outside["items"] == [] and outside["next_cursor"] is None
 
 
