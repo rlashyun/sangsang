@@ -19,7 +19,7 @@ from ..search.photo_rerank import MAX_PHOTO_LENGTH, MAX_USER_PHOTOS, prepare_use
 
 from .agent_conversation import ITEM_QUESTION, PLACE_ITEM_QUESTION, Conversation, ItemDetails, Model, PlaceSelectionError, advance_place_selection, confirm_place, edit_places, respond_to_message, search_conversation
 from .agent_search import Institution, PlaceCandidate, SearchPage, _validated_query, resolve_institution_scope
-from .agent_conversation import DialogueContext, apply_alert_decision
+from .agent_conversation import AlertChanges, AlertDraft, DialogueContext, TurnDecision, apply_alert_decision
 from .agent_store import AgentStore, MemoryAgentStore
 from ..agent_diagnostics import trace_id, start_trace, record, failure_fields
 from ..privacy.masking import contains_identifier
@@ -238,7 +238,10 @@ def create_agent_router(
             return turn
         if (turn.type == "message" and not (turn.text or "").strip()
                 or turn.photos and (turn.type != "message" or not turn.session_id or turn.changing_place or turn.dialogue and turn.dialogue.task == "alert")
-                or turn.dialogue and turn.type != "message"
+                or turn.dialogue and turn.type != "message" and (
+                    turn.dialogue.task != "alert" or turn.type not in ("change_radius", "remove_place")
+                    or turn.type == "remove_place" and turn.place_target is None
+                )
                 or turn.type == "change_radius" and turn.radius_m is None
                 or turn.type == "select_place" and turn.candidate_id is None
                 or turn.type == "select_point" and (turn.latitude is None or turn.longitude is None)
@@ -342,7 +345,17 @@ def create_agent_router(
                 elif not session.cancelled.is_set():
                     place_query = None
                     places_changed = False
-                    if turn.type == "skip_place":
+                    if turn.dialogue and turn.type in ("change_radius", "remove_place"):
+                        changes = AlertChanges(query=None, radius=turn.radius_m if turn.type == "change_radius" else None,
+                                               remove_places=[turn.place_target] if turn.type == "remove_place" else [])
+                        decision = TurnDecision(action="update_alert", alert_changes=changes, message="", place_query=None,
+                                                item_query=None, clear_item_query=False, asks_for=None, item_changes=None, target=None)
+                        try:
+                            dialogue = apply_alert_decision(turn.dialogue, decision)
+                            result = {"status": "answered", "message": dialogue.pop("message"), "dialogue": dialogue}
+                        except ValueError:
+                            result = {"status": "answered", "message": "알림 조건을 바꾸지 못했어요. 장소는 한 곳 이상 남겨 주세요."}
+                    elif turn.type == "skip_place":
                         state = advance_place_selection(state)
                         if state.place_operation is not None:
                             place_query = state.place_query
@@ -530,6 +543,23 @@ def create_agent_router(
                         result = {"status": "awaiting_place_selection" if candidates else "no_place_candidates", "message": message}
                         state = replace(state, recent=(*state.recent, (turn.text or "장소 확인", message))[-4:])
 
+                    # PRD 4.3-E — 검증한 알림 조건으로 기존 검색을 갱신한다.
+                    alert_update = result.get("dialogue")
+                    if alert_update and alert_update["changed"]:
+                        updated = AlertDraft.model_validate(alert_update["alert"])
+                        selected = {(p.name, p.latitude, p.longitude): p for p in state.selected_places()}
+                        keys = [(p.name, p.latitude, p.longitude) for p in updated.places]
+                        if state.place_operation or len(set(keys)) != len(keys) or any(key not in selected for key in keys):
+                            result = {"status": "answered", "message": "현재 검색에서 확정한 장소로 알림 조건을 다시 설정해 주세요."}
+                            alert_update = None
+                        else:
+                            centres = tuple(selected[key] for key in keys)
+                            state = replace(state, confirmed=centres[-1], places=centres, place_query=centres[-1].name,
+                                            candidates=(), item_query=updated.query,
+                                            item_details=state.item_details if updated.query == state.item_query else ItemDetails())
+                            manual_radius = updated.radius
+                            result["status"] = "ready_to_search"
+
                     actions = None
                     decision_message = result.get("message") if result["status"] == "ready_to_search" else None
                     if result["status"] == "ready_to_search":
@@ -561,7 +591,10 @@ def create_agent_router(
                                 result = event
                         if dialogue_result is not None:
                             result["dialogue"] = dialogue_result
-                        if decision_message and result.get("status") in {"results", "no_matches"}:
+                        if dialogue_result and dialogue_result["changed"]:
+                            dialogue_result["alert"]["radius"] = radius
+                            result["message"] = decision_message
+                        elif decision_message and result.get("status") in {"results", "no_matches"}:
                             result["explanation"] = decision_message
                     if photos and result["status"] == "results":
                         result["photo_status"] = photo_page.photo_status if photo_page else "unavailable"

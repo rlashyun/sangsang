@@ -1,4 +1,4 @@
-"""PRD 4.3-A · 4.3-E — Intent decisions preserve scope and draft isolation."""
+"""PRD 4.3-A · 4.3-E — Alert edits and search share the applied conditions."""
 
 import json
 from unittest.mock import Mock
@@ -61,7 +61,6 @@ def client_with_search():
 @pytest.mark.parametrize("action,updates", [
     ("clarify", {"awaiting": "item", "asks_for": "item"}),
     ("answer", {"message": "확인 메일의 링크를 눌러 주세요."}),
-    ("update_alert", {"alert_changes": {"query": "우산", "radius": 1500, "remove_places": []}}),
     ("end", {}),
 ])
 def test_alert_decisions_never_search_and_preserve_results(action, updates):
@@ -73,10 +72,7 @@ def test_alert_decisions_never_search_and_preserve_results(action, updates):
     assert result["status"] == "answered"
     assert result["conditions"] == original["conditions"]
     assert model.call_args.args[1]["dialogue"]["awaiting"] == "email"
-    if action == "update_alert":
-        assert result["dialogue"]["alert"]["query"] == "우산"
-        assert result["dialogue"]["changed"]
-    elif action == "clarify":
+    if action == "clarify":
         assert result["dialogue"]["alert"] == context()["alert"]
         assert result["dialogue"]["awaiting"] == "item"
     elif action == "end":
@@ -97,6 +93,28 @@ def test_alert_to_search_transition_applies_new_query():
     search.assert_called_once_with((42,), "우산", None)
 
 
+def test_alert_radius_button_syncs_final_expanded_radius_without_intent_call():
+    _, send, original, model, search, institutions, _ = client_with_search()
+    institutions.return_value = [Institution(42, 37.566, 126.97)]
+    result = send({"type": "change_radius", "radius_m": 1500, "request_id": "radius",
+                   "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
+    assert result["status"] == "results"
+    assert result["conditions"]["radius_m"] == result["dialogue"]["alert"]["radius"] == 2000
+    model.assert_not_called()
+
+
+def test_failed_alert_edit_preserves_previous_search_and_has_no_confirmation():
+    _, send, original, model, search, _, _ = client_with_search()
+    model.return_value = decision("update_alert", task="alert",
+                                  alert_changes={"query": "우산", "radius": None, "remove_places": []})
+    search.side_effect = RuntimeError("search failed")
+    result = send({"type": "message", "text": "우산으로 바꿔줘", "request_id": "failed-alert",
+                   "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
+    assert result["status"] == "error"
+    assert result["conditions"] == original["conditions"]
+    assert "dialogue" not in result
+
+
 def test_prepare_alert_can_start_from_search_with_alert_task():
     _, send, original, model, search, institutions, places = client_with_search()
     model.return_value = decision("prepare_alert", task="alert")
@@ -108,24 +126,28 @@ def test_prepare_alert_can_start_from_search_with_alert_task():
     search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
 
 
-def test_question_and_following_alert_update_share_context_without_search():
+def test_alert_update_refreshes_search_and_confirms_applied_value():
     _, send, original, model, search, institutions, places = client_with_search()
     model.return_value = decision("clarify", task="alert", awaiting="item", asks_for="item")
     question = send({"type": "message", "request_id": "question", "text": "물건 바꿀게",
                      "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
     followup = {key: value for key, value in question["dialogue"].items() if key != "changed"}
     followup["last_message"] = question["message"]
-    model.return_value = decision("update_alert", task="alert", message="알림은 등록 다음날부터 7일간 유지돼요.",
+    model.return_value = decision("update_alert", task="alert", message="갈색 지갑으로 변경했어요.",
                                   alert_changes={"query": "우산", "radius": 1500, "remove_places": []})
     result = send({"type": "message", "request_id": "answer", "text": "우산으로 하고 반경은 1.5km. 언제 끝나?",
                    "session_id": question["session_id"], "revision": question["revision"], "dialogue": followup})
     assert result["dialogue"]["alert"]["query"] == "우산"
     assert result["dialogue"]["alert"]["radius"] == 1500
     assert result["dialogue"]["awaiting"] == "email"
-    assert "7일" in result["message"]
+    assert "우산" in result["message"]
+    assert "갈색 지갑" not in result["message"]
     assert model.call_args.args[1]["dialogue"]["awaiting"] == "item"
-    assert result["conditions"] == original["conditions"]
-    search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
+    assert result["status"] == "results"
+    assert result["conditions"]["item_query"] == "우산"
+    assert result["conditions"]["radius_m"] == 1500
+    search.assert_called_once_with((42,), "우산", None)
+    places.assert_not_called()
 
 
 @pytest.mark.parametrize("changes", [
@@ -241,7 +263,7 @@ def test_emoji_in_alert_update_keeps_change_with_fixed_confirmation():
                    "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
     assert result["dialogue"]["alert"]["query"] == "우산"
     assert "😎" not in result["message"] and "예." not in result["message"]
-    assert result["message"].startswith("알림 조건을 반영했어요.")
+    assert result["message"].startswith("알림 초안의 물품을 ‘우산’으로 수정했어요.")
 
 
 def test_instructions_fix_scope_and_tone():
