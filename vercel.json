@@ -45,7 +45,7 @@
     },
     {
       "path": "/api/cron/alert-send",
-      "schedule": "0 2 * * *"
+      "schedule": "0 3 * * *"
     }
   ],
   "git": {

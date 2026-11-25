@@ -314,7 +314,7 @@ uv run python scripts/search_storage_location_kakao.py 5052
 메일로 알리고 마지막 날에는 종료·연장을 안내합니다(PRD 2.1-4, 4.2 P1, 4.3-E).
 설계는 `docs/alert-scheduler/`(최신 결정은 설계 문서 15장), 화면 연결은 같은 폴더의 `frontend-handoff.md`에 있습니다.
 
-- `/api/cron/alert-send`가 매일 UTC 02:00, 한국시간 오전 11시대에 한 번 돕니다.
+- `/api/cron/alert-send`가 매일 UTC 03:00, 한국시간 12시대에 한 번 돕니다.
   출처별 매칭(120초 안) → 마지막 날 종료 안내 → 발송 → 정리 순서입니다. 수집 크론은 알림을 건드리지 않습니다.
 - 유사 판정은 운영 검색의 키워드 단계(동의어·BM25)와 같습니다. 같은 검색어로 같은 반경을 검색했을 때
   결과에 나오는 새 물품을 알립니다(`alerts/judge.py`).
