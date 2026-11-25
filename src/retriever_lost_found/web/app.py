@@ -396,7 +396,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
     return app
 
 
-SEARCH_CURSOR_PATTERN = re.compile(r"search:(?P<offset>[0-9]{1,6})(?::x=(?P<jev>(?:[0-9]{1,18}(?:,[0-9]{1,18}){0,29})?))?")
+SEARCH_CURSOR_PATTERN = re.compile(r"search:(?P<offset>[0-9]{1,6})(?::x=(?P<jev>(?:[0-9]{1,18}(?:,[0-9]{1,18}){0,99})?))?")
 
 
 def search_cursor(offset: int, jev_excluded: set[int] | None) -> str:

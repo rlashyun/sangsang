@@ -18,8 +18,8 @@ BGE-M3 재정렬은 판정에 쓰지 않는다. 운영 검색에서도 재정렬
    - 색을 하나도 알 수 없는 물품은 색 조건을 통과시킨다(색을 안 적어 진짜 물건을 놓치지 않게).
    - 특징은 물품 글에 실제로 적히는 이어폰 방향(왼쪽·오른쪽)과 맥세이프만 조건으로 쓴다. 가죽·캐릭터·
      남성용 같은 특징, 사전에 없는 단어, 카드 상품은 조건으로 쓰지 않는다(거의 안 적혀 진짜 물건을 놓친다).
-4. Jev 제외(2026-11-23 사용자 결정) — 검색 화면과 같은 search/jev_filter.py로 점수 상위 30건 중 명백히 다른
-   물건만 뺀다. 크론(cron_judge)에서만 켜고, OpenRouter 키가 없거나 호출이 실패하면 아무것도 빼지 않는다.
+4. Jev 제외(2026-11-23 사용자 결정) — 검색 화면과 같은 search/jev_filter.py로 점수 상위 100건 중 명백히 다른
+   물건만 뺀다(2026-11-25 — 25건 구간마다 요청 하나, 1~25위 0.92·26~100위 0.87). 크론(cron_judge)에서만 켜고, OpenRouter 키가 없거나 호출이 실패하면 아무것도 빼지 않는다.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def search_judge(query: str, candidates: list[dict[str, Any]], *,
     ]
     matched.sort(key=lambda pair: (-pair[1], -int(pair[0]["id"])))
     if jev is not None and matched:
-        # 4. Jev 제외(2026-11-23) — 점수 상위 30건 중 명백히 다른 물건만 뺀다. 실패하면 아무것도 빼지 않는다.
+        # 4. Jev 제외(2026-11-23, 2026-11-25 구간별 임계값) — 점수 상위 100건 중 명백히 다른 물건만 뺀다. 실패하면 아무것도 빼지 않는다.
         _, status, excluded = jev.apply(hybrid.query_text(query), [_with_palette_color(item) for item, _ in matched],
                                         budget=JEV_ALERT_BUDGET_SECONDS)
         if status in {"unavailable", "skipped"}:

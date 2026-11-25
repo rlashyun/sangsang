@@ -70,10 +70,20 @@ def test_each_reservation_gets_a_bounded_jev_budget():
 
 
 def test_only_the_top_matches_by_score_are_judged():
-    many = [candidate(i, f"검정 카드지갑 {i}호") for i in range(1, 51)]
+    # 2026-11-25 사용자 결정 — 알림도 검색 화면과 같이 점수 상위 100건을 25건 구간마다 요청 하나로 판정한다.
+    many = [candidate(i, f"검정 카드지갑 {i}호") for i in range(1, 121)]
     client = FakeDecisions({})
     search_judge("검정 카드지갑", many, jev=JevFilter(client))
-    assert len(client.calls[0]["questions"]) == jev_filter.TOP_N
+    assert sorted(len(call["questions"]) for call in client.calls) == [25, 25, 25, 25] == [25] * (jev_filter.TOP_N // 25)
+
+
+def test_lower_ranked_matches_use_the_looser_threshold():
+    many = [candidate(i, f"검정 카드지갑 {i}호") for i in range(1, 61)]
+    order = ids(search_judge("검정 카드지갑", many))
+    first, second = order[0], order[30]  # 1위(0.92 구간)와 31위(0.87 구간)
+    client = FakeDecisions({first: 0.9, second: 0.9})
+    judged = ids(search_judge("검정 카드지갑", many, jev=JevFilter(client)))
+    assert first in judged and second not in judged
 
 
 def test_default_judge_stays_jev_free_and_the_cron_judge_uses_jev_when_a_key_exists(monkeypatch):
@@ -81,6 +91,7 @@ def test_default_judge_stays_jev_free_and_the_cron_judge_uses_jev_when_a_key_exi
     monkeypatch.setattr(matching, "read_optional_env_value", lambda name: "key" if name == "OPENROUTER_API_KEY" else None)
     judge = matching.cron_judge()
     assert judge is not search_judge and isinstance(judge.keywords["jev"], JevFilter)
+    assert judge.keywords["jev"].thresholds == jev_filter.SEGMENT_THRESHOLDS == (0.92, 0.87, 0.87, 0.87)
     monkeypatch.setattr(matching, "read_optional_env_value", lambda name: None)
     assert matching.cron_judge() is search_judge
 

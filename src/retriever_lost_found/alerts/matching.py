@@ -30,6 +30,7 @@ def cron_judge() -> SimilarityJudge:
         return SIMILARITY_JUDGE
     from ..integrations.jev import OpenRouterDecisions
     from ..search.jev_filter import JevFilter
+    # 2026-11-25 사용자 결정 — 검색 화면과 같은 설정(점수 상위 100건, 25건 구간별 요청, 0.92/0.87)을 쓴다.
     return partial(search_judge, jev=JevFilter(OpenRouterDecisions(key)))
 
 
