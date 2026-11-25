@@ -29,6 +29,23 @@ def test_palette_label_maps_to_colors_people_actually_write():
     assert "분홍" in item_colors(item("지갑", "레드(연한레드)"))
 
 
+@pytest.mark.parametrize(("query", "palette", "other_query"), [
+    # 2026-11-25 운영 전체 3만 건 표본 보강 — 팔레트 값과 등록자가 적은 색이 다른 경우를 더했다.
+    # 물품명에 색이 없으면 팔레트만으로 판단하므로, 보강 전에는 아래 물품이 빠졌다. 다른 색 검색어로는 여전히 빠진다.
+    ("남색 지갑", "그레이(회)", "빨강 지갑"),            # 그레이(회) 물품명 색 검정 14%
+    ("아이보리 지갑", "그레이(암회)", "빨강 지갑"),       # 그레이(암회) 물품명 색 은색 17%
+    ("카키 지갑", "엘로우(노랑)", "파랑 지갑"),           # 엘로우(노랑) 물품명 색 금색 23%
+    ("은색 지갑", "피치오렌지(오렌지)", "파랑 지갑"),      # 피치오렌지(오렌지) 물품명 색 아이보리 11%
+    ("갈색 지갑", "오렌지(선명한오렌지)", "파랑 지갑"),    # 물품명 색 갈색 28%·금색 18%
+    ("갈색 지갑", "다크레드(진빨강)", "초록 지갑"),        # 물품명 색 자홍 21%·갈색 12%
+    ("분홍 지갑", "바이올렛(보라)", "초록 지갑"),          # 물품명 색 연보라 19%
+])
+def test_palette_additions_from_the_30k_sample(query, palette, other_query):
+    row = item("지갑", palette)
+    assert keeps(query, row)
+    assert not keeps(other_query, row)
+
+
 def test_item_text_colors_are_added_to_the_palette_colors():
     colors = item_colors(item("남색 모자", "블랙(검정)"))
     assert {"검정", "남색"} <= colors
