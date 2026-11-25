@@ -1,6 +1,7 @@
 """2026-11-23 사용자 결정 — 상위 100건으로 자른 뒤 Jev로 명백히 다른 물건만 뺀다(외부 호출 없음, 가짜 클라이언트).
 
-같은 날 비용 최적화: 상위 30건만 판정, 자동 설명 문구 제외, 짧은 질문 키, 다음 쪽은 커서로 판정 결과 재사용.
+같은 날 비용 최적화: 자동 설명 문구 제외, 짧은 질문 키, 다음 쪽은 커서로 판정 결과 재사용.
+2026-11-25: 상위 100건을 25건 구간마다 요청 하나로 동시에 판정, 1구간 0.92·2~4구간 0.87.
 """
 import json
 import re
@@ -78,15 +79,44 @@ def test_item_text_is_masked_before_it_leaves_the_server():
     assert "010-1234-5678" not in json.dumps(client.calls[0], ensure_ascii=False)
 
 
-def test_only_the_top_n_items_are_judged_in_one_small_request():
-    client = FakeDecisions({i: 0.99 for i in range(1, 101)})
-    rows = [row(i, f"검정 카드지갑 {i}호 " + "설명" * 40, "습득물 설명 " * 30) for i in range(1, 101)]
+def test_top_100_are_judged_in_four_requests_of_25_with_rank_thresholds():
+    # 2026-11-25 사용자 결정 — 1~25위 0.92, 26~100위 0.87. 101위부터는 판정하지 않는다.
+    assert TOP_N == 100 and jev_filter.SEGMENT_THRESHOLDS == (0.92, 0.87, 0.87, 0.87)
+    client = FakeDecisions({i: 0.9 for i in range(1, 121)})
+    rows = [row(i, f"검정 카드지갑 {i}호 " + "설명" * 40, "습득물 설명 " * 30) for i in range(1, 121)]
     kept, _, excluded = JevFilter(client).apply("검정 카드지갑", rows, budget=3.0)
-    assert len(client.calls) == 1 and len(client.calls[0]["questions"]) == TOP_N == 30
-    assert excluded == set(range(1, 31)) and [r["id"] for r in kept] == list(range(31, 101))
-    size = len(json.dumps({"state": client.calls[0]["state"], "questions": client.calls[0]["questions"]},
-                          ensure_ascii=False).encode())
-    assert size < MAX_REQUEST_BYTES  # 32KB를 넘으면 느린 long-context 모드로 간다
+    assert sorted(len(call["questions"]) for call in client.calls) == [25, 25, 25, 25]
+    assert excluded == set(range(26, 101))  # 0.9는 1구간(0.92)에서는 남고 2~4구간(0.87)에서는 빠진다
+    assert [r["id"] for r in kept] == list(range(1, 26)) + list(range(101, 121))
+    for call in client.calls:
+        size = len(json.dumps({"state": call["state"], "questions": call["questions"]}, ensure_ascii=False).encode())
+        assert size < MAX_REQUEST_BYTES  # 32KB를 넘으면 느린 long-context 모드로 간다
+
+
+def test_threshold_boundary_in_the_lower_segments():
+    client = FakeDecisions({26: 0.87, 27: 0.869, 1: 0.919})
+    kept, _, excluded = JevFilter(client).apply("검정 카드지갑", [row(i) for i in range(1, 31)], budget=3.0)
+    assert excluded == {26} and {1, 27} <= {r["id"] for r in kept}
+
+
+def test_only_as_many_requests_as_there_are_items():
+    # 물품이 30건이면 2요청(25+5), 73건이면 3요청(25+25+23). 구간은 Jev 전 순위로 나눈다.
+    for count, sizes in ((30, [5, 25]), (73, [23, 25, 25]), (25, [25]), (3, [3])):
+        client = FakeDecisions({})
+        JevFilter(client).apply("검정 카드지갑", [row(i) for i in range(1, count + 1)], budget=3.0)
+        assert sorted(len(call["questions"]) for call in client.calls) == sizes
+
+
+def test_one_failed_segment_keeps_its_items_but_others_still_apply():
+    class HalfDown(FakeDecisions):
+        def decide(self, model, state, questions, *, timeout):
+            if "i1" in questions and "26호" in state["습득물"]["i1"]:
+                raise RuntimeError("down")
+            return super().decide(model, state, questions, timeout=timeout)
+
+    client = HalfDown({3: 0.99, 30: 0.99, 60: 0.99})
+    kept, status, excluded = JevFilter(client).apply("검정 카드지갑", [row(i) for i in range(1, 61)], budget=3.0)
+    assert status == "unavailable" and excluded == {3, 60} and 30 in {r["id"] for r in kept}
 
 
 def test_item_ids_are_not_sent_and_keys_are_short():
@@ -139,15 +169,17 @@ def baseline_order(rows, query="검정 카드지갑"):
 def test_search_applies_jev_after_the_top_100_cut_and_reports_exclusions():
     rows = [row(i) for i in range(1, 121)]
     order = baseline_order(rows)
-    inside, outside = order[5], order[40]  # 6위는 판정 범위(상위 30) 안, 41위는 밖
-    client = FakeDecisions({inside: 0.99, outside: 0.99})
+    # 2026-11-25 — 상위 100건을 모두 판정한다. 6위는 1구간(0.92), 41위는 2구간(0.87).
+    top, lower = order[5], order[40]
+    outside = next(i for i in range(1, 121) if i not in order)  # 글 점수 100건 밖
+    client = FakeDecisions({top: 0.9, lower: 0.9, outside: 0.99})
     out = {}
     ranked, _, _ = search_found_items(Candidates(rows), "검정 카드지갑", [7], jev=JevFilter(client),
                                       hydrate_page=False, jev_out=out)
     ids = [int(r["id"]) for r in ranked]
-    assert inside not in ids and outside in ids and len(ids) == 99
-    assert out["excluded"] == {inside}
-    assert sum(len(call["questions"]) for call in client.calls) == 30
+    assert top in ids and lower not in ids and outside not in ids and len(ids) == 99
+    assert out["excluded"] == {lower}
+    assert sum(len(call["questions"]) for call in client.calls) == 100
 
 
 def test_next_page_reuses_the_excluded_ids_without_calling_jev():
@@ -175,7 +207,7 @@ class PagedItems(Candidates):
 
 
 def test_found_items_sends_all_search_results_in_one_response():
-    # 2026-11-25 — 검색 결과 상위 100건을 한 응답에 보낸다. 다음 쪽 요청이 없어 Jev도 한 번만 부른다.
+    # 2026-11-25 — 검색 결과 상위 100건을 한 응답에 보낸다. 다음 쪽 요청이 없어 Jev 판정(25건 × 4요청)도 한 번이다.
     from fastapi.testclient import TestClient
     from retriever_lost_found.web import app as web_app
 
@@ -188,8 +220,8 @@ def test_found_items_sends_all_search_results_in_one_response():
     first = http.get("/api/found-items", params={"location_ids": "7", "q": "검정 카드지갑"}).json()
     ids = [r["id"] for r in first["items"]]
     assert first["next_cursor"] is None and first["match_count"] == len(ids)
-    assert len(client.calls) == 1
-    assert a not in ids and len(ids) == len(set(ids))
+    assert len(client.calls) == 4 and sum(len(call["questions"]) for call in client.calls) == 100
+    assert a not in ids and b not in ids and len(ids) == len(set(ids))
 
 
 def test_found_items_still_accepts_an_old_50_item_cursor():
@@ -215,7 +247,7 @@ def test_cursor_without_exclusions_still_marks_that_jev_already_ran():
     assert search_cursor(50, None) == "search:50"
     for cursor in ("search:50", "search:50:x=", "search:50:x=1,22,333"):
         assert SEARCH_CURSOR_PATTERN.fullmatch(cursor)
-    for cursor in ("search:50:x=a", "search:50:y=1", "search:50:x=" + ",".join(["1"] * 31)):
+    for cursor in ("search:50:x=a", "search:50:y=1", "search:50:x=" + ",".join(["1"] * 101)):
         assert not SEARCH_CURSOR_PATTERN.fullmatch(cursor)
 
 
