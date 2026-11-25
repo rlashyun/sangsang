@@ -137,11 +137,11 @@ export type AgentTurn =
   | { type: "message"; text: string; changing_place: boolean; visible_item_ids: number[]; photos?: string[]; dialogue?: DialogueContext }
   | { type: "select_place"; candidate_id: string }
   | { type: "select_point"; latitude: number; longitude: number; name?: string; address?: string }
-  | { type: "change_radius"; radius_m: number }
+  | { type: "change_radius"; radius_m: number; dialogue?: DialogueContext }
   // PRD 4.3-E — 결과 메일의 '전체 검색': 저장된 장소·물품·반경으로 장소 확인 없이 바로 검색한다.
   | { type: "saved_search"; text: string; radius_m: number; places: { name: string; latitude: number; longitude: number }[] }
   | { type: "add_place" | "cancel_place_selection" | "skip_place" }
-  | { type: "replace_place" | "remove_place"; place_target: number };
+  | { type: "replace_place" | "remove_place"; place_target: number; dialogue?: DialogueContext };
 
 export type AgentEvent =
   | { type: "run.started"; session_id: string; run_id: string }

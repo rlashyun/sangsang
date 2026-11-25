@@ -100,15 +100,15 @@ export function AgentSearchApp() {
   const [alertAnchor, setAlertAnchor] = useState<number | null>(null);
   const alertActive = useRef(false);
   // PRD 4.3-E — 신청 안내를 대화 순서에 고정하고 이후 발화는 그 아래에 표시한다.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (alertDraft && !alertActive.current) {
       alertActive.current = true;
-      setMessages(current => { setAlertAnchor(current.length); return current; });
+      setAlertAnchor(messages.length);
     } else if (!alertDraft) {
       alertActive.current = false;
       setAlertAnchor(null);
     }
-  }, [alertDraft]);
+  }, [alertDraft, messages.length]);
   const recordedAlertDrafts = useRef(new WeakSet<AlertConditions>());
   const [alertConsent, setAlertConsent] = useState(false);
   const [alertSending, setAlertSending] = useState(false);
@@ -571,7 +571,7 @@ export function AgentSearchApp() {
       if (result.dialogue) {
         const next = result.dialogue;
         if (next.task === "search") {
-          recordAlertConditions();
+          // PRD 4.3-E — 검색으로 돌아갈 때 이전 알림 조건을 새 답변으로 추가하지 않는다.
           editingAlert.current = false;
           setAlertDraft(null); setAlertEditingDraft(null); setAlertEditField(null); setAlertAwaiting(null);
           setAlertConsent(false);
@@ -579,8 +579,13 @@ export function AgentSearchApp() {
           const places = next.alert.places.map(place => ({ ...place, phone: "", category: "", url: "", address: "" }));
           const updated = { query: next.alert.query, radius: next.alert.radius, places };
           const waiting = next.awaiting !== "email";
-          if (next.changed || waiting && alertDraft) recordAlertConditions();
-          if (next.changed) setAlertConsent(false);
+          if (waiting && alertDraft) recordAlertConditions();
+          if (next.changed) {
+            // PRD 4.3-E — 변경 답변 뒤에 최신 조건과 새 동의를 배치한다.
+            alertActive.current = false;
+            setAlertAnchor(null);
+            setAlertConsent(false);
+          }
           editingAlert.current = waiting;
           setAlertAwaiting(next.awaiting);
           setAlertEditField(next.awaiting === "email" || next.awaiting === "conditions" ? null : next.awaiting);
@@ -595,7 +600,7 @@ export function AgentSearchApp() {
         replies.push({ confirmedPlace: result.conditions.place });
       }
       const confirmedPlaces = result.conditions.places ?? (result.conditions.place ? [result.conditions.place] : []);
-      const removedPlace = turn.type === "remove_place" ? selectedPlaces[(turn.place_target ?? 1) - 1] : null;
+      const removedPlace = turn.type === "remove_place" && !turn.dialogue ? selectedPlaces[(turn.place_target ?? 1) - 1] : null;
       if (result.status !== "cancelled" && removedPlace && !confirmedPlaces.some(place =>
         place.latitude === removedPlace.latitude && place.longitude === removedPlace.longitude)) {
         replies.push({ author: "agent", text: `‘${removedPlace.name}’ 장소를 제거했어요.` });
@@ -606,7 +611,7 @@ export function AgentSearchApp() {
         replies.push({ author: "agent", text: "장소는 최대 3곳까지 선택할 수 있어요." });
       }
       if (result.explanation) replies.push({ author: "agent", text: result.explanation });
-      const message = result.status === "results" && (result.matches?.total_count ?? 0) > 0
+      const message = !result.dialogue?.changed && result.status === "results" && (result.matches?.total_count ?? 0) > 0
         ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
         : result.message;
       if (message) replies.push({ author: "agent", text: message });
@@ -615,7 +620,7 @@ export function AgentSearchApp() {
           ? "비교할 후보 사진이 없어 글 검색 순서로 보여드려요."
           : "사진을 비교하지 못해 글 검색 순서로 보여드려요." });
       }
-      revealReplies(replies, completedSearch && !showAlertSetup, result.conditions.radius_m ?? mappedRadius);
+      revealReplies(replies, completedSearch && !showAlertSetup && !result.dialogue?.changed, result.conditions.radius_m ?? mappedRadius);
       if (result.status === "answered") {
         // PRD 4.3 — An informational turn advances the session without replacing results.
         setResponse(current => current ? { ...current, revision: result.revision,
@@ -635,7 +640,7 @@ export function AgentSearchApp() {
         setPlacePage(0);
         setSelectedCandidate(null);
         setSelectedInstitution([]);
-        setTab(showAlertSetup ? "chat" : (result.matches?.total_count ?? 0) > 0 ? "results" : "chat");
+        setTab(showAlertSetup || result.dialogue?.changed ? "chat" : (result.matches?.total_count ?? 0) > 0 ? "results" : "chat");
       }
       sessionIdentity.current = result.status === "ended" ? null : result;
       if (result.status === "ended") { editingAlert.current = false; setAlertEditingDraft(null); setAlertEditField(null); }
@@ -747,7 +752,7 @@ export function AgentSearchApp() {
 
   function editAlertConditions() {
     if (!alertDraft || busy || controller.current || revealingRepliesRef.current || alertPending.current || repeatedLocalAction("조건 수정")) return;
-    // PRD 4.3-E — 알림 조건은 현재 검색·지도와 분리해 수정하며 물품을 재조회하지 않는다.
+    // PRD 4.3-E — 편집 진입 시에는 조건을 유지한다. 실제 변경을 제출할 때 재검색한다.
     recordAlertConditions();
     editingAlert.current = true;
     setAlertEditingDraft({ ...alertDraft, places: alertDraft.places.map(place => ({ ...place })) });
@@ -782,25 +787,23 @@ export function AgentSearchApp() {
     input.current?.focus();
   }
 
-  function finishAlertEdit(next: AlertConditions, text: string, message: string) {
-    editingAlert.current = false;
-    setAlertDraft(next); setAlertEditingDraft(null); setAlertEditField(null);
-    setAlertConsent(false); setDraft(""); setError("");
-    setMessages(current => [...current, { author: "user", text }, { author: "agent", text: message }]);
-    input.current?.focus();
-  }
-
   function applyAlertEdit(change: { removePlace: number } | { radius: number }, text: string) {
     if (!alertEditingDraft || busy || controller.current || revealingRepliesRef.current || alertPending.current || repeatedLocalAction(`알림 조건:${text}`)) return;
+    const dialogue: NonNullable<Extract<AgentTurn, { type: "message" }>["dialogue"]> = {
+      task: "alert", alert: {
+        ...alertEditingDraft,
+        places: alertEditingDraft.places.map(({ name, latitude, longitude }) => ({ name, latitude, longitude })),
+      },
+      awaiting: alertAwaiting, last_message: "",
+    };
     if ("removePlace" in change) {
       if (alertEditingDraft.places.length <= 1) { setError("알림을 받을 장소는 한 곳 이상 남겨 주세요."); return; }
       const removed = alertEditingDraft.places[change.removePlace];
       if (!removed) return;
-      finishAlertEdit({ ...alertEditingDraft, places: alertEditingDraft.places.filter((_, index) => index !== change.removePlace) },
-        text, `‘${removed.name}’을 알림 장소에서 제외했어요.`);
+      void submit({ type: "remove_place", place_target: change.removePlace + 1, dialogue }, false, [], text);
     } else {
       if (!SEARCH_RADIUS_OPTIONS_METERS.includes(change.radius)) return;
-      finishAlertEdit({ ...alertEditingDraft, radius: change.radius }, text, `알림 반경을 ${radiusKilometersLabel(change.radius)}로 바꿨어요.`);
+      void submit({ type: "change_radius", radius_m: change.radius, dialogue }, false, [], text);
     }
   }
 
@@ -1073,9 +1076,9 @@ export function AgentSearchApp() {
               ? <AlertResultsChat institutions={institutionIndex} selectedItemId={openItem?.item_id} onOpen={openDetail}
                 onSearchAll={searchSavedAlert} onScope={showMailScope} searchDisabled={busy || Boolean(activeRun)} />
               : mailAction && <AlertManagementChat key={mailAction} action={mailAction} />}
-          {messages.map((message, index) => <Fragment key={index}>
-            {alertDraft && alertAnchor === index && alertSetup}
-            {"itemConversation" in message
+          {[...messages, null].map((message, index) => <Fragment key={index}>
+            {alertDraft && (alertAnchor ?? messages.length) === index && alertSetup}
+            {message && ("itemConversation" in message
             ? <AgentItemDetail key={message.itemConversation.id} item={message.itemConversation.item}
               institution={message.itemConversation.institution} answer={message.itemConversation.answer}
               acknowledged={message.itemConversation.acknowledged} onAcknowledge={() => acknowledgeItem(message.itemConversation.id)} />
@@ -1095,10 +1098,8 @@ export function AgentSearchApp() {
               {message.survey && <a className="agent-survey-link" href={SURVEY_URL} target="_blank" rel="noopener noreferrer">
                 이용 경험 설문 참여하기<span className="sr-only"> (새 창에서 열림)</span>
               </a>}
-            </div>}
+            </div>)}
           </Fragment>)}
-          {/* PRD 4.3-E — 위치가 정해지기 전 한 번의 렌더에서도 신청 안내가 사라지지 않게 맨 아래에 둔다. */}
-          {alertDraft && (alertAnchor === null || alertAnchor >= messages.length) && alertSetup}
           {pagePlaces.length > 0 && !confirmingPlace && <ol className="agent-candidates" aria-label="장소 후보" start={placePage * PLACE_PAGE_SIZE + 1}>
             {pagePlaces.map(({ id, place, number }) => <li className={`agent-place-card${id === selectedCandidate ? " is-selected" : ""}`} key={id} id={`agent-place-${id}`}>
               <button type="button" className="agent-candidate" aria-pressed={id === selectedCandidate}
