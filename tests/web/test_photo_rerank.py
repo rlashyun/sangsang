@@ -73,16 +73,14 @@ def test_user_and_candidate_content_rerank_only_top_100_and_keep_page_order():
     result = json.loads(client.post("/api/search-chat/turns", json=request).text.splitlines()[-1])["response"]
     assert result["photo_status"] == "applied"
     assert result["matches"]["total_count"] == 100
-    assert result["matches"]["next_cursor"] == "search:50"
+    assert result["matches"]["next_cursor"] is None  # 2026-11-25 — 상위 100건을 한 번에 보낸다
+    assert len(result["matches"]["items"]) == 100
     assert result["matches"]["items"][0]["item_id"] == 21
     assert "embedding_input" not in result["matches"]["items"][0]
     assert photo not in json.dumps(store.command(session["session_id"], "get")["data"])
     assert json.loads(client.post("/api/search-chat/turns", json=request).text.splitlines()[-1])["response"] == result
 
-    page = client.post("/api/search-chat/pages", json={"session_id": result["session_id"],
-                        "revision": result["revision"], "cursor": result["matches"]["next_cursor"]}).json()["matches"]
-    assert page["next_cursor"] is None and page["total_count"] == 100
-    assert [i["item_id"] for i in result["matches"]["items"] + page["items"]] == [21, *range(120, 21, -1)]
+    assert [i["item_id"] for i in result["matches"]["items"]] == [21, *range(120, 21, -1)]
     plain_search.assert_not_called()
     verdict.assert_called_once()
 

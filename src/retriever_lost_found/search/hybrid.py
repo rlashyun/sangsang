@@ -21,6 +21,9 @@ from .synonyms import ALIASES
 SEMANTIC_MIN_SIMILARITY = 0.525  # 이 값 이상만 의미 점수를 준다(키워드에 없는 물품도 이 값 이상이면 추가).
 SEMANTIC_LIMIT = 200             # 의미 검색 결과 상한(코사인 0.525 이상 상위 200건)
 SEARCH_RESULT_LIMIT = 100       # PRD 4.5 — 키워드와 의미 점수를 합산한 뒤의 상한
+# 2026-11-25 사용자 결정 — 검색 결과는 상위 100건을 한 응답에 보낸다(쪽 넘김 요청 없음).
+# 50건과 100건 첫 응답의 서버 처리 시간 차이가 없었다(docs/measurements.md 2026-11-25).
+SEARCH_PAGE_SIZE = SEARCH_RESULT_LIMIT
 SEMANTIC_RESCORE = 500          # 1비트 해밍 거리로 남기는 재채점 후보 수(원본 상위 200과 98.0% 일치)
 KEYWORD_WEIGHT, SEMANTIC_WEIGHT = 0.75, 0.25
 SEMANTIC_BUDGET_SECONDS = 4.0
@@ -334,7 +337,7 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
             from ..agent_diagnostics import record
             record("jev.fallback", stage="jev_filter", reason=jev_status, final_status="fallback")
     # Only the visible page needs full display fields.
-    page=ranked[offset:offset+50] if hydrate_page else []
+    page=ranked[offset:offset+SEARCH_PAGE_SIZE] if hydrate_page else []
     missing=[int(item["id"]) for item in page if "image_url" not in item]
     if missing and hasattr(client,"fetch_item_details"):
         details={int(item["id"]):item for item in client.fetch_item_details(location_ids,missing,

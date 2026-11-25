@@ -174,24 +174,39 @@ class PagedItems(Candidates):
     pass
 
 
-def test_found_items_cursor_carries_jev_exclusions_and_pages_do_not_overlap():
+def test_found_items_sends_all_search_results_in_one_response():
+    # 2026-11-25 — 검색 결과 상위 100건을 한 응답에 보낸다. 다음 쪽 요청이 없어 Jev도 한 번만 부른다.
     from fastapi.testclient import TestClient
     from retriever_lost_found.web import app as web_app
 
     rows = [row(i) for i in range(1, 121)]
     order = baseline_order(rows)
-    a, b = sorted((order[2], order[20]))
+    a, b = sorted((order[2], order[70]))
     client = FakeDecisions({a: 0.99, b: 0.99})
     app = web_app.create_app(object(), "js", found_item_client=PagedItems(rows), jev_filter=JevFilter(client))
     http = TestClient(app)
     first = http.get("/api/found-items", params={"location_ids": "7", "q": "검정 카드지갑"}).json()
-    assert first["next_cursor"] == f"search:50:x={a},{b}"
+    ids = [r["id"] for r in first["items"]]
+    assert first["next_cursor"] is None and first["match_count"] == len(ids)
     assert len(client.calls) == 1
-    second = http.get("/api/found-items", params={"location_ids": "7", "q": "검정 카드지갑",
-                                                  "cursor": first["next_cursor"]}).json()
-    assert len(client.calls) == 1  # 다음 쪽은 Jev를 다시 부르지 않는다
-    ids = [r["id"] for r in first["items"]] + [r["id"] for r in second["items"]]
-    assert len(ids) == len(set(ids)) == 98 and not {a, b} & set(ids)
+    assert a not in ids and len(ids) == len(set(ids))
+
+
+def test_found_items_still_accepts_an_old_50_item_cursor():
+    # 배포 전 화면이 들고 있던 "search:50:x=…" 커서도 받아 그 뒤를 이어 준다. Jev는 다시 부르지 않는다.
+    from fastapi.testclient import TestClient
+    from retriever_lost_found.web import app as web_app
+
+    rows = [row(i) for i in range(1, 121)]
+    order = baseline_order(rows)
+    a = order[60]
+    client = FakeDecisions({})
+    app = web_app.create_app(object(), "js", found_item_client=PagedItems(rows), jev_filter=JevFilter(client))
+    second = TestClient(app).get("/api/found-items", params={"location_ids": "7", "q": "검정 카드지갑",
+                                                             "cursor": f"search:50:x={a}"}).json()
+    ids = [r["id"] for r in second["items"]]
+    assert client.calls == [] and second["next_cursor"] is None
+    assert ids == [i for i in order if i != a][50:100]
 
 
 def test_cursor_without_exclusions_still_marks_that_jev_already_ran():

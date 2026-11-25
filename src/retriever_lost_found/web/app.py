@@ -27,7 +27,7 @@ from ..integrations.supabase import (
     validate_location_ids,
 )
 from ..privacy.masking import IDENTIFIER_QUERY_ERROR, contains_identifier, mask_item_row
-from ..search.hybrid import search_with_deadline, SearchDeadlineExceeded
+from ..search.hybrid import SEARCH_PAGE_SIZE, search_with_deadline, SearchDeadlineExceeded
 from .alerts import create_alert_router
 
 
@@ -274,7 +274,8 @@ def ranked_item_page(
     if jev_excluded is None and "excluded" in jev_out:
         jev_excluded = jev_out["excluded"]
     match_count = len(matched_items)
-    next_offset = offset + FOUND_ITEM_PAGE_LIMIT
+    # PRD 4.5 — 검색 결과는 상위 100건을 한 번에 보낸다(2026-11-25). 검색어 없는 목록은 50건 그대로다.
+    next_offset = offset + SEARCH_PAGE_SIZE
     page_items = matched_items[offset:next_offset]
     if hasattr(found_item_client, "add_thumbnails"):
         page_items = found_item_client.add_thumbnails(page_items)
@@ -303,14 +304,14 @@ def photo_ranked_item_page(found_item_client, embedding_client, compare, locatio
     ranked, status = rerank_photos(ranked, location_ids, user_text, photos,
                                     found_item_client.fetch_photo_candidates, compare)
     # PRD 4.5 — Hydrate the first page after reranking. Keep only the remaining IDs for the next page.
-    page, remaining = ranked[:FOUND_ITEM_PAGE_LIMIT], ranked[FOUND_ITEM_PAGE_LIMIT:]
+    page, remaining = ranked[:SEARCH_PAGE_SIZE], ranked[SEARCH_PAGE_SIZE:]
     missing = [row["id"] for row in page if "image_url" not in row]
     if missing:
         details = found_item_client.fetch_item_details(location_ids, missing)
         by_id = {row["id"]: row for row in details if row.get("storage_location_id") in location_ids}
         page = [{**row, **by_id.get(row["id"], {})} for row in page]
     items = tuple(adapt_search_item(row) for row in found_item_client.add_thumbnails(page))
-    return SearchPage(items, len(ranked), "search:50" if remaining else None,
+    return SearchPage(items, len(ranked), f"search:{SEARCH_PAGE_SIZE}" if remaining else None,
                       tuple(row["id"] for row in remaining), status)
 
 
