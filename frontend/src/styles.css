@@ -2570,6 +2570,8 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-place-confirm { font-weight: 600; }
 .item-detail-fields, .item-detail-description { font-weight: 400; }
 .item-detail-fields dt, .item-detail-basics dd { color: var(--color-text-secondary); }
+.agent-welcome-heading { display: grid; gap: 8px; }
+.agent-ai-notice { margin: 0; font-size: 12px; line-height: 1.5; color: var(--color-text-secondary); }
 .agent-welcome-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
 .agent-welcome-divider { width: 100%; margin: 4px 0; border: 0; border-top: 1px dashed var(--color-border-control); }
 .agent-welcome-steps { display: grid; gap: 12px; margin: 4px 0 0; padding: 0; list-style: none; }
