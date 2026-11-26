@@ -7,7 +7,7 @@ from http.client import HTTPException
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, Sequence
 
 
 SUPABASE_RPC_PAGE_SIZE = 1_000
@@ -177,20 +177,23 @@ class SupabaseFoundItemClient:
         return self.fetch_items(location_ids, search_only=True)
 
     def fetch_candidate_bundle(self, location_ids: list[int], terms: list[str], *, timeout: float,
-                               word_terms: list[str] = ()) -> dict:
+                               word_terms: Sequence[str] = (), lost_on: str | None = None) -> dict:
         # PRD 4.1, 4.5 — DB kind_mask 필터는 쓰지 않는다. 종류 표현은 서버 동의어 사전이 terms로 넘긴다.
         params = {"p_location_ids": _unique_location_ids(location_ids), "p_terms": terms}
-        if word_terms:
+        if word_terms or lost_on:
             # PRD 4.5 — 1글자 단어는 독립 단어로만 비교한다. 마이그레이션 20261121120000이 필요하다.
             # 없을 때는 보내지 않아 이전 2인자 함수에서도 나머지 검색이 그대로 동작한다.
             params["p_word_terms"] = list(word_terms)
+        if lost_on:
+            params["p_lost_on"] = lost_on
         payload = self._search_rpc("keyword_found_item_candidates", params, timeout)
         if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
             raise RuntimeError("검색 후보 응답 형식이 올바르지 않습니다.")
         return payload
 
     def fetch_semantic_items(self, location_ids: list[int], vector, *, timeout: float,
-                             min_similarity: float = 0.525, limit: int = 200, rescore: int = 500):
+                             min_similarity: float = 0.525, limit: int = 200, rescore: int = 500,
+                             lost_on: str | None = None):
         """PRD 4.1, 4.5 — 반경 전체 의미 검색(Gemini Embedding 2, 마이그레이션 gemini2_embeddings).
 
         DB가 Gemini 1비트 표의 해밍 거리로 rescore건을 고르고 Gemini halfvec 코사인으로 다시 매겨
@@ -199,10 +202,13 @@ class SupabaseFoundItemClient:
         values = [float(value) for value in vector]
         if len(values) != 1024 or not all(math.isfinite(value) for value in values):
             raise ValueError("질의 벡터 형식이 올바르지 않습니다.")
-        rows = self._search_rpc("semantic_found_item_candidates_gemini2", {
+        params = {
             "p_location_ids": _unique_location_ids(location_ids),
             "p_query": "[" + ",".join(f"{value:.6g}" for value in values) + "]",
-            "p_min": min_similarity, "p_limit": limit, "p_rescore": rescore}, timeout)
+            "p_min": min_similarity, "p_limit": limit, "p_rescore": rescore}
+        if lost_on:
+            params["p_lost_on"] = lost_on
+        rows = self._search_rpc("semantic_found_item_candidates_gemini2", params, timeout)
         try:
             if not isinstance(rows, list) or len(rows) > limit:
                 raise ValueError

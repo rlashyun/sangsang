@@ -5,6 +5,7 @@ import { AgentRequestError, AgentSessionExpired, createAlertReservation, cancelA
 import { DEFAULT_SEARCH_RADIUS_METERS, SEARCH_RADIUS_OPTIONS_METERS, isWithinRadius, nextSearchRadiusMeters, radiusKilometersLabel } from "../lib/geo.js";
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
+import { formatRegisteredDate } from "../lib/presentation";
 import { ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib/alert-return";
 import { useChatPhotos, type ChatPhoto } from "../lib/useChatPhotos";
 import { useMobileChatSheet } from "../lib/useMobileChatSheet";
@@ -986,7 +987,7 @@ export function AgentSearchApp() {
   // 이미 받은 단서는 다시 묻지 않고 빠진 것만 안내한다.
   const hasPlaceClue = Boolean(currentPlace);
   const composePlaceholder = !hasPlaceClue ? "잃어버린 장소를 입력하세요"
-    : conditions?.item_query ? "메시지를 입력하세요" : "잃어버린 물건을 입력하세요";
+    : conditions?.item_query ? "메시지를 입력하세요" : "물건과 날짜(선택)";
   const groupNames = selectedInstitution.map(institution => institution.name).join(", ");
   const groupIds = selectedInstitution.map(institution => institution.storage_location_id).join(",");
   const mapInstitutionSummary = visibleInstitutions.length
@@ -1060,6 +1061,7 @@ export function AgentSearchApp() {
           </dd></div>
           <div><dt>물건</dt><dd className={conditions?.item_query ? undefined : "agent-summary-pending"}>{conditions?.item_query || "입력 대기 중"}</dd>
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
+          {conditions?.lost_on && <div><dt>분실일</dt><dd>{formatRegisteredDate(conditions.lost_on)}</dd></div>}
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
         <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>

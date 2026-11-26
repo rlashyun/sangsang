@@ -152,7 +152,7 @@ class SearchBusy(SearchDeadlineExceeded):
 
 
 def search_with_deadline(client, query, location_ids, embedding_client=None, *, timeout=4.6, offset=0,
-                         hydrate_page=True, jev=None, jev_excluded=None, jev_out=None):
+                         hydrate_page=True, jev=None, jev_excluded=None, jev_out=None, lost_on=None):
     """Bound the entire read pipeline, including slow body reads and ranking.
 
     Timed-out readers have no writes; bounded slots prevent an unbounded queue.
@@ -161,7 +161,7 @@ def search_with_deadline(client, query, location_ids, embedding_client=None, *, 
         raise SearchBusy("검색 요청이 많습니다. 잠시 후 다시 검색해주세요.")
     future = _search_pool.submit(copy_context().run, search_found_items, client, query, location_ids,
                                  embedding_client, offset=offset, hydrate_page=hydrate_page, jev=jev,
-                                 jev_excluded=jev_excluded, jev_out=jev_out)
+                                 jev_excluded=jev_excluded, jev_out=jev_out, lost_on=lost_on)
     future.add_done_callback(lambda _: _search_slots.release())
     try:
         return future.result(timeout=timeout)
@@ -214,7 +214,7 @@ def semantic_score(similarity: float | None) -> float:
     return max(0.0, (similarity-SEMANTIC_MIN_SIMILARITY)/(1-SEMANTIC_MIN_SIMILARITY))
 
 
-def _embed_and_search(client, embedding_client, query, location_ids, budget_end):
+def _embed_and_search(client, embedding_client, query, location_ids, budget_end, date_filter):
     """질의 임베딩 후 곧바로 반경 전체 의미 검색. 키워드 조회와 병렬로 돈다."""
     vector = embedding_client.embed(query,timeout=max(0.01,min(4.0,budget_end-monotonic())))
     if not hasattr(client,"fetch_semantic_items"):
@@ -222,7 +222,7 @@ def _embed_and_search(client, embedding_client, query, location_ids, budget_end)
     try:
         rows = client.fetch_semantic_items(location_ids,vector,timeout=max(0,min(2.5,budget_end-monotonic())),
                                            min_similarity=SEMANTIC_MIN_SIMILARITY,limit=SEMANTIC_LIMIT,
-                                           rescore=SEMANTIC_RESCORE)
+                                           rescore=SEMANTIC_RESCORE, **date_filter)
         return vector,rows,None
     except (RuntimeError,ValueError) as error:
         return vector,None,error
@@ -230,15 +230,18 @@ def _embed_and_search(client, embedding_client, query, location_ids, budget_end)
 
 def search_found_items(client, query: str, location_ids: list[int], embedding_client=None,
                        *, semantic_budget: float = SEMANTIC_BUDGET_SECONDS, offset: int = 0, hydrate_page=True,
-                       jev=None, jev_excluded: set[int] | None = None, jev_out: dict | None = None):
+                       jev=None, jev_excluded: set[int] | None = None, jev_out: dict | None = None,
+                       lost_on: str | None = None):
     started = monotonic()
     query = query_text(query)
+    # PRD 4.5 — both candidate lookups use the same registration-date lower bound.
+    date_filter = {"lost_on": lost_on} if lost_on else {}
     deadline = started+SEARCH_BUDGET_SECONDS
     vector_future = None
     if embedding_client is not None and _semantic_slots.acquire(blocking=False):
         # Embedding, then the radius-wide 1-bit semantic RPC, in parallel with the keyword step.
         vector_future = _semantic_pool.submit(_embed_and_search,client,embedding_client,query,location_ids,
-                                              started+min(semantic_budget,SEARCH_BUDGET_SECONDS-0.1))
+                                              started+min(semantic_budget,SEARCH_BUDGET_SECONDS-0.1), date_filter)
         vector_future.add_done_callback(lambda _: _semantic_slots.release())
     kinds = query_kinds(query)
     # PRD 4.1/4.5: one scoped RPC without the DB kind_mask filter. Literal type
@@ -248,7 +251,8 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
     keyword_error = None
     if hasattr(client,"fetch_candidate_bundle"):
         try:
-            bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),timeout=1.8)
+            bundle = client.fetch_candidate_bundle(location_ids,sorted(terms),word_terms=sorted(words),
+                                                   timeout=1.8, **date_filter)
             items,count = bundle["items"],bundle.get("candidate_count")
         except RuntimeError as error:
             # PRD 5 — 키워드 후보 RPC가 DB 시간 제한(57014)에 걸려도 의미 검색이 돌고 있으면 그 결과로 답한다.
@@ -261,6 +265,8 @@ def search_found_items(client, query: str, location_ids: list[int], embedding_cl
             record("keyword.fallback", error=error, stage="keyword_candidates", final_status="fallback")
     else:
         items = client.fetch_items(location_ids)
+        if lost_on:
+            items = [item for item in items if (item.get("registered_on") or "") >= lost_on]
         count = len(items)
     timings = {"keyword_fetch_ms":round((monotonic()-started)*1000,2)}
     lexical = keyword_scores(items,query,timings=timings)

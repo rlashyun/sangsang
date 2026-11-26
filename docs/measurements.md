@@ -1,5 +1,10 @@
 # 실측 기록
 
+## 대화 검색 분실일 조건 조회 — 2026-11-26 KST
+
+- 로컬 PGlite PostgreSQL에 실행마다 합성 습득물 120,007건을 넣고 통계를 갱신했다. 기관 ID 3개와 `registered_on >= '2026-11-16'` 조건으로 후보 ID를 읽는 쿼리에 `EXPLAIN (ANALYZE, BUFFERS)`를 총 3회 실행했다.
+- 기존 `found_items_location_registered_id_idx`의 Bitmap Index Scan이 기관과 등록일 조건을 사용했다. 계획 0.594~0.748ms, 실행 1.561~2.394ms. 날짜 범위 조회 단독 측정이며 운영 응답 시간과 검색 랭킹은 측정 범위에 포함하지 않았다.
+
 ## 색 계열 팔레트 표 보강 — 운영 전체 3만 건 표본 — 2026-11-25 KST
 
 - **표본.** 운영 Supabase `found_items`(읽기 전용) 614,792건에서 3만 건. id 1~790,567을 고정 시드(`color-families-30k-20261125`)로 섞어 300개씩 조회하고 있는 행만 앞에서부터 모았다(38,400개 id 조회). id 목록 MD5 `d529e8cb582cfe1d7d91886a17c1d27b`. 원문은 파일로 남기지 않고 집계만 남겼다. 원자료: 저장소 밖 `sangsang_real-work-docs/color-families-30k-20261125/`.
