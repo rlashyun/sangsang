@@ -31,14 +31,14 @@ def test_palette_label_maps_to_colors_people_actually_write():
 
 @pytest.mark.parametrize(("query", "palette", "other_query"), [
     # 2026-11-25 운영 전체 3만 건 표본 보강 — 팔레트 값과 등록자가 적은 색이 다른 경우를 더했다.
-    # 물품명에 색이 없으면 팔레트만으로 판단하므로, 보강 전에는 아래 물품이 빠졌다. 다른 색 검색어로는 여전히 빠진다.
-    ("남색 지갑", "그레이(회)", "빨강 지갑"),            # 그레이(회) 물품명 색 검정 14%
-    ("아이보리 지갑", "그레이(암회)", "빨강 지갑"),       # 그레이(암회) 물품명 색 은색 17%
-    ("카키 지갑", "엘로우(노랑)", "파랑 지갑"),           # 엘로우(노랑) 물품명 색 금색 23%
-    ("은색 지갑", "피치오렌지(오렌지)", "파랑 지갑"),      # 피치오렌지(오렌지) 물품명 색 아이보리 11%
+    # 물품명에 색이 없으면 팔레트 표에서 읽은 색으로 판단한다.
+    ("검정 지갑", "그레이(회)", "빨강 지갑"),            # 그레이(회) 물품명 색 검정 14%
+    ("은색 지갑", "그레이(암회)", "빨강 지갑"),           # 그레이(암회) 물품명 색 은색 17%
+    ("금색 지갑", "엘로우(노랑)", "파랑 지갑"),           # 엘로우(노랑) 물품명 색 금색 23%
+    ("아이보리 지갑", "피치오렌지(오렌지)", "파랑 지갑"),  # 피치오렌지(오렌지) 물품명 색 아이보리 11%
     ("갈색 지갑", "오렌지(선명한오렌지)", "파랑 지갑"),    # 물품명 색 갈색 28%·금색 18%
     ("갈색 지갑", "다크레드(진빨강)", "초록 지갑"),        # 물품명 색 자홍 21%·갈색 12%
-    ("분홍 지갑", "바이올렛(보라)", "초록 지갑"),          # 물품명 색 연보라 19%
+    ("연보라 지갑", "바이올렛(보라)", "초록 지갑"),        # 물품명 색 연보라 19%
 ])
 def test_palette_additions_from_the_30k_sample(query, palette, other_query):
     row = item("지갑", palette)
@@ -55,7 +55,6 @@ def test_item_text_colors_are_added_to_the_palette_colors():
     ("검정 지갑", item("반지갑", "블랙(검정)")),
     ("남색 파우치", item("파우치", "코발트(짙은청록)")),          # 팔레트 이름과 적은 색이 다르다
     ("파랑 지갑", item("지갑", "블루(파랑)")),
-    ("검정 지갑", item("지갑", "로열블루(밝은남)")),               # 검정 ↔ 남색은 같은 계열
     ("흰색 지갑", item("지갑", "", "아이보리색 지갑")),
     ("베이지 가방", item("가방", "피치오렌지(오렌지)")),
     ("하늘색 캡모자", item("캡모자", "딥스카이블루(새파란하늘)")),
@@ -75,6 +74,7 @@ def test_kept(query, row):
 
 @pytest.mark.parametrize(("query", "row"), [
     ("검정 지갑", item("반지갑", "브라운(갈)")),
+    ("검정 지갑", item("지갑", "로열블루(밝은남)")),
     ("흰색 지갑", item("반지갑", "블랙(검정)")),
     ("빨간색 텀블러", item("텀블러", "블루(파랑)")),
     ("초록색 백팩", item("백팩", "", "보라색 백팩")),
@@ -82,6 +82,31 @@ def test_kept(query, row):
 ])
 def test_clearly_different_color_is_dropped(query, row):
     assert not keeps(query, row)
+
+
+@pytest.mark.parametrize(("left", "right"), [
+    ("흰색", "연회색"), ("금색", "노랑"), ("남색", "남보라"),
+    ("초록", "올리브"), ("초록", "청록"),
+    ("빨강", "자홍"), ("빨강", "산호색"), ("분홍", "자홍"),
+    ("분홍", "산호색"), ("주황", "산호색"),
+    ("파랑", "하늘색"), ("파랑", "어두운파랑"),
+    ("초록", "민트"), ("초록", "카키"), ("카키", "올리브"), ("보라", "자홍"),
+])
+def test_approved_color_pairs_match_in_both_directions(left, right):
+    assert color_filter.compatible({left}, {right})
+    assert color_filter.compatible({right}, {left})
+
+
+@pytest.mark.parametrize(("left", "right"), [
+    ("검정", "남색"), ("흰색", "베이지"), ("회색", "검정"),
+    ("갈색", "카키"), ("남색", "하늘색"), ("남색", "보라"), ("파랑", "청록"),
+    ("초록", "진청록"), ("연두", "카키"), ("빨강", "주황"),
+    ("노랑", "로즈골드"), ("아이보리", "연회색"),
+    ("산호색", "진분홍"), ("산호색", "어두운오렌지"), ("자홍", "진빨강"),
+])
+def test_color_relations_do_not_spread_via_a_shared_color(left, right):
+    assert not color_filter.compatible({left}, {right})
+    assert not color_filter.compatible({right}, {left})
 
 
 def test_every_palette_value_in_the_snapshot_is_mapped():
@@ -144,7 +169,7 @@ def test_module_exposes_no_switch():
 def test_alerts_use_the_same_color_families():
     from retriever_lost_found.alerts.judge import condition_groups, meets_conditions
     conditions = condition_groups("검정 지갑")
-    assert meets_conditions("반지갑 지갑 로열블루(밝은남)", conditions)      # 남색은 검정 계열
+    assert not meets_conditions("반지갑 지갑 로열블루(밝은남)", conditions)
     assert meets_conditions("반지갑 지갑", conditions)                        # 색을 모르면 남긴다
     assert not meets_conditions("반지갑 지갑 브라운(갈)", conditions)
     assert not meets_conditions("반지갑 지갑 화이트(흰)", condition_groups("검정 루이비통 지갑"))
