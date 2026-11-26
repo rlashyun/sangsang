@@ -367,6 +367,7 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),
             search_items=search_items,
             find_items_by_id=find_items_by_id,
+            latest_registered_on=found_item_client.latest_registered_on,
             search_photo_items=lambda ids, query, text, photos, *, lost_on=None: photo_ranked_item_page(
                 found_item_client, embedding_client, photo_model.complete, ids, query, text, photos,
                 jev=jev_filter, lost_on=lost_on,

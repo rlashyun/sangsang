@@ -624,7 +624,10 @@ export function AgentSearchApp() {
           ? "비교할 후보 사진이 없어 글 검색 순서로 보여드려요."
           : "사진을 비교하지 못해 글 검색 순서로 보여드려요." });
       }
-      revealReplies(replies, completedSearch && !showAlertSetup && !result.dialogue?.changed, result.conditions.radius_m ?? mappedRadius);
+      const offerActions = completedSearch && !showAlertSetup && !result.dialogue?.changed;
+      revealReplies(replies, offerActions && !result.latest_registered_on, result.conditions.radius_m ?? mappedRadius);
+      // PRD 4.3-A — 분실일 이후 등록분이 없는 답은 알림 질문까지 담고 있어 선택지만 보여준다.
+      if (offerActions && result.latest_registered_on) setFollowup("actions");
       if (result.status === "answered") {
         // PRD 4.3 — An informational turn advances the session without replacing results.
         setResponse(current => current ? { ...current, revision: result.revision,
@@ -1131,7 +1134,7 @@ export function AgentSearchApp() {
           {followup !== "hidden" && !busy && !placeChanging && response?.matches && currentPlace && <div className="agent-result-followup">
             {followup === "prompt" && <p className="agent-bubble agent-bubble-agent">{followupPrompt.current ?? followupText(mappedRadius)}</p>}
             <div className="agent-place-replies agent-result-actions">
-              {nextRadius !== null && <button type="button" className="agent-action-chip" disabled={busy}
+              {nextRadius !== null && !response.latest_registered_on && <button type="button" className="agent-action-chip" disabled={busy}
                   onClick={() => { if (recordResultChoice("반경 넓혀보기", false)) void submit({ type: "change_radius", radius_m: nextRadius }, false, [], "반경 넓혀보기"); }}>
                   반경 넓혀보기
                 </button>}

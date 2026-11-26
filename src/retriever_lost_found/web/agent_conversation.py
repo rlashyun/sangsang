@@ -3,14 +3,15 @@
 import re
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, replace
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 from ..agent_diagnostics import record
 from ..privacy.masking import contains_identifier, mask_numbers
-from .agent_dates import korea_today, resolve_lost_on
-from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, search_confirmed_place
+from .agent_dates import FutureDateError, korea_today, resolve_lost_on
+from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, resolve_institution_scope, search_confirmed_place
 
 Model = Callable[[str, dict[str, Any], dict[str, Any]], Any]
 ITEM_QUESTION = "어떤 물품을 잃어버렸어요?"
@@ -65,6 +66,7 @@ item_details가 있으면 item_changes의 kind/color/brand/features로 부분 �
 item_details가 비어 있고 기존 item_query만 있으면 item_query에 정정한 전체 검색어를 반환해 모순된 단서를 누적하지 않는다.
 검색 시 물품과 함께 분실일을 말했거나 기존 분실일을 정정하면 최종 날짜 표현만 원문 그대로 lost_date_text로 반환한다.
 오늘·어제·지난주·저번주 목요일·11월 25일처럼 표현 전체를 복사하며, 날짜를 물품 검색어·특징에 넣지 않는다.
+내일처럼 미래 날짜여도 그대로 반환한다. 서버가 판단하므로 직접 거절하지 않는다.
 날짜만 정정해도 기존 물품이 있으면 search를 선택한다. 분실일 조건을 명시적으로 빼달라고 하면 clear_lost_on=true와 search를 반환한다.
 분실일 언급이나 삭제 요청이 없으면 lost_date_text=null, clear_lost_on=false로 기존 조건을 유지한다.
 변경값이 없는 질문은 기존 값을 보존한다. clear_item_query는 명시적인 조건 삭제에만 쓴다. item_query·item_changes·clear_item_query는 동시에 쓰지 않는다.
@@ -504,8 +506,11 @@ def respond_to_message(
                 if re.sub(r"\s+", "", decision.lost_date_text) not in re.sub(r"\s+", "", message):
                     raise ValueError("입력에 없는 분실일 표현")
                 lost_on = resolve_lost_on(decision.lost_date_text, today, state.lost_on)
-            except ValueError:
+            except ValueError as error:
                 answer = "분실일을 확인하지 못했어요. ‘어제’나 ‘11월 25일’처럼 다시 알려주세요."
+                if isinstance(error, FutureDateError):
+                    answer = (f"{_korean_date(error.lost_on, today)}은 아직 오지 않은 날짜예요. "
+                              f"오늘({_korean_date(today, today)})이나 그 전 날짜로 다시 알려주세요.")
                 recent = (*original_state.recent, (message, answer))[-4:]
                 return ConversationTurn(replace(original_state, recent=recent), "answered", answer)
             state = replace(state, lost_on=lost_on)
@@ -644,6 +649,11 @@ def confirm_place(state: Conversation, candidate_id: str) -> tuple[Conversation,
     return confirmed, PendingSearch((place,), state.item_query) if state.item_query else None
 
 
+def _korean_date(value: date, today: date) -> str:
+    year = "" if value.year == today.year else f"{value.year}년 "
+    return f"{year}{value.month}월 {value.day}일"
+
+
 def search_conversation(
     state: Conversation,
     *,
@@ -651,11 +661,37 @@ def search_conversation(
     get_institutions: Callable[[], Sequence[Institution]],
     search_items: Callable[[tuple[int, ...], str], SearchPage],
     radius_m: int | None = None,
+    latest_registered_on: Callable[[], date | None] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run the confirmed search and return an updated state in its final result."""
     place = state.confirmed
     if place is None or state.item_query is None:
         raise ValueError("장소와 물품 조건을 먼저 확인해 주세요.")
+    latest = None
+    if state.lost_on and latest_registered_on is not None:
+        try:
+            latest = latest_registered_on()
+        except (RuntimeError, TimeoutError) as error:
+            # 최신 등록일을 모르면 평소처럼 검색한다.
+            record("latest_date.fallback", error=error, stage="found_items", final_status="fallback")
+    if latest is not None and date.fromisoformat(state.lost_on) > latest:
+        # PRD 4.3-A·4.5 — 분실일 이후 등록분이 아직 없으면 검색과 0건 반경 확장을 하지 않는다.
+        yield from resolve_institution_scope(
+            place, get_institutions=get_institutions, search_centers=state.selected_places(), radius_m=radius_m,
+        )
+        today = korea_today()
+        message = (
+            f"지금은 {_korean_date(latest, today)}에 등록된 습득물까지만 확인할 수 있어요. "
+            f"{_korean_date(date.fromisoformat(state.lost_on), today)} 이후에 등록된 물건은 아직 없어요. "
+            "비슷한 물건이 새로 등록되면 메일로 알려드릴까요?"
+        )
+        yield {
+            "status": "no_matches", "message": message, "latest_registered_on": latest.isoformat(),
+            "matches": {"items": [], "total_count": 0, "next_cursor": None},
+            "search_attempts": [], "recommended_item_ids": [],
+            "state": replace(state, last_search_message=message, awaiting_answer=None),
+        }
+        return
     context = {
         "recent": state.recent,
         "confirmed_place": place.name,
