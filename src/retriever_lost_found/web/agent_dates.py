@@ -27,12 +27,12 @@ class FutureDateError(ValueError):
 def resolve_lost_on(expression: str, today: date, previous: str | None = None) -> str:
     """Return the inclusive lower bound of the registration-date filter."""
     compact = re.sub(r"\s+", "", expression)
-    if compact in {"내일", "모레"}:
-        raise FutureDateError(today + timedelta(days=1 if compact == "내일" else 2))
+    future_days = {"내일": 1, "모레": 2, "글피": 3}
+    if compact in future_days:
+        raise FutureDateError(today + timedelta(days=future_days[compact]))
     if compact in {"오늘", "어제", "그제", "그저께", "엊그제"}:
         days_ago = {"오늘": 0, "어제": 1, "그제": 2, "그저께": 2, "엊그제": 2}[compact]
         return (today - timedelta(days=days_ago)).isoformat()
-
     if match := _LAST_WEEK.fullmatch(compact):
         last_monday = today - timedelta(days=today.weekday() + 7)
         weekday = "월화수목금토일".index(match[1]) if match[1] else 0

@@ -64,13 +64,11 @@ target은 장소/물품의 목록 순번 또는 지정 반경이다. 대상이 �
 물품 종류를 알면 색상·브랜드·특징을 더 요구하지 않고 검색한다. 장소나 새 물품 자체가 불명확한 질문은 유지한다.
 item_details가 있으면 item_changes의 kind/color/brand/features로 부분 변경한다. null은 유지, 빈 문자열은 삭제다. 새 물품에 적용되지 않는 특징은 삭제한다.
 item_details가 비어 있고 기존 item_query만 있으면 item_query에 정정한 전체 검색어를 반환해 모순된 단서를 누적하지 않는다.
-검색 시 물품과 함께 분실일을 말했거나 기존 분실일을 정정하면 최종 날짜 표현만 원문 그대로 lost_date_text로 반환한다.
-오늘·어제·지난주·저번주 목요일·11월 25일처럼 표현 전체를 복사하며, 날짜를 물품 검색어·특징에 넣지 않는다.
-내일처럼 미래 날짜여도 그대로 반환한다. 서버가 판단하므로 직접 거절하지 않는다.
-날짜만 정정해도 기존 물품이 있으면 search를 선택한다. 분실일 조건을 명시적으로 빼달라고 하면 clear_lost_on=true와 search를 반환한다.
-분실일 언급이나 삭제 요청이 없으면 lost_date_text=null, clear_lost_on=false로 기존 조건을 유지한다.
-변경값이 없는 질문은 기존 값을 보존한다. clear_item_query는 명시적인 조건 삭제에만 쓴다. item_query·item_changes·clear_item_query는 동시에 쓰지 않는다.
-다른 값을 기다리는 동안 제공한 단서도 저장한다. awaiting_answer와 dialogue.awaiting을 참고해 짧은 답을 해석한다.
+검색 조건은 이번 발화에서 새로 제공하거나 정정한 항목만 함께 추출한다. 최근 대화와 대기 중인 항목은 생략된 의미를 해석하는 데 사용한다.
+변경값이 없는 항목은 유지한다. 조건 삭제는 명시적인 요청에만 clear_item_query 또는 clear_lost_on으로 표현한다.
+item_query·item_changes·clear_item_query는 동시에 쓰지 않는다.
+새로 제시된 분실일은 미래 날짜를 포함해 현재 발화의 표현 전체를 lost_date_text에 원문 그대로 담는다. 날짜 계산과 유효성 판단은 서버가 하며, 날짜를 물품 단서에 넣지 않는다.
+분실일을 새로 제시하거나 지워 달라는 요청에는 search를 선택한다. awaiting_answer와 dialogue.awaiting을 참고해 짧은 답을 해석한다.
 알림 변경은 초안에만 적용한다. 이미 신청한 예약을 수정·취소했다고 말하지 않는다.
 적용되지 않은 날짜·좌표·기관·물품이나 실제 실행되지 않은 조회·발송 완료를 만들어 말하지 않는다.
 답변 범위는 리트리버 습득물 검색·알림 설정·사용법·현재 조건뿐이다.
@@ -300,7 +298,7 @@ class Conversation:
     confirmed: PlaceCandidate | None = None
     recent: tuple[tuple[str, str], ...] = ()
     last_search_message: str | None = None
-    awaiting_answer: Literal["place", "item"] | None = "place"
+    awaiting_answer: Literal["place", "item", "date"] | None = "place"
     item_details: ItemDetails = ItemDetails()
     places: tuple[PlaceCandidate, ...] = ()
     place_operation: Literal["add", "replace", "set"] | None = None
@@ -499,21 +497,26 @@ def respond_to_message(
     elif decision.item_query:
         state = replace(state, item_query=decision.item_query, item_details=ItemDetails())
 
-    # PRD 4.3-A — keep the loss date separate from the item query and the location confirmation.
-    if decision.action in {"search", "clarify"} and not changing_place and (state.confirmed or state.item_query):
+    # PRD 4.3-A — 날짜 변경만 보류하고 이번에 확인한 물품과 기존 날짜는 보존한다.
+    if decision.action in {"search", "clarify"} and not changing_place:
         if decision.lost_date_text:
-            try:
-                if re.sub(r"\s+", "", decision.lost_date_text) not in re.sub(r"\s+", "", message):
-                    raise ValueError("입력에 없는 분실일 표현")
-                lost_on = resolve_lost_on(decision.lost_date_text, today, state.lost_on)
-            except ValueError as error:
-                answer = "분실일을 확인하지 못했어요. ‘어제’나 ‘11월 25일’처럼 다시 알려주세요."
-                if isinstance(error, FutureDateError):
-                    answer = (f"{_korean_date(error.lost_on, today)}은 아직 오지 않은 날짜예요. "
-                              f"오늘({_korean_date(today, today)})이나 그 전 날짜로 다시 알려주세요.")
-                recent = (*original_state.recent, (message, answer))[-4:]
-                return ConversationTurn(replace(original_state, recent=recent), "answered", answer)
-            state = replace(state, lost_on=lost_on)
+            if re.sub(r"\s+", "", decision.lost_date_text) in re.sub(r"\s+", "", message):
+                date_error = None
+                try:
+                    state = replace(state, lost_on=resolve_lost_on(decision.lost_date_text, today, state.lost_on))
+                except FutureDateError as error:
+                    date_error = (f"{_korean_date(error.lost_on, today)}은 아직 오지 않은 날짜예요. "
+                                  f"오늘({_korean_date(today, today)})이나 그 전 날짜로 다시 알려주세요.")
+                except ValueError:
+                    date_error = "말씀하신 분실일을 확인하지 못했어요. 언제 잃어버렸나요?"
+                if date_error:
+                    answer = f"{date_error} 날짜 없이도 찾을 수 있어요."
+                    recent = (*state.recent, (message, answer))[-4:]
+                    changed_item = state.item_query != prior_item_query
+                    if changed_item:
+                        state = replace(state, last_search_message=None)
+                    status = "awaiting_clarification" if changed_item else "answered"
+                    return ConversationTurn(replace(state, recent=recent, awaiting_answer="date"), status, answer)
         elif decision.clear_lost_on:
             state = replace(state, lost_on=None)
 

@@ -2274,6 +2274,7 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 38px); letter-spacing: -0.05em; }
 .agent-status-error { color: var(--color-error); }
 .agent-compose { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border-separator); }
 .agent-compose-row { display: flex; align-items: center; gap: 8px; }
+.agent-compose-error { margin: 0; font-size: 12px; line-height: 1.5; color: var(--color-error); }
 .agent-compose .agent-photo, .agent-compose .agent-send { display: grid; place-items: center; flex: none; width: 40px; height: 40px; padding: 0; }
 .agent-compose .agent-photo { background: var(--color-bg-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border-input); border-radius: 10px; }
 .agent-compose .agent-photo:hover { background: var(--color-bg-selected); color: var(--color-action-text); }

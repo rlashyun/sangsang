@@ -46,7 +46,7 @@ class Turn(Payload):
     request_id: str = Field(min_length=1, max_length=80)
     session_id: str | None = Field(default=None, max_length=80)
     revision: int | None = Field(default=None, ge=0)
-    text: str | None = Field(default=None, min_length=1, max_length=1000)
+    text: str | None = Field(default=None, min_length=1)
     changing_place: bool = False
     dialogue: DialogueContext | None = None
     place_target: int | None = Field(default=None, ge=1, le=3)
@@ -239,6 +239,12 @@ def create_agent_router(
         turn = await parse(request, Turn)
         if isinstance(turn, JSONResponse):
             return turn
+        # PRD 4.3-A — 사용자 메시지 길이를 모델 호출과 세션 변경 전에 검사한다.
+        if turn.type == "message":
+            if len((turn.text or "").strip()) > 100:
+                return _json({"error": _error("message_too_long", "메시지를 100자 이내로 줄여 주세요.")}, 400)
+        elif len(turn.text or "") > 1000:
+            return _json({"error": _error("invalid_request", "요청 형식이 올바르지 않습니다.")}, 400)
         if (turn.type == "message" and not (turn.text or "").strip()
                 or turn.photos and (turn.type != "message" or not turn.session_id or turn.changing_place or turn.dialogue and turn.dialogue.task == "alert")
                 or turn.dialogue and turn.type != "message" and (
