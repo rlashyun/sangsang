@@ -3,6 +3,8 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from ..ingestion.collector import SOURCE_RETENTION_MONTHS, retention_start
+
 
 _KST = timezone(timedelta(hours=9))
 _LAST_WEEK = re.compile(r"(?:지난|저번)주(?:([월화수목금토일])(?:요일)?)?")
@@ -14,9 +16,19 @@ def korea_today() -> date:
     return datetime.now(_KST).date()
 
 
+class FutureDateError(ValueError):
+    """PRD 4.3-A — 아직 오지 않은 분실일. 안내 문장에 날짜를 쓰도록 함께 전달한다."""
+
+    def __init__(self, lost_on: date):
+        super().__init__("분실일은 미래일 수 없습니다.")
+        self.lost_on = lost_on
+
+
 def resolve_lost_on(expression: str, today: date, previous: str | None = None) -> str:
     """Return the inclusive lower bound of the registration-date filter."""
     compact = re.sub(r"\s+", "", expression)
+    if compact in {"내일", "모레"}:
+        raise FutureDateError(today + timedelta(days=1 if compact == "내일" else 2))
     if compact in {"오늘", "어제", "그제", "그저께", "엊그제"}:
         days_ago = {"오늘": 0, "어제": 1, "그제": 2, "그저께": 2, "엊그제": 2}[compact]
         return (today - timedelta(days=days_ago)).isoformat()
@@ -34,7 +46,7 @@ def resolve_lost_on(expression: str, today: date, previous: str | None = None) -
         lost_on = anchor.replace(day=int(match[1]))
         if lost_on <= today:
             return lost_on.isoformat()
-        raise ValueError("분실일은 미래일 수 없습니다.")
+        raise FutureDateError(lost_on)
 
     match = _CALENDAR_DATE.fullmatch(compact) or _NUMERIC_DATE.fullmatch(compact)
     if not match:
@@ -42,7 +54,10 @@ def resolve_lost_on(expression: str, today: date, previous: str | None = None) -
     year, month, day = match.groups()
     lost_on = date(int(year) if year else today.year, int(month), int(day))
     if not year and lost_on > today:
-        lost_on = lost_on.replace(year=lost_on.year - 1)
+        # PRD 3.1-2 — 작년 날짜는 보존기간 안일 때만 뜻이 통한다. 그보다 오래되면 미래 날짜로 본다.
+        previous = retention_start(lost_on, 12)
+        if previous >= retention_start(today, max(SOURCE_RETENTION_MONTHS.values())):
+            return previous.isoformat()
     if lost_on > today:
-        raise ValueError("분실일은 미래일 수 없습니다.")
+        raise FutureDateError(lost_on)
     return lost_on.isoformat()

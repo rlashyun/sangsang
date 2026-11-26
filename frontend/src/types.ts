@@ -127,6 +127,7 @@ export interface AgentResponse {
   place_candidates: AgentPlace[];
   highlight_candidate_id?: string;
   prepare_alert?: boolean;
+  latest_registered_on?: string;
   search_attempts: { query: string }[];
   recommended_item_ids: number[];
   matches: AgentMatches | null;
