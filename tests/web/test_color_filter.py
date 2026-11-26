@@ -32,7 +32,6 @@ def test_palette_label_maps_to_colors_people_actually_write():
 @pytest.mark.parametrize(("query", "palette", "other_query"), [
     # 2026-11-25 운영 전체 3만 건 표본 보강 — 팔레트 값과 등록자가 적은 색이 다른 경우를 더했다.
     # 물품명에 색이 없으면 팔레트 표에서 읽은 색으로 판단한다.
-    ("검정 지갑", "그레이(회)", "빨강 지갑"),            # 그레이(회) 물품명 색 검정 14%
     ("은색 지갑", "그레이(암회)", "빨강 지갑"),           # 그레이(암회) 물품명 색 은색 17%
     ("금색 지갑", "엘로우(노랑)", "파랑 지갑"),           # 엘로우(노랑) 물품명 색 금색 23%
     ("아이보리 지갑", "피치오렌지(오렌지)", "파랑 지갑"),  # 피치오렌지(오렌지) 물품명 색 아이보리 11%
@@ -53,6 +52,8 @@ def test_item_text_colors_are_added_to_the_palette_colors():
 
 @pytest.mark.parametrize(("query", "row"), [
     ("검정 지갑", item("반지갑", "블랙(검정)")),
+    ("회색 지갑", item("지갑", "그레이(회)")),
+    ("은색 지갑", item("지갑", "그레이(회)")),
     ("남색 파우치", item("파우치", "코발트(짙은청록)")),          # 팔레트 이름과 적은 색이 다르다
     ("파랑 지갑", item("지갑", "블루(파랑)")),
     ("흰색 지갑", item("지갑", "", "아이보리색 지갑")),
@@ -134,6 +135,16 @@ class Candidates:
 
     def fetch_candidate_bundle(self, location_ids, terms, **kwargs):
         return {"items": self.items, "candidate_count": len(self.items)}
+
+
+@pytest.mark.parametrize("query", ["검정색 지갑", "검정 지갑", "블랙 지갑", "검은 지갑"])
+def test_black_wallet_search_needs_black_evidence_for_gray_palette(query):
+    rows = [
+        item("지갑", "그레이(회)", id=1, storage_location_id=7, search_text="지갑 지갑 그레이(회)"),
+        item("검은색 지갑", "그레이(회)", id=2, storage_location_id=7, search_text="검은색 지갑 지갑 그레이(회)"),
+    ]
+    ranked, _, _ = search_found_items(Candidates(rows), query, [7], hydrate_page=False)
+    assert [row["id"] for row in ranked] == [2]
 
 
 def test_search_drops_clearly_different_colors_before_the_top_100_cut():
