@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 
 from ..agent_diagnostics import record
 from ..privacy.masking import contains_identifier, mask_numbers
+from .agent_dates import korea_today, resolve_lost_on
 from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, search_confirmed_place
 
 Model = Callable[[str, dict[str, Any], dict[str, Any]], Any]
@@ -62,6 +63,10 @@ target은 장소/물품의 목록 순번 또는 지정 반경이다. 대상이 �
 물품 종류를 알면 색상·브랜드·특징을 더 요구하지 않고 검색한다. 장소나 새 물품 자체가 불명확한 질문은 유지한다.
 item_details가 있으면 item_changes의 kind/color/brand/features로 부분 변경한다. null은 유지, 빈 문자열은 삭제다. 새 물품에 적용되지 않는 특징은 삭제한다.
 item_details가 비어 있고 기존 item_query만 있으면 item_query에 정정한 전체 검색어를 반환해 모순된 단서를 누적하지 않는다.
+검색 시 물품과 함께 분실일을 말했거나 기존 분실일을 정정하면 최종 날짜 표현만 원문 그대로 lost_date_text로 반환한다.
+오늘·어제·지난주·저번주 목요일·11월 25일처럼 표현 전체를 복사하며, 날짜를 물품 검색어·특징에 넣지 않는다.
+날짜만 정정해도 기존 물품이 있으면 search를 선택한다. 분실일 조건을 명시적으로 빼달라고 하면 clear_lost_on=true와 search를 반환한다.
+분실일 언급이나 삭제 요청이 없으면 lost_date_text=null, clear_lost_on=false로 기존 조건을 유지한다.
 변경값이 없는 질문은 기존 값을 보존한다. clear_item_query는 명시적인 조건 삭제에만 쓴다. item_query·item_changes·clear_item_query는 동시에 쓰지 않는다.
 다른 값을 기다리는 동안 제공한 단서도 저장한다. awaiting_answer와 dialogue.awaiting을 참고해 짧은 답을 해석한다.
 알림 변경은 초안에만 적용한다. 이미 신청한 예약을 수정·취소했다고 말하지 않는다.
@@ -227,6 +232,8 @@ class TurnDecision(BaseModel):
     place_query: str | None
     place_queries: list[str] | None = None
     item_query: str | None
+    lost_date_text: str | None = Field(default=None, max_length=40)
+    clear_lost_on: bool = False
     clear_item_query: bool
     asks_for: Literal["place", "item"] | None
     item_changes: ItemChanges | None
@@ -298,6 +305,7 @@ class Conversation:
     place_target: int | None = None
     pending_place_queries: tuple[str, ...] = ()
     batch_places: tuple[PlaceCandidate, ...] = ()
+    lost_on: str | None = None
 
     def selected_places(self) -> tuple[PlaceCandidate, ...]:
         # PRD 4.3-A — 이전 단일 장소 세션도 다중 장소로 읽는다.
@@ -409,6 +417,7 @@ def respond_to_message(
     if contains_identifier(message):
         recent = (*state.recent, (mask_numbers(message), IDENTIFIER_MESSAGE))[-4:]
         return ConversationTurn(replace(state, recent=recent), "answered", IDENTIFIER_MESSAGE)
+    today = korea_today()
     try:
         decision = TurnDecision.model_validate(model(INSTRUCTIONS, {
             "recent": state.recent,
@@ -423,6 +432,8 @@ def respond_to_message(
             "place_operation": state.place_operation,
             "pending_place_queries": list(state.pending_place_queries),
             "item_query": state.item_query,
+            "lost_on": state.lost_on,
+            "today_in_korea": today.isoformat(),
             "last_search_message": state.last_search_message,
             "awaiting_answer": "place" if changing_place else state.awaiting_answer,
             "changing_place": changing_place,
@@ -463,6 +474,8 @@ def respond_to_message(
             radius = f"{radius_m / 1000:g}km" if radius_m and not changing_place else "적용 전"
             item = state.item_query or "입력 대기 중"
             answer = f"장소는 {place}, 반경은 {radius}, 입력 조건으로 만든 검색어는 ‘{item}’이에요."
+            if state.lost_on:
+                answer += f" 분실일은 {state.lost_on}이에요."
             if last_search_query and last_search_query != state.item_query and not changing_place:
                 answer += f" 마지막 조회에는 ‘{last_search_query}’를 사용했어요."
         recent = (*state.recent, (message, answer))[-4:]
@@ -483,6 +496,21 @@ def respond_to_message(
         state = replace(state, item_details=details, item_query=details.search_query())
     elif decision.item_query:
         state = replace(state, item_query=decision.item_query, item_details=ItemDetails())
+
+    # PRD 4.3-A — keep the loss date separate from the item query and the location confirmation.
+    if decision.action in {"search", "clarify"} and not changing_place and (state.confirmed or state.item_query):
+        if decision.lost_date_text:
+            try:
+                if re.sub(r"\s+", "", decision.lost_date_text) not in re.sub(r"\s+", "", message):
+                    raise ValueError("입력에 없는 분실일 표현")
+                lost_on = resolve_lost_on(decision.lost_date_text, today, state.lost_on)
+            except ValueError:
+                answer = "분실일을 확인하지 못했어요. ‘어제’나 ‘11월 25일’처럼 다시 알려주세요."
+                recent = (*original_state.recent, (message, answer))[-4:]
+                return ConversationTurn(replace(original_state, recent=recent), "answered", answer)
+            state = replace(state, lost_on=lost_on)
+        elif decision.clear_lost_on:
+            state = replace(state, lost_on=None)
 
     if decision.action in {"skip_place", "cancel_place_selection"}:
         state = advance_place_selection(state) if decision.action == "skip_place" else edit_places(state, decision.action)
@@ -658,7 +686,10 @@ def search_conversation(
                 "확정한 장소 주변에서 유사한 습득물을 찾았어요. "
                 "기억나는 특징이 더 있다면 편하게 덧붙여 주세요."
             ),
-            "no_matches": "확정한 범위에서 조건에 맞는 습득물을 찾지 못했어요.",
+            "no_matches": (
+                f"확정한 범위에서 {state.lost_on}부터 등록된 습득물 중 조건에 맞는 물건을 찾지 못했어요."
+                if state.lost_on else "확정한 범위에서 조건에 맞는 습득물을 찾지 못했어요."
+            ),
             "no_institutions": "적용한 반경 안에 보관기관이 없어요.",
         }[event["status"]]
         yield {

@@ -252,6 +252,8 @@ def ranked_item_page(
     embedding_client: GeminiQueryClient | None,
     cursor: str = "",
     jev=None,
+    *,
+    lost_on: str | None = None,
 ) -> dict[str, Any]:
     offset = 0
     jev_excluded = None
@@ -269,7 +271,7 @@ def ranked_item_page(
     jev_out: dict[str, Any] = {}
     matched_items, candidate_count, semantic_status = search_with_deadline(
         found_item_client, query, location_ids, embedding_client, offset=offset, jev=jev,
-        jev_excluded=jev_excluded, jev_out=jev_out,
+        jev_excluded=jev_excluded, jev_out=jev_out, lost_on=lost_on,
     )
     if jev_excluded is None and "excluded" in jev_out:
         jev_excluded = jev_out["excluded"]
@@ -292,7 +294,7 @@ def ranked_item_page(
 
 
 def photo_ranked_item_page(found_item_client, embedding_client, compare, location_ids, query, user_text, photos,
-                           jev=None):
+                           jev=None, *, lost_on: str | None = None):
     from ..search.photo_rerank import rerank_photos
     from .agent_adapters import adapt_search_item
     from .agent_search import SearchPage
@@ -300,7 +302,7 @@ def photo_ranked_item_page(found_item_client, embedding_client, compare, locatio
     location_ids = list(location_ids)
     # 2026-11-23 — Jev 제외는 사진 비교(Luna) 전에 돈다.
     ranked, _, _ = search_with_deadline(found_item_client, query, location_ids, embedding_client, hydrate_page=False,
-                                        jev=jev)
+                                        jev=jev, lost_on=lost_on)
     ranked, status = rerank_photos(ranked, location_ids, user_text, photos,
                                     found_item_client.fetch_photo_candidates, compare)
     # PRD 4.5 — Hydrate the first page after reranking. Keep only the remaining IDs for the next page.
@@ -348,9 +350,10 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
 
         photo_model = OpenRouterAgentModel(embedding_key, timeout=4.5)
 
-        def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None):
+        def search_items(location_ids: tuple[int, ...], query: str, cursor: str | None, *, lost_on: str | None = None):
             ids = validate_location_ids(",".join(map(str, location_ids)))
-            page = ranked_item_page(found_item_client, query, ids, embedding_client, cursor or "", jev=jev_filter)
+            page = ranked_item_page(found_item_client, query, ids, embedding_client, cursor or "",
+                                    jev=jev_filter, lost_on=lost_on)
             return adapt_search_page(page)
 
         def find_items_by_id(scope, item_ids):
@@ -364,8 +367,9 @@ def create_runtime_app(*, agent_search: bool = False) -> FastAPI:
             get_institutions=lambda: adapt_institutions(map_location_client.fetch_locations(with_counts=False)),
             search_items=search_items,
             find_items_by_id=find_items_by_id,
-            search_photo_items=lambda ids, query, text, photos: photo_ranked_item_page(
-                found_item_client, embedding_client, photo_model.complete, ids, query, text, photos, jev=jev_filter,
+            search_photo_items=lambda ids, query, text, photos, *, lost_on=None: photo_ranked_item_page(
+                found_item_client, embedding_client, photo_model.complete, ids, query, text, photos,
+                jev=jev_filter, lost_on=lost_on,
             ),
         )
     try:

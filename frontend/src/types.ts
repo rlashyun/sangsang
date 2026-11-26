@@ -120,6 +120,7 @@ export interface AgentResponse {
     pending_place_queries?: string[];
     selecting_place_query?: string | null;
     item_query: string | null;
+    lost_on?: string | null;
     radius_m: number | null;
     institution_ids: number[];
   };

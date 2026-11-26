@@ -130,6 +130,7 @@ def _conditions(session: Session) -> dict:
         "pending_place_queries": list(session.state.pending_place_queries),
         "selecting_place_query": session.state.place_query if session.state.place_operation else None,
         "item_query": session.state.item_query, "radius_m": session.radius_m,
+        "lost_on": session.state.lost_on,
         "institution_ids": list(session.scope),
     }, "place_candidates": [asdict(place) for place in session.state.candidates]}
 
@@ -182,9 +183,9 @@ def create_agent_router(
     openrouter_api_key: str | None = None,
     find_places: Callable[[str], Sequence[PlaceCandidate]],
     get_institutions: Callable[[], Sequence[Institution]],
-    search_items: Callable[[tuple[int, ...], str, str | None], SearchPage],
+    search_items: Callable[..., SearchPage],
     find_items_by_id: Callable[[tuple[int, ...], list[int]], Sequence[dict[str, Any]]] | None = None,
-    search_photo_items: Callable[[tuple[int, ...], str, str, tuple[str, ...]], SearchPage] | None = None,
+    search_photo_items: Callable[..., SearchPage] | None = None,
 ) -> APIRouter:
     if model is None:
         if not openrouter_api_key:
@@ -317,10 +318,11 @@ def create_agent_router(
 
             def search_current(ids, query):
                 nonlocal photo_page
+                date_filter = {"lost_on": state.lost_on} if state.lost_on else {}
                 if photos and session.state.confirmed and search_photo_items is not None:
-                    photo_page = search_photo_items(ids, query, turn.text, photos)
+                    photo_page = search_photo_items(ids, query, turn.text, photos, **date_filter)
                     return photo_page
-                return search_items(ids, query, None)
+                return search_items(ids, query, None, **date_filter)
 
             def line(event: dict) -> str:
                 nonlocal seq, stage
@@ -640,16 +642,7 @@ def create_agent_router(
                 response = {
                     "session_id": session_id, "run_id": run_id, "revision": session.revision,
                     "trace_id": server_trace_id, "message": "", "search_attempts": [], "recommended_item_ids": [], "matches": None, "error": None,
-                    "conditions": {
-                        "place": asdict(session.state.confirmed) if session.state.confirmed else None,
-                        "places": [asdict(place) for place in session.state.selected_places()],
-                        "place_operation": session.state.place_operation,
-                        "pending_place_queries": list(session.state.pending_place_queries),
-                        "selecting_place_query": session.state.place_query if session.state.place_operation else None,
-                        "item_query": session.state.item_query, "radius_m": session.radius_m,
-                        "institution_ids": list(session.scope),
-                    },
-                    "place_candidates": [asdict(place) for place in session.state.candidates],
+                    **_conditions(session),
                     **result,
                 }
                 try:
@@ -706,7 +699,8 @@ def create_agent_router(
                 items = tuple(by_id[item_id] for item_id in session.remaining_photo_ids if item_id in by_id)
                 page = SearchPage(items, session.match_count or 0)
             else:
-                page = await run_in_threadpool(search_items, scope, query, payload.cursor)
+                date_filter = {"lost_on": session.state.lost_on} if session.state.lost_on else {}
+                page = await run_in_threadpool(search_items, scope, query, payload.cursor, **date_filter)
             if any(item["institution_id"] not in scope for item in page.items):
                 raise RuntimeError("Invalid scope")
             result = await run_in_threadpool(store.command, payload.session_id, "page", {
