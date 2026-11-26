@@ -253,8 +253,10 @@ async (page) => {
     await page.getByLabel("알림 신청 조건").waitFor();
     await input.fill("서울역 지갑"); await page.getByRole("button",{name:"보내기",exact:true}).click();
     const followup = page.locator(".agent-result-followup");
-    const prompt = followup.getByText("찾으시는 물건이 없나요?", {exact:false});
-    await prompt.waitFor();
+    const redundantPrompt = page.getByText("찾으시는 물건이 없나요?", {exact:false});
+    await followup.waitFor();
+    check(await page.getByText('일치하는 물건을 찾지 못했어요.',{exact:true}).count() > 0
+      && await redundantPrompt.count() === 0, 'Empty search keeps its result message and omits the extra prompt');
     const daangn = followup.getByRole('link', {name:'당근에서 찾아보기'});
     check(await daangn.getAttribute('target') === '_blank', 'Daangn remains an external new-tab link');
     await daangn.evaluate(link => link.addEventListener('click', event => event.preventDefault(), {once:true}));
@@ -262,25 +264,26 @@ async (page) => {
     check(await page.locator('.agent-bubble-user').filter({hasText:'당근에서 찾아보기'}).count() === 1,
       'Daangn choice is recorded in chat');
     await followup.getByRole('button', {name:'반경 넓혀보기'}).click();
-    await prompt.waitFor();
+    await followup.waitFor();
     check(await page.locator('.agent-bubble-user').filter({hasText:'반경 넓혀보기'}).count() === 1,
       'Radius expansion choice is recorded in chat');
     await followup.getByRole("button", {name:"비슷한 물건 알림 받기"}).click();
     check(await page.locator('.agent-bubble-user').filter({hasText:'비슷한 물건 알림 받기'}).count() === 1,
       'Alert choice is recorded in chat');
-    const historicalPrompt = page.locator('.agent-feed > .agent-bubble-agent').filter({hasText:'찾으시는 물건이 없나요?'});
-    check(await historicalPrompt.count() >= 2, 'Follow-up prompts remain after choosing actions');
+    const resultMessages = page.getByText(/^(일치하는 물건을 찾지 못했어요\.|수정한 조건으로 검색했어요\.)$/);
+    const resultMessageCount = await resultMessages.count();
+    check(resultMessageCount >= 2 && await redundantPrompt.count() === 0, 'Search result messages remain after choosing actions');
     await page.getByLabel("개인정보 수집·이용에 동의해요").check();
     const before=calls;
     await input.fill("user@example.com"); await page.getByRole("button",{name:"보내기",exact:true}).click();
     await page.getByText("일시 실패: 다시 입력해 주세요",{exact:true}).waitFor();
     check(await page.getByText('확인 메일을 보냈어요.',{exact:true}).count() === 0, 'Failure never displays a sent confirmation');
-    check(await historicalPrompt.count() >= 2, 'Mail failure preserves preceding chat prompts');
+    check(await resultMessages.count() === resultMessageCount, 'Mail failure preserves preceding search result messages');
     await input.fill("user@example.com"); await page.getByRole("button",{name:"보내기",exact:true}).click();
     await page.getByText("확인 메일을 보냈어요.",{exact:false}).waitFor();
     await page.getByText('받은 메일의 확인 링크를 눌러 주세요. 24시간 안에 확인하면 알림이 시작돼요.',{exact:true}).waitFor();
-    check(await followup.locator('> p').count() === 0 && await historicalPrompt.count() >= 2,
-      'Success keeps the prompts in history and leaves current actions without a repeated prompt');
+    check(await redundantPrompt.count() === 0 && await resultMessages.count() === resultMessageCount,
+      'Success keeps search results in history and leaves current actions without a repeated prompt');
     check(await page.getByLabel('이전 알림 조건',{exact:true}).count() > 0, 'Sent signup keeps its conditions in chat');
     await followup.getByRole("button", {name:"반경 넓혀보기"}).waitFor();
     await followup.getByRole("button", {name:"비슷한 물건 알림 받기"}).waitFor();

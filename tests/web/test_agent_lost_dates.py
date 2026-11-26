@@ -89,6 +89,61 @@ def test_date_survives_scope_expansion_paging_and_correction(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("skip_date", [False, True])
+def test_invalid_date_keeps_item_for_followup_and_stale_date_is_ignored(monkeypatch, skip_date):
+    monkeypatch.setattr("retriever_lost_found.web.agent_conversation.korea_today", lambda: date(2026, 11, 26))
+    base = {"action": "search", "message": "", "place_query": None, "item_query": None,
+            "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None}
+    model = Mock(side_effect=[
+        {**base, "item_query": "검은 가방", "lost_date_text": "어제"},
+        {**base, "item_query": "검은 반지갑", "lost_date_text": "내일"},
+        {**base, **({"clear_lost_on": True} if skip_date else {"lost_date_text": "오늘"})},
+        {**base, "item_query": "검은 지갑", "lost_date_text": "내일"},
+    ])
+    item = {"item_id": 7, "institution_id": 42}
+    search = Mock(return_value=SearchPage((item,), 1))
+    client = TestClient(create_app(Mock(), "", agent_router=create_agent_router(
+        model=model, find_places=Mock(),
+        get_institutions=lambda: [Institution(42, 37.5, 127.03)], search_items=search,
+    )))
+
+    def turn(request_id, preceding=None, **body):
+        if preceding:
+            body.update(session_id=preceding["session_id"], revision=preceding["revision"])
+        response = client.post("/api/search-chat/turns", json={**body, "request_id": request_id})
+        assert response.status_code == 200
+        return json.loads(response.text.splitlines()[-1])["response"]
+
+    place = turn("place", type="select_point", latitude=37.5, longitude=127.03, name="강남역")
+    first = turn("initial", place, type="message", text="어제 검은 가방을 잃어버렸어")
+    assert first["status"] == "results"
+    invalid = turn("invalid", first, type="message", text="검은 반지갑을 내일 잃어버렸어")
+    assert invalid["conditions"]["item_query"] == "검은 반지갑"
+    assert invalid["conditions"]["lost_on"] == "2026-11-25"
+    assert "11월 27일은 아직 오지 않은 날짜예요." in invalid["message"]
+    assert invalid["matches"] is None
+    search.assert_called_once_with((42,), "검은 가방", None, lost_on="2026-11-25")
+
+    corrected = turn("corrected", invalid, type="message",
+                     text="날짜 없이 찾아줘" if skip_date else "오늘 잃어버렸어")
+    assert model.call_args.args[1]["awaiting_answer"] == "date"
+    assert model.call_args.args[1]["item_query"] == "검은 반지갑"
+    assert corrected["status"] == "results"
+    assert corrected["conditions"]["item_query"] == "검은 반지갑"
+    expected_date = None if skip_date else "2026-11-26"
+    assert corrected["conditions"]["lost_on"] == expected_date
+
+    restated = turn("item-only", corrected, type="message", text="검은 지갑이라고 했잖아")
+    assert restated["status"] == "results"
+    assert restated["conditions"]["item_query"] == "검은 지갑"
+    assert restated["conditions"]["lost_on"] == expected_date
+    date_filter = {"lost_on": expected_date} if expected_date else {}
+    assert search.call_args_list[1:] == [
+        call((42,), "검은 반지갑", None, **date_filter),
+        call((42,), "검은 지갑", None, **date_filter),
+    ]
+
+
 def test_hybrid_passes_the_same_date_to_both_rpc_calls():
     client = SupabaseFoundItemClient("http://localhost", "dummy")
     client._search_rpc = Mock(side_effect=lambda name, *_: [] if name.startswith("semantic") else
@@ -110,6 +165,7 @@ def test_hybrid_passes_the_same_date_to_both_rpc_calls():
     ("27일", "2026-11-27"),
     ("내일", "2026-11-27"),
     ("모레", "2026-11-28"),
+    ("글피", "2026-11-29"),
 ])
 def test_future_loss_date_is_reported_instead_of_moving_to_last_year(expression, future):
     with pytest.raises(FutureDateError) as raised:
@@ -156,8 +212,12 @@ def _dated_chat(monkeypatch, lost_date_text, latest):
 
 def test_future_loss_date_asks_again_without_searching(monkeypatch):
     result, search = _dated_chat(monkeypatch, "11월 29일", Mock(return_value=date(2026, 11, 26)))
-    assert result["message"] == "11월 29일은 아직 오지 않은 날짜예요. 오늘(11월 26일)이나 그 전 날짜로 다시 알려주세요."
-    assert result["status"] == "answered"
+    assert result["message"] == (
+        "11월 29일은 아직 오지 않은 날짜예요. 오늘(11월 26일)이나 그 전 날짜로 다시 알려주세요. "
+        "날짜 없이도 찾을 수 있어요."
+    )
+    assert result["status"] == "awaiting_clarification"
+    assert result["conditions"]["item_query"] == "검은 반지갑"
     assert result["conditions"]["lost_on"] is None
     search.assert_not_called()
 

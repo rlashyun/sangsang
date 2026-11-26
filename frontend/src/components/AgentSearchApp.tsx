@@ -23,6 +23,8 @@ import { UsageGuide } from "./UsageGuide";
 
 // PRD 4.3-A — 2026-11-21 사용자 피드백: 대화와 확정 버튼의 공간을 확보해 5곳씩 보여준다.
 const PLACE_PAGE_SIZE = 5;
+// PRD 4.3-A — 검색 채팅과 알림 조건 수정의 자유 입력에 같은 한도를 적용한다.
+const CHAT_MESSAGE_LIMIT = 100;
 const TOOL_LABELS: Record<string, string> = {
   places: "장소 후보를 찾고 있어요.",
   institutions: "반경 안의 보관기관을 확인하고 있어요.",
@@ -98,6 +100,9 @@ export function AgentSearchApp() {
   }, []);
   const [draft, setDraft] = useState("");
   const [alertDraft, setAlertDraft] = useState<AlertConditions | null>(null);
+  const composeText = draft.trim();
+  const submittingAlertEmail = Boolean(alertDraft && composeText.includes("@"));
+  const messageTooLong = !submittingAlertEmail && Array.from(composeText).length > CHAT_MESSAGE_LIMIT;
   const [alertAnchor, setAlertAnchor] = useState<number | null>(null);
   const alertActive = useRef(false);
   // PRD 4.3-E — 신청 안내를 대화 순서에 고정하고 이후 발화는 그 아래에 표시한다.
@@ -235,8 +240,8 @@ export function AgentSearchApp() {
     setFollowup("hidden");
   }
 
-  function revealReplies(replies: ChatMessage[], showFollowup = false, radius = mappedRadius) {
-    // PRD 4.3-A — 도착한 답변은 순서대로 표시한 뒤 후속 안내를 보여준다.
+  function revealReplies(replies: ChatMessage[], showFollowup = false) {
+    // PRD 4.3-A — 도착한 답변은 순서대로 표시한 뒤 후속 선택지를 보여준다.
     hideFollowup();
     const generation = replyGeneration.current;
     const messagesToReveal = replies.filter((reply, index) => {
@@ -264,9 +269,7 @@ export function AgentSearchApp() {
     if (showFollowup) {
       replyTimers.current.push(setTimeout(() => {
         if (generation !== replyGeneration.current) return;
-        // PRD 4.3-A — 검색 완료 뒤에는 후속 안내 문장과 선택지를 함께 보여준다.
-        followupPrompt.current = followupText(radius);
-        setFollowup("prompt");
+        setFollowup("actions");
       }, Math.max(1, messagesToReveal.length) * 300 + 700));
     }
   }
@@ -625,7 +628,7 @@ export function AgentSearchApp() {
           : "사진을 비교하지 못해 글 검색 순서로 보여드려요." });
       }
       const offerActions = completedSearch && !showAlertSetup && !result.dialogue?.changed;
-      revealReplies(replies, offerActions && !result.latest_registered_on, result.conditions.radius_m ?? mappedRadius);
+      revealReplies(replies, offerActions && !result.latest_registered_on);
       // PRD 4.3-A — 분실일 이후 등록분이 없는 답은 알림 질문까지 담고 있어 선택지만 보여준다.
       if (offerActions && result.latest_registered_on) setFollowup("actions");
       if (result.status === "answered") {
@@ -731,11 +734,6 @@ export function AgentSearchApp() {
     }
   }
 
-  function fill(text: string) {
-    setDraft(text);
-    input.current?.focus();
-  }
-
   function recordAlertConditions() {
     if (!alertDraft || recordedAlertDrafts.current.has(alertDraft)) return;
     recordedAlertDrafts.current.add(alertDraft);
@@ -816,9 +814,12 @@ export function AgentSearchApp() {
 
   function send(event: FormEvent) {
     event.preventDefault();
+    if (!messageTooLong) sendMessage(composeText, photos);
+  }
+
+  function sendMessage(text: string, messagePhotos: ChatPhoto[] = []) {
     if (busy || controller.current || revealingRepliesRef.current || composing.current || addingPhotos || alertPending.current) return;
-    const text = draft.trim();
-    if (!text && !photos.length) return;
+    if (!text && !messagePhotos.length) return;
     if (!text && (alertDraft || editingAlert.current)) return;
     // PRD 4.3-A · 4.3-E — 자유 입력은 현재 작업과 함께 공통 모델 판단으로 보낸다.
     if (alertDraft && text.includes("@")) {
@@ -868,7 +869,7 @@ export function AgentSearchApp() {
         void submit(turn);
         return;
       }
-      const selectedPhotos = canAttachPhotos && !currentAlert ? photos : [];
+      const selectedPhotos = canAttachPhotos && !currentAlert ? messagePhotos : [];
       if (selectedPhotos.length) turn.photos = selectedPhotos.map(photo => photo.searchUrl);
       void submit(turn, false, selectedPhotos);
     } else {
@@ -1066,7 +1067,8 @@ export function AgentSearchApp() {
             </>}
           </dd></div>
           <div><dt>물건</dt><dd className={conditions?.item_query ? undefined : "agent-summary-pending"}>{conditions?.item_query || "입력 대기 중"}</dd>
-            {conditions?.item_query && <button type="button" disabled={busy} onClick={() => fill("물건 정보를 바꿀게요. ")}>수정</button>}</div>
+            {/* PRD 4.3-A — 상단 수정은 물품 변경 요청을 채팅에 바로 전송한다. */}
+            {conditions?.item_query && <button type="button" disabled={busy} onClick={() => sendMessage("물건 정보를 바꿀게요.")}>수정</button>}</div>
           {conditions?.lost_on && <div><dt>분실일</dt><dd>{formatRegisteredDate(conditions.lost_on)}</dd></div>}
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
@@ -1197,11 +1199,13 @@ export function AgentSearchApp() {
           </button>
           <input id="agent-input" ref={input} value={draft} onChange={event => setDraft(event.target.value)}
             onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
-            maxLength={1000} disabled={alertSending} inputMode={alertDraft ? "email" : "text"} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : editingAlert.current ? "바꿀 알림 조건을 입력하세요" : composePlaceholder} />
-          <button ref={sendButton} type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || (!draft.trim() && (Boolean(alertDraft) || editingAlert.current || !canAttachPhotos || !photos.length))}>
+            aria-invalid={messageTooLong || undefined} aria-describedby={messageTooLong ? "agent-message-length-error" : undefined}
+            disabled={alertSending} inputMode={alertDraft ? "email" : "text"} autoComplete={alertDraft ? "email" : "off"} placeholder={alertDraft ? "알림 받을 이메일 주소" : editingAlert.current ? "바꿀 알림 조건을 입력하세요" : composePlaceholder} />
+          <button ref={sendButton} type="submit" className="agent-send" aria-label="보내기" disabled={busy || alertSending || addingPhotos || messageTooLong || (!composeText && (Boolean(alertDraft) || editingAlert.current || !canAttachPhotos || !photos.length))}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg>
           </button>
           </div>
+          {messageTooLong && <p id="agent-message-length-error" className="agent-compose-error" role="status">메시지를 {CHAT_MESSAGE_LIMIT}자 이내로 줄여 주세요.</p>}
         </form>
         </div>
       </section>

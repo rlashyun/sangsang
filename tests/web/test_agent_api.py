@@ -10,6 +10,32 @@ from retriever_lost_found.web.agent_search import Institution, PlaceCandidate, S
 from retriever_lost_found.web.app import create_app
 
 
+def test_chat_message_length_is_checked_before_model_call():
+    model = Mock(return_value={
+        "action": "decline", "message": "", "place_query": None, "item_query": None,
+        "clear_item_query": False, "asks_for": None, "item_changes": None, "target": None,
+    })
+    router = create_agent_router(
+        model=model, find_places=Mock(), get_institutions=Mock(), search_items=Mock(),
+    )
+    client = TestClient(create_app(Mock(), "dummy", agent_router=router))
+    url = "/api/search-chat/turns"
+    text = "가" * 99 + "📍"
+    request = {"type": "message", "request_id": "message-length"}
+
+    for oversized in (text + "나", text * 11):
+        rejected = client.post(url, json={**request, "text": oversized})
+        assert rejected.status_code == 400
+        assert rejected.json()["error"]["message"] == "메시지를 100자 이내로 줄여 주세요."
+    model.assert_not_called()
+
+    accepted = client.post(url, json={**request, "text": text})
+    assert accepted.status_code == 200
+    assert accepted.headers["content-type"].startswith("application/x-ndjson")
+    assert json.loads(accepted.text.splitlines()[-1])["response"]["status"] == "answered"
+    model.assert_called_once()
+
+
 def test_chat_api_confirms_place_retries_and_pages_without_llm():
     first = {"item_id": 1, "institution_id": 42}
     second = {"item_id": 2, "institution_id": 42}

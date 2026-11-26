@@ -42,6 +42,7 @@ async (page) => {
         Object.assign(response,{status:'no_matches',message:'2km 안에서도 일치하는 물건을 찾지 못했어요.',conditions:{...response.conditions,radius_m:2000},matches:{items:[],total_count:0,next_cursor:null}});
       }
       if(body.type==='remove_place')Object.assign(response,{status:'awaiting_place_clarification',message:'‘서울역’ 장소를 제거했어요.',conditions:{...response.conditions,place:null,places:[],radius_m:null,institution_ids:[]},matches:null});
+      if(body.text==='물건 정보를 바꿀게요.')Object.assign(response,{status:'awaiting_clarification',message:'바꿀 물건을 알려주세요.',matches:null});
       events.push({type:'run.finished',seq:10,response},{type:'run.finished',seq:10,response});
       return route.fulfill({contentType:'application/x-ndjson',body:events.map(event=>JSON.stringify(event)).join('\n')+'\n'});
     }
@@ -54,6 +55,15 @@ async (page) => {
     requests=[];release=null;failures=0;
     await page.setViewportSize(viewport);await page.goto('http://127.0.0.1:8000/');
     const input=page.getByRole('textbox',{name:'메시지'}),send=page.getByRole('button',{name:'보내기',exact:true});
+    const limitNotice=page.getByText('메시지를 100자 이내로 줄여 주세요.',{exact:true});
+    const maxLengthMessage='가'.repeat(99)+'📍';
+    await input.fill(maxLengthMessage+'나');
+    await limitNotice.waitFor();
+    await page.keyboard.press('Enter');await burst();
+    check(await send.isDisabled()&&requests.length===0&&await input.inputValue()===maxLengthMessage+'나',
+      'Oversized chat input stays intact and cannot be sent');
+    await input.fill(maxLengthMessage);
+    check(await send.isEnabled()&&await limitNotice.count()===0,'Exactly 100 characters can be sent without an input warning');
     await input.fill('서울역 지갑');
     await input.dispatchEvent('compositionstart',{data:'갑'});
     await page.keyboard.press('Enter');await burst();
@@ -87,6 +97,11 @@ async (page) => {
     check(await send.isDisabled(),'Empty input stays disabled after search finishes');
     check(requests.length===3&&await userText('반복 검색').count()===1,'New intentional search is sent once');
     check(await page.getByText(complete,{exact:true}).count()===2,'Separate searches keep their own identical completion messages');
+    const resultActions=page.locator('.agent-result-actions');
+    check(await resultActions.getByRole('button',{name:'반경 넓혀보기'}).isVisible()
+      && await resultActions.getByRole('button',{name:'비슷한 물건 알림 받기'}).isVisible()
+      && await resultActions.getByRole('link',{name:'당근에서 찾아보기'}).isVisible(),'Search keeps all available follow-up actions');
+    check(await page.getByText('찾으시는 물건이 없나요?',{exact:false}).count()===0,'Search does not add the redundant follow-up message');
     await page.locator('.agent-result-actions').waitFor();
     await page.getByRole('button',{name:'비슷한 물건 알림 받기',exact:true}).evaluate(button=>{for(let i=0;i<10;i++)button.click();});
     check(await userText('비슷한 물건 알림 받기').count()===1,'Rapid local choices record one action');
@@ -110,6 +125,14 @@ async (page) => {
     check(requests.length===6&&await userText("'서울역' 제거").count()===1,'Place removal is sent and recorded once');
     check(await agentText('‘서울역’ 장소를 제거했어요.').count()===1,'Same response notice from frontend and server is not duplicated');
     check(await userText('서울역 지갑').count()===1&&await userText("'서울역' 선택").count()===1,'Earlier typed and selected history remains after state changes');
+    await input.fill('작성 중인 다른 문장');
+    await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);
+    await page.locator('.agent-summary').getByRole('button',{name:'수정',exact:true})
+      .evaluate(button=>{for(let i=0;i<10;i++)button.click();});
+    await page.getByText('바꿀 물건을 알려주세요.',{exact:true}).waitFor({timeout:4000});
+    check(requests.length===7&&requests.at(-1).text==='물건 정보를 바꿀게요.',
+      'Item edit sends the fixed message once without Enter');
+    check(await userText('작성 중인 다른 문장').count()===0,'Item edit does not send the old draft');
     console.log('PASS submission/IME/repeat/replayed events/retry/history: '+viewport.width);
   }
   check(errors.length===0,errors.join('\n'));
