@@ -423,9 +423,12 @@ export function AgentSearchApp() {
     return () => observer.disconnect();
   }, [tab, response?.matches, selectedInstitution.length]);
 
+  // PRD 4.3-A — 대화 전에는 화면이 작아도 이용 방법 위의 안내부터 보여준다.
   useEffect(() => {
-    if (!selectedCandidate && feed.current) feed.current.scrollTop = feed.current.scrollHeight;
-  }, [messages, selectedCandidate, followup, photos.length, photoError, alertDraft, alertEditField]);
+    if (!selectedCandidate && feed.current) {
+      feed.current.scrollTop = !mailAction && messages.length === 0 ? 0 : feed.current.scrollHeight;
+    }
+  }, [mailAction, messages, selectedCandidate, followup, photos.length, photoError, alertDraft, alertEditField]);
 
   // PRD 4.3-E — 안내가 실제로 렌더링된 뒤 채팅의 마지막으로 이동한다.
   useLayoutEffect(() => {
@@ -1065,13 +1068,18 @@ export function AgentSearchApp() {
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
         <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
-            {!mailAction && <><h2 className="agent-welcome-title">이용 방법</h2>
-            <ol className="agent-welcome-steps" aria-label="이용 순서">
-              <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 보관기관 핀을 눌러 선택하세요</li>
-              <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
-              <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
-            </ol>
-            <hr className="agent-welcome-divider" /></>}
+            {!mailAction && <>
+              <div className="agent-welcome-heading">
+                <p className="agent-ai-notice">이 검색은 생성형 AI를 사용하며, 일부 채팅 답변은 AI가 생성해요.</p>
+                <h2 className="agent-welcome-title">이용 방법</h2>
+              </div>
+              <ol className="agent-welcome-steps" aria-label="이용 순서">
+                <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 보관기관 핀을 눌러 선택하세요</li>
+                <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
+                <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
+              </ol>
+              <hr className="agent-welcome-divider" />
+            </>}
             {/* PRD 4.3-A — 첫 안내 문장은 대화가 시작돼도 기록 맨 위에 남긴다. */}
             {!mailAction && <p className="agent-bubble agent-bubble-agent">물건을 잃어버린 장소를 알려주세요</p>}
             {mailAction === "results"
