@@ -102,12 +102,12 @@
   background: var(--color-bg-page);
 }
 
-/* PRD 4.3-A — 장소 추가·변경은 대화로, 상단에는 제거만 둔다. */
+/* PRD 4.3-A — 추가는 장소 이름 아래, 제거는 각 장소 오른쪽에 둔다. */
 .agent-selected-places { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .agent-selected-places li { display: flex; align-items: center; gap: 4px; }
 .agent-selected-places li > span { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
-.agent-selected-places .agent-place-remove { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--color-text-secondary); font-size: 18px; line-height: 1; }
-.agent-selected-places .agent-place-remove:hover { color: var(--color-action-text); }
+.agent-selected-places .agent-place-control { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--color-text-secondary); font-size: 18px; line-height: 1; }
+.agent-selected-places .agent-place-control:hover { color: var(--color-action-text); }
 .agent-place-queue { margin: 4px 0; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 
 :root[data-theme="warm-ivory"] {
