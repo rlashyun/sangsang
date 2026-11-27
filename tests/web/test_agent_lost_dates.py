@@ -171,6 +171,35 @@ def test_two_digit_year_is_read_as_2000s(expression, expected):
     assert resolve_lost_on(expression, date(2026, 11, 26)) == expected
 
 
+@pytest.mark.parametrize(("expression", "expected"), [
+    ("4월 25일이여", "2026-04-25"),
+    ("4월25일이라고", "2026-04-25"),
+    ("4월 25일에", "2026-04-25"),
+    ("11월 20일쯤", "2026-11-20"),
+    ("11/20이요", "2026-11-20"),
+    ("어제요", "2026-11-25"),
+    ("어제저녁", "2026-11-25"),
+    ("지난주에", "2026-11-16"),
+    ("3일 전에", "2026-11-23"),
+    ("26년 5월 6일이야.", "2026-05-06"),
+])
+def test_trailing_korean_endings_are_ignored(expression, expected):
+    # PRD 4.3-A — 모델이 조사·어미까지 넘겨도 날짜 부분만 읽는다. ‘3일 전에’는 ‘3일’이 아니라 ‘3일 전’이다.
+    assert resolve_lost_on(expression, date(2026, 11, 26)) == expected
+
+
+def test_endings_do_not_hide_future_dates_or_invent_dates():
+    with pytest.raises(FutureDateError) as raised:
+        resolve_lost_on("11월 29일이요", date(2026, 11, 26))
+    assert raised.value.lost_on.isoformat() == "2026-11-29"
+    with pytest.raises(FutureDateError):
+        resolve_lost_on("내일이요", date(2026, 11, 26))
+    # 말끝을 떼도 날짜가 없거나 일곱 글자 넘게 붙은 표현은 읽지 않는다.
+    for expression in ("언젠가요", "요즘에", "4월 25일이라고했잖아요"):
+        with pytest.raises(ValueError):
+            resolve_lost_on(expression, date(2026, 11, 26))
+
+
 def test_two_digit_year_future_date_is_reported_and_other_lengths_stay_invalid():
     with pytest.raises(FutureDateError) as raised:
         resolve_lost_on("26년 11월 29일", date(2026, 11, 26))
@@ -264,3 +293,16 @@ def test_dated_search_stops_at_the_first_matching_radius(monkeypatch):
     result, search = _dated_chat(monkeypatch, "11월 25일")
     assert result["status"] == "results"
     search.assert_called_once_with((42,), "검은 반지갑", None, lost_on="2026-11-25")
+
+
+def test_model_date_with_trailing_ending_still_filters_search(monkeypatch):
+    # PRD 4.3-A — 모델이 ‘11월 25일이여’처럼 어미까지 넘겨도 다시 묻지 않고 분실일로 검색한다.
+    result, search = _dated_chat(monkeypatch, "11월 25일이여")
+    assert result["conditions"]["lost_on"] == "2026-11-25"
+    assert "확인하지 못했어요" not in (result.get("message") or "")
+    assert search.called
+
+
+def test_instructions_ask_for_the_date_expression_without_endings():
+    from retriever_lost_found.web.agent_conversation import INSTRUCTIONS
+    assert "날짜를 가리키는 표현만" in INSTRUCTIONS and "조사·어미" in INSTRUCTIONS

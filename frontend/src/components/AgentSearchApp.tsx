@@ -154,6 +154,8 @@ export function AgentSearchApp() {
   const composing = useRef(false);
   const completedRequests = useRef(new Set<string>());
   const announcedExpansions = useRef(new Set<string>());
+  // PRD 4.3-A — 날짜 없이 검색을 마친 대화에서 분실일 입력 안내는 한 번만 붙인다.
+  const lostDateHinted = useRef(new Set<string>());
   const lastLocalAction = useRef<{ key: string; at: number } | null>(null);
   const [followup, setFollowup] = useState<"hidden" | "prompt" | "actions">("hidden");
   const followupPrompt = useRef<string | null>(null);
@@ -626,8 +628,11 @@ export function AgentSearchApp() {
         replies.push({ author: "agent", text: "장소는 최대 3곳까지 선택할 수 있어요." });
       }
       if (result.explanation) replies.push({ author: "agent", text: result.explanation });
-      const message = !result.dialogue?.changed && result.status === "results" && (result.matches?.total_count ?? 0) > 0
-        ? "검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요."
+      const finishedWithResults = !result.dialogue?.changed && result.status === "results" && (result.matches?.total_count ?? 0) > 0;
+      const hintLostDate = finishedWithResults && !result.conditions.lost_on && !lostDateHinted.current.has(identity.id);
+      if (hintLostDate) lostDateHinted.current.add(identity.id);
+      const message = finishedWithResults
+        ? `검색을 마쳤어요.${hintLostDate ? " 잃어버린 날짜를 알려주시면 그날 이후 들어온 물건만 추려 드릴게요. (예: 어제, 11월 20일)" : ""}`
         : result.message;
       if (message) replies.push({ author: "agent", text: message });
       if (result.photo_status === "unavailable" || result.photo_status === "no_photos") {
@@ -1077,15 +1082,14 @@ export function AgentSearchApp() {
                 </button>
               </li>}
             </ul> : "선택 대기 중"}
-            {conditions?.place_operation && <>
-              <p className="agent-place-queue" role="status">{conditions.selecting_place_query && `확인 중 · ${conditions.selecting_place_query}`}
-                {Boolean(conditions.pending_place_queries?.length) && ` · 다음 ${conditions.pending_place_queries?.join(", ")}`}</p>
-            </>}
+            {/* PRD 4.3-A — 장소 추가 중에도 상단에는 확인 중·다음 후보 안내를 표시하지 않는다(2026-11-27). */}
           </dd></div>
           <div><dt>물건</dt><dd className={conditions?.item_query ? undefined : "agent-summary-pending"}>{conditions?.item_query || "입력 대기 중"}</dd>
             {/* PRD 4.3-A — 상단 수정은 물품 변경 요청을 채팅에 바로 전송한다. */}
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => sendMessage("물건 정보를 바꿀게요.")}>수정</button>}</div>
-          {conditions?.lost_on && <div><dt>분실일</dt><dd>{formatRegisteredDate(conditions.lost_on)}</dd></div>}
+          {/* PRD 4.3-A — 분실일도 장소·물건처럼 입력 전부터 대기 상태로 보여 준다(2026-11-27). */}
+          <div><dt>분실일</dt><dd className={conditions?.lost_on ? undefined : "agent-summary-pending"}>
+            {conditions?.lost_on ? formatRegisteredDate(conditions.lost_on) : "입력 대기 중"}</dd></div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
         <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
@@ -1095,8 +1099,8 @@ export function AgentSearchApp() {
                 <h2 className="agent-welcome-title">이용 방법</h2>
               </div>
               <ol className="agent-welcome-steps" aria-label="이용 순서">
-                <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 보관기관 핀을 눌러 선택하세요</li>
-                <li><span aria-hidden="true">2</span>어떤 물건인지 알려주세요</li>
+                <li><span aria-hidden="true">1</span>잃어버린 장소를 입력하거나, 지도에서 선택하세요</li>
+                <li><span aria-hidden="true">2</span>어떤 물건인지, 언제 잃어버렸는지 알려주세요</li>
                 <li><span aria-hidden="true">3</span>가까운 보관기관의 습득물을 보여드려요</li>
               </ol>
               <hr className="agent-welcome-divider" />

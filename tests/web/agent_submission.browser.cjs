@@ -18,7 +18,9 @@ async (page) => {
   });
   let requests=[], release, failures=0;
   const place={candidate_id:'p',name:'서울역',address:'서울',latitude:37.55,longitude:126.97};
-  const complete='검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요.';
+  // PRD 4.3-A — 날짜 없이 끝난 첫 검색에만 분실일 안내를 붙이고, 이후·날짜가 있으면 완료만 알린다.
+  const complete='검색을 마쳤어요. 잃어버린 날짜를 알려주시면 그날 이후 들어온 물건만 추려 드릴게요. (예: 어제, 11월 20일)';
+  const completeOnly='검색을 마쳤어요.';
   const expansions=[
     {type:'scope.updated',seq:2,previous_radius_m:1000,radius_m:1500,institution_ids:[42],expansion_reason:'no_matches'},
     {type:'scope.updated',seq:3,previous_radius_m:1500,radius_m:2000,institution_ids:[42],expansion_reason:'no_matches'},
@@ -40,7 +42,7 @@ async (page) => {
       const secondPlace={...place,candidate_id:'p2',name:'용산역',latitude:37.53};
       const thirdPlace={...place,candidate_id:'p3',name:'홍대입구역',latitude:37.56};
       if(body.type==='select_place')response.conditions.places=[place,secondPlace];
-      if(body.text==='반복 검색')response.conditions.places=[place,secondPlace,thirdPlace];
+      if(body.text==='반복 검색')Object.assign(response.conditions,{places:[place,secondPlace,thirdPlace],lost_on:'2026-11-20'});
       if(body.text==='실패 시험'){
         events.push(expansions[0],expansions[0],expansions[1],expansions[1]);
         Object.assign(response,{status:'no_matches',message:'2km 안에서도 일치하는 물건을 찾지 못했어요.',conditions:{...response.conditions,radius_m:2000},matches:{items:[],total_count:0,next_cursor:null}});
@@ -48,7 +50,7 @@ async (page) => {
       if(body.type==='remove_place')Object.assign(response,{status:'awaiting_place_clarification',message:'‘서울역’ 장소를 제거했어요.',conditions:{...response.conditions,place:null,places:[],radius_m:null,institution_ids:[]},matches:null});
       if(body.text==='물건 정보를 바꿀게요.')Object.assign(response,{status:'awaiting_clarification',message:'바꿀 물건을 알려주세요.',matches:null});
       if(body.text==='장소를 추가할게요.')Object.assign(response,{status:'awaiting_place_clarification',message:'추가할 장소를 알려주세요.',
-        conditions:{...response.conditions,place_operation:'add'},matches:null});
+        conditions:{...response.conditions,place_operation:'add',selecting_place_query:'잠실역',pending_place_queries:['홍대입구역']},matches:null});
       events.push({type:'run.finished',seq:10,response},{type:'run.finished',seq:10,response});
       return route.fulfill({contentType:'application/x-ndjson',body:events.map(event=>JSON.stringify(event)).join('\n')+'\n'});
     }
@@ -81,6 +83,8 @@ async (page) => {
     await burst();check(requests.length===1,'Synchronous submit burst sends one request');
     release();await page.getByText('장소를 선택해 주세요.',{exact:true}).waitFor();
     check(await addPlace.count()===0,'No shortcut before the first place is confirmed');
+    const lostDate=page.locator('.agent-summary dt',{hasText:'분실일'}).locator('xpath=following-sibling::dd[1]');
+    check(await lostDate.textContent()==='입력 대기 중','Lost date row waits for input like place and item');
     await input.fill('아직 보내지 않을 입력');await burst();
     check(requests.length===1,'Replies still being presented lock submit');
     await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);
@@ -107,12 +111,14 @@ async (page) => {
     }),'The add symbol sits below the place name and aligns with its left edge');
     await input.fill('반복 검색');
     await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);await burst();
-    await page.waitForFunction(text=>Array.from(document.querySelectorAll('.agent-message-text')).filter(element=>element.textContent===text).length===2,complete);
+    await page.waitForFunction(text=>Array.from(document.querySelectorAll('.agent-message-text')).filter(element=>element.textContent===text).length===1,completeOnly);
     await page.locator('.agent-result-actions').waitFor();
     check(await send.isDisabled(),'Empty input stays disabled after search finishes');
     check(requests.length===3&&await userText('반복 검색').count()===1,'New intentional search is sent once');
     check(await addPlace.count()===0,'No shortcut when three places are already confirmed');
-    check(await page.getByText(complete,{exact:true}).count()===2,'Separate searches keep their own identical completion messages');
+    check(await lostDate.textContent()==='2026.11.20','Lost date row shows the entered date');
+    check(await page.getByText(complete,{exact:true}).count()===1&&await page.getByText(completeOnly,{exact:true}).count()===1,
+      'A dated follow-up search gets its own completion without repeating the date hint');
     const resultActions=page.locator('.agent-result-actions');
     check(await resultActions.getByRole('button',{name:'반경 넓혀보기'}).isVisible()
       && await resultActions.getByRole('button',{name:'비슷한 물건 알림 받기'}).isVisible()
@@ -157,6 +163,7 @@ async (page) => {
     check(requests.length===8&&requests.at(-1).text==='장소를 추가할게요.'&&await input.inputValue()==='',
       'Place add sends the fixed request once and clears the input without Enter');
     check(await page.getByRole('button',{name:'서울역 제거',exact:true}).isVisible(),'Place add keeps existing locations');
+    check(await page.locator('.agent-summary').getByText(/확인 중|다음 홍대입구역/).count()===0,'Place add shows no checking hint under the place list');
     console.log('PASS submission/IME/repeat/replayed events/retry/history: '+viewport.width);
   }
   check(errors.length===0,errors.join('\n'));
