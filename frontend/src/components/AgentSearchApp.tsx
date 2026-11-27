@@ -1057,9 +1057,14 @@ export function AgentSearchApp() {
             {selectedPlaces.length ? <ul className="agent-selected-places" aria-label="선택한 장소">
               {selectedPlaces.map((place, index) => <li key={`${place.latitude}:${place.longitude}`}>
                 <span title={place.address}>{place.name}</span>
-                <button type="button" className="agent-place-remove" disabled={busy} aria-label={`${place.name} 제거`} title={`${place.name} 제거`}
+                <button type="button" className="agent-place-control" disabled={busy} aria-label={`${place.name} 제거`} title={`${place.name} 제거`}
                   onClick={() => void submit({ type: "remove_place", place_target: index + 1 })}>×</button>
               </li>)}
+              {/* PRD 4.3-A — 장소 추가 요청을 채팅으로 바로 보낸다. */}
+              {selectedPlaces.length < 3 && <li>
+                <button type="button" className="agent-place-control" disabled={busy || alertSending} aria-label="장소 추가" title="장소 추가"
+                  onClick={() => sendMessage("장소를 추가할게요.")}>+</button>
+              </li>}
             </ul> : "선택 대기 중"}
             {conditions?.place_operation && <>
               <p className="agent-place-queue" role="status">{conditions.selecting_place_query && `확인 중 · ${conditions.selecting_place_query}`}

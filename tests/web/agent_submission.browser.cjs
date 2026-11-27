@@ -37,12 +37,18 @@ async (page) => {
         matches:{items:[{id:1,item_id:1,institution_id:42,item_name:'검정 지갑',image_url:null}],total_count:1,next_cursor:null},error:null};
       const events=[{type:'run.started',seq:1,session_id:response.session_id,run_id:response.run_id}];
       if(index===1)Object.assign(response,{status:'awaiting_place_selection',message:'장소를 선택해 주세요.',conditions:{...response.conditions,place:null,places:[],radius_m:null,institution_ids:[]},place_candidates:[place],matches:null});
+      const secondPlace={...place,candidate_id:'p2',name:'용산역',latitude:37.53};
+      const thirdPlace={...place,candidate_id:'p3',name:'홍대입구역',latitude:37.56};
+      if(body.type==='select_place')response.conditions.places=[place,secondPlace];
+      if(body.text==='반복 검색')response.conditions.places=[place,secondPlace,thirdPlace];
       if(body.text==='실패 시험'){
         events.push(expansions[0],expansions[0],expansions[1],expansions[1]);
         Object.assign(response,{status:'no_matches',message:'2km 안에서도 일치하는 물건을 찾지 못했어요.',conditions:{...response.conditions,radius_m:2000},matches:{items:[],total_count:0,next_cursor:null}});
       }
       if(body.type==='remove_place')Object.assign(response,{status:'awaiting_place_clarification',message:'‘서울역’ 장소를 제거했어요.',conditions:{...response.conditions,place:null,places:[],radius_m:null,institution_ids:[]},matches:null});
       if(body.text==='물건 정보를 바꿀게요.')Object.assign(response,{status:'awaiting_clarification',message:'바꿀 물건을 알려주세요.',matches:null});
+      if(body.text==='장소를 추가할게요.')Object.assign(response,{status:'awaiting_place_clarification',message:'추가할 장소를 알려주세요.',
+        conditions:{...response.conditions,place_operation:'add'},matches:null});
       events.push({type:'run.finished',seq:10,response},{type:'run.finished',seq:10,response});
       return route.fulfill({contentType:'application/x-ndjson',body:events.map(event=>JSON.stringify(event)).join('\n')+'\n'});
     }
@@ -55,6 +61,7 @@ async (page) => {
     requests=[];release=null;failures=0;
     await page.setViewportSize(viewport);await page.goto('http://127.0.0.1:8000/');
     const input=page.getByRole('textbox',{name:'메시지'}),send=page.getByRole('button',{name:'보내기',exact:true});
+    const addPlace=page.getByRole('button',{name:'장소 추가',exact:true});
     const limitNotice=page.getByText('메시지를 100자 이내로 줄여 주세요.',{exact:true});
     const maxLengthMessage='가'.repeat(99)+'📍';
     await input.fill(maxLengthMessage+'나');
@@ -73,6 +80,7 @@ async (page) => {
     while(!release)await new Promise(resolve=>setTimeout(resolve,10));
     await burst();check(requests.length===1,'Synchronous submit burst sends one request');
     release();await page.getByText('장소를 선택해 주세요.',{exact:true}).waitFor();
+    check(await addPlace.count()===0,'No shortcut before the first place is confirmed');
     await input.fill('아직 보내지 않을 입력');await burst();
     check(requests.length===1,'Replies still being presented lock submit');
     await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);
@@ -91,11 +99,19 @@ async (page) => {
     check(await page.getByText(complete,{exact:true}).count()===1,'Duplicate final events produce one completion reply');
     await input.fill('반복 검색');await burst();check(requests.length===2,'Fast final response does not unlock before reply presentation');
     await page.clock.resume();
+    await page.getByRole('button',{name:'결과 목록 접기',exact:true}).click();
+    check(await addPlace.evaluate(button=>{
+      const add=button.getBoundingClientRect();
+      const placeName=button.parentElement.previousElementSibling.querySelector('span').getBoundingClientRect();
+      return Math.abs(add.left-placeName.left)<1&&add.top>=placeName.bottom;
+    }),'The add symbol sits below the place name and aligns with its left edge');
+    await input.fill('반복 검색');
     await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);await burst();
     await page.waitForFunction(text=>Array.from(document.querySelectorAll('.agent-message-text')).filter(element=>element.textContent===text).length===2,complete);
     await page.locator('.agent-result-actions').waitFor();
     check(await send.isDisabled(),'Empty input stays disabled after search finishes');
     check(requests.length===3&&await userText('반복 검색').count()===1,'New intentional search is sent once');
+    check(await addPlace.count()===0,'No shortcut when three places are already confirmed');
     check(await page.getByText(complete,{exact:true}).count()===2,'Separate searches keep their own identical completion messages');
     const resultActions=page.locator('.agent-result-actions');
     check(await resultActions.getByRole('button',{name:'반경 넓혀보기'}).isVisible()
@@ -120,6 +136,7 @@ async (page) => {
     check(await agentText('잠시 연결하지 못했어요. 다시 시도해 주세요.').count()===1,'Previous failure remains in chat after retry');
     await page.locator('.agent-result-actions').waitFor();
     check(await input.inputValue()==='','Successful retry clears submitted draft');
+    check(await addPlace.isVisible(),'The shortcut is also available with one confirmed place');
     await page.locator('.agent-summary .agent-selected-places button').first().evaluate(button=>{for(let i=0;i<10;i++)button.click();});
     await agentText('‘서울역’ 장소를 제거했어요.').waitFor();
     check(requests.length===6&&await userText("'서울역' 제거").count()===1,'Place removal is sent and recorded once');
@@ -133,6 +150,13 @@ async (page) => {
     check(requests.length===7&&requests.at(-1).text==='물건 정보를 바꿀게요.',
       'Item edit sends the fixed message once without Enter');
     check(await userText('작성 중인 다른 문장').count()===0,'Item edit does not send the old draft');
+    await input.fill('작성 중인 장소 이름');
+    await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);
+    await addPlace.evaluate(button=>{for(let i=0;i<10;i++)button.click();});
+    await agentText('추가할 장소를 알려주세요.').waitFor({timeout:4000});
+    check(requests.length===8&&requests.at(-1).text==='장소를 추가할게요.'&&await input.inputValue()==='',
+      'Place add sends the fixed request once and clears the input without Enter');
+    check(await page.getByRole('button',{name:'서울역 제거',exact:true}).isVisible(),'Place add keeps existing locations');
     console.log('PASS submission/IME/repeat/replayed events/retry/history: '+viewport.width);
   }
   check(errors.length===0,errors.join('\n'));
