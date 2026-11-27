@@ -25,9 +25,28 @@ class FutureDateError(ValueError):
         self.lost_on = lost_on
 
 
+# PRD 4.3-A — 모델이 넘긴 날짜 표현 끝에 조사·어미(에·요·이여·쯤·이라고 등)가 붙어도 읽는다.
+_TRAILING_ENDING = re.compile(r"[가-힣!?.,~]")
+_MAX_TRAILING_ENDING = 6
+
+
 def resolve_lost_on(expression: str, today: date, previous: str | None = None) -> str:
     """Return the inclusive lower bound of the registration-date filter."""
     compact = re.sub(r"\s+", "", expression)
+    # 긴 표현부터 맞춰 ‘3일전에’를 ‘3일’이 아닌 ‘3일전’으로 읽는다. 미래 날짜 안내는 그대로 전달한다.
+    for cut in range(_MAX_TRAILING_ENDING + 1):
+        if cut and (len(compact) <= cut or not _TRAILING_ENDING.fullmatch(compact[-cut])):
+            break
+        try:
+            return _resolve_compact(compact[:len(compact) - cut], today, previous)
+        except FutureDateError:
+            raise
+        except ValueError:
+            continue
+    raise ValueError("지원하지 않는 분실일 표현")
+
+
+def _resolve_compact(compact: str, today: date, previous: str | None) -> str:
     future_days = {"내일": 1, "모레": 2, "글피": 3}
     if compact in future_days:
         raise FutureDateError(today + timedelta(days=future_days[compact]))
