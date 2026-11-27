@@ -8,8 +8,9 @@ from ..ingestion.collector import SOURCE_RETENTION_MONTHS, retention_start
 
 _KST = timezone(timedelta(hours=9))
 _LAST_WEEK = re.compile(r"(?:지난|저번)주(?:([월화수목금토일])(?:요일)?)?")
-_CALENDAR_DATE = re.compile(r"(?:(\d{4})년)?(\d{1,2})월(\d{1,2})일")
-_NUMERIC_DATE = re.compile(r"(?:(\d{4})[./-])?(\d{1,2})[./-](\d{1,2})")
+# PRD 4.3-A — 연도는 네 자리 또는 ‘26년’처럼 줄인 두 자리(2000년대)만 받는다.
+_CALENDAR_DATE = re.compile(r"(?:(\d{4}|\d{2})년)?(\d{1,2})월(\d{1,2})일")
+_NUMERIC_DATE = re.compile(r"(?:(\d{4}|\d{2})[./-])?(\d{1,2})[./-](\d{1,2})")
 
 
 def korea_today() -> date:
@@ -52,7 +53,8 @@ def resolve_lost_on(expression: str, today: date, previous: str | None = None) -
     if not match:
         raise ValueError("지원하지 않는 분실일 표현")
     year, month, day = match.groups()
-    lost_on = date(int(year) if year else today.year, int(month), int(day))
+    full_year = (2000 + int(year) if len(year) == 2 else int(year)) if year else today.year
+    lost_on = date(full_year, int(month), int(day))
     if not year and lost_on > today:
         # PRD 3.1-2 — 작년 날짜는 보존기간 안일 때만 뜻이 통한다. 그보다 오래되면 미래 날짜로 본다.
         previous = retention_start(lost_on, 12)
