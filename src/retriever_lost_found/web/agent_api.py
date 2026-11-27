@@ -4,7 +4,6 @@ import json
 import hashlib
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass, field, replace
-from datetime import date
 from threading import Event
 from time import monotonic
 from typing import Annotated, Any, Literal
@@ -187,7 +186,6 @@ def create_agent_router(
     search_items: Callable[..., SearchPage],
     find_items_by_id: Callable[[tuple[int, ...], list[int]], Sequence[dict[str, Any]]] | None = None,
     search_photo_items: Callable[..., SearchPage] | None = None,
-    latest_registered_on: Callable[[], date | None] | None = None,
 ) -> APIRouter:
     if model is None:
         if not openrouter_api_key:
@@ -576,7 +574,6 @@ def create_agent_router(
                         actions = search_conversation(
                             state, model=call_model, get_institutions=get_institutions,
                             search_items=search_current, radius_m=manual_radius,
-                            latest_registered_on=latest_registered_on,
                         )
                     elif state.confirmed is not None and (result["status"] == "awaiting_clarification" and not scope or places_changed or turn.type in ("select_place", "select_point", "skip_place")):
                         # PRD 4.3-A — 장소 확정 직후 물품 입력 전에도 기관과 반경을 표시한다.
@@ -605,8 +602,7 @@ def create_agent_router(
                         if dialogue_result and dialogue_result["changed"]:
                             dialogue_result["alert"]["radius"] = radius
                             result["message"] = decision_message
-                        elif (decision_message and result.get("status") in {"results", "no_matches"}
-                              and "latest_registered_on" not in result):
+                        elif decision_message and result.get("status") in {"results", "no_matches"}:
                             result["explanation"] = decision_message
                     if photos and result["status"] == "results":
                         result["photo_status"] = photo_page.photo_status if photo_page else "unavailable"
