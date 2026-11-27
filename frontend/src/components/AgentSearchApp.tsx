@@ -1109,7 +1109,9 @@ export function AgentSearchApp() {
             ? <div className="agent-confirmed-card" key={index}>
               <small>확정된 장소</small>
               <strong>{message.confirmedPlace.name}</strong>
-              {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
+              {/* PRD 4.3-A — 지도에서 고른 주소만 있는 위치는 이름과 주소가 같아 한 번만 보여 준다. */}
+              {message.confirmedPlace.address && message.confirmedPlace.address !== message.confirmedPlace.name
+                && <small>{message.confirmedPlace.address}</small>}
             </div>
             : message.alertConditions ? <AlertConditionSummary key={index} conditions={message.alertConditions} recorded />
             : <div key={index} className={`agent-bubble agent-bubble-${message.author}${message.photos?.length ? " agent-bubble-with-photos" : ""}${message.photoGuidance ? " agent-photo-guidance" : ""}`}>

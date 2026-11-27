@@ -113,6 +113,25 @@ function placePreviewMarkerImage(kakao: any, colors: MapColorTokens) {
   );
 }
 
+const PICKED_POINT_TITLE = "지도에서 고른 위치";
+
+/** PRD 4.3-A — 주소 변환 결과에서 건물 이름(없으면 도로명·지번 주소)과 주소를 고른다. */
+function pickedPointLabel(result: any[]): { name: string; address: string } | null {
+  const first = result?.[0];
+  const road = first?.road_address;
+  const address = (road?.address_name || first?.address?.address_name || "").trim();
+  if (!address) return null;
+  return { name: (road?.building_name || "").trim() || address, address };
+}
+
+function pickedPointContent(body: string) {
+  const content = document.createElement("div");
+  content.innerHTML = `<div class="institution-window">`
+    + `<div class="institution-window-title">${PICKED_POINT_TITLE}</div>`
+    + `<ul><li>${body}</li></ul></div>`;
+  return content;
+}
+
 function clusterStyles(colors: MapColorTokens, softened: boolean) {
   return colors.clusterFills.map((color, index) => {
     const rawSize = softened ? 42 : [42, 48, 56, 64, 72][index];
@@ -211,6 +230,12 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
   const searchMarkersRef = useRef<Array<{ marker: any; place: Place; number: number }>>([]);
   const countMarkerImagesRef = useRef(new Map<string, any>());
   const selectedPlaceRef = useRef<Place | null>(selectedPlace);
+  const pickedMarkerRef = useRef<any>(null);
+  const pickRequestRef = useRef(0);
+  const bottomInsetRef = useRef(bottomInset);
+  bottomInsetRef.current = bottomInset;
+  const leftInsetRef = useRef(leftInset);
+  leftInsetRef.current = leftInset;
   // PRD 4.4 — 승인된 지도 핀 및 클러스터 스타일.
   const softenedMarkers = true;
   const [mapReady, setMapReady] = useState(false);
@@ -250,6 +275,75 @@ export const KakaoMap = forwardRef<KakaoMapHandle, KakaoMapProps>(function Kakao
       cancelled = true;
     };
   }, []);
+
+  // PRD 4.3-A · 4.4 — 기관 핀이 아닌 지도 위치도 눌러 주소를 확인하고 장소선택으로 확정한다.
+  // 누른 좌표를 그대로 검색 중심으로 쓰며 주소를 찾지 못한 곳은 선택하지 않는다.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const kakao = window.kakao;
+    const map = mapRef.current;
+    const clearPicked = () => {
+      pickRequestRef.current += 1;
+      pickedMarkerRef.current?.setMap(null);
+      pickedMarkerRef.current = null;
+    };
+    const onMapClick = (mouseEvent: any) => {
+      if (!onPointSelectRef.current) return;
+      const latitude = mouseEvent.latLng.getLat();
+      const longitude = mouseEvent.latLng.getLng();
+      const marker = new kakao.maps.Marker({
+        position: new kakao.maps.LatLng(latitude, longitude),
+        image: placePreviewMarkerImage(kakao, mapColors),
+        title: PICKED_POINT_TITLE,
+        zIndex: 7,
+      });
+      infoWindowRef.current.setContent(pickedPointContent(`<p>주소 확인 중…</p>`));
+      infoWindowRef.current.open(map, marker, clearPicked);
+      marker.setMap(map);
+      pickedMarkerRef.current = marker;
+      const request = pickRequestRef.current;
+      const keepPopupInside = () => {
+        const container = containerRef.current;
+        if (!container) return;
+        // 지도 위에 떠 있는 기관 수 표시·레이어 버튼 아래로, 데스크톱 채팅 창 오른쪽으로 팝업을 옮긴다.
+        const mapTop = container.getBoundingClientRect().top;
+        const overlays = container.closest(".map-panel")?.querySelectorAll(".institution-status, .map-controls-trigger") ?? [];
+        const top = Math.max(0, ...Array.from(overlays, element => element.getBoundingClientRect().bottom - mapTop));
+        infoWindowRef.current.keepInside(map, container, { top, bottom: bottomInsetRef.current, left: leftInsetRef.current });
+      };
+      const showUnavailable = () => {
+        infoWindowRef.current.setContent(
+          pickedPointContent(`<p>이 위치의 주소를 찾지 못했어요. 다른 곳을 눌러 주세요.</p>`),
+        );
+        keepPopupInside();
+      };
+      const services = kakao.maps.services;
+      if (!services?.Geocoder) return showUnavailable();
+      new services.Geocoder().coord2Address(longitude, latitude, (result: any[], status: string) => {
+        if (request !== pickRequestRef.current) return;
+        const label = status === services.Status.OK ? pickedPointLabel(result) : null;
+        if (!label) return showUnavailable();
+        const content = pickedPointContent(`<div class="institution-window-copy"><strong>${escapeHtml(label.name)}</strong>`
+          + (label.address !== label.name ? `<span>${escapeHtml(label.address)}</span>` : "")
+          + `</div><button type="button" class="agent-place-confirm">장소선택</button>`);
+        let chosen = false;
+        content.querySelector<HTMLButtonElement>(".agent-place-confirm")!.onclick = () => {
+          const select = onPointSelectRef.current;
+          if (chosen || !select) return;
+          chosen = true;
+          infoWindowRef.current.close();
+          select({ latitude, longitude, name: label.name, address: label.address });
+        };
+        infoWindowRef.current.setContent(content);
+        keepPopupInside();
+      });
+    };
+    kakao.maps.event.addListener(map, "click", onMapClick);
+    return () => {
+      kakao.maps.event.removeListener(map, "click", onMapClick);
+      clearPicked();
+    };
+  }, [mapColors, mapReady]);
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
