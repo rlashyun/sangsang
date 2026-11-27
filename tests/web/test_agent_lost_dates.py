@@ -158,6 +158,28 @@ def test_hybrid_passes_the_same_date_to_both_rpc_calls():
     assert calls["keyword_found_item_candidates"]["p_word_terms"] == []
 
 
+@pytest.mark.parametrize(("expression", "expected"), [
+    ("26년 5월 6일", "2026-05-06"),
+    ("26년5월6일", "2026-05-06"),
+    ("25년 12월 31일", "2025-12-31"),
+    ("26.5.6", "2026-05-06"),
+    ("26-11-25", "2026-11-25"),
+    ("26/11/25", "2026-11-25"),
+])
+def test_two_digit_year_is_read_as_2000s(expression, expected):
+    # PRD 4.3-A — ‘26년’처럼 줄여 쓴 연도도 2000년대로 읽는다.
+    assert resolve_lost_on(expression, date(2026, 11, 26)) == expected
+
+
+def test_two_digit_year_future_date_is_reported_and_other_lengths_stay_invalid():
+    with pytest.raises(FutureDateError) as raised:
+        resolve_lost_on("26년 11월 29일", date(2026, 11, 26))
+    assert raised.value.lost_on.isoformat() == "2026-11-29"
+    for expression in ("6년 5월 6일", "026년 5월 6일", "6.5.6"):
+        with pytest.raises(ValueError):
+            resolve_lost_on(expression, date(2026, 11, 26))
+
+
 @pytest.mark.parametrize(("expression", "future"), [
     ("11월 29일", "2026-11-29"),
     ("11/29", "2026-11-29"),
