@@ -80,7 +80,7 @@ async (page) => {
         multiplePlaces = [place, newPlace, {...place, candidate_id:'jamsil', name:'잠실역', latitude:37.51, longitude:127.1}];
         response.conditions = {...response.conditions, places:multiplePlaces};
       }
-      if (turn.type === 'remove_place' || turn.type === 'change_radius') {
+      if (!turn.dialogue && (turn.type === 'remove_place' || turn.type === 'change_radius')) {
         if (turn.type === 'remove_place') multiplePlaces = multiplePlaces.filter((_, index) => index + 1 !== turn.place_target);
         Object.assign(response, {status:'no_matches', prepare_alert:false, message:'수정한 조건으로 검색했어요.',
           conditions:{...response.conditions, place:multiplePlaces[0] ?? place, places:multiplePlaces.length ? multiplePlaces : [place], radius_m:turn.radius_m ?? 1000},
@@ -126,12 +126,6 @@ async (page) => {
           response.dialogue = {task:'search',alert:null,awaiting:null,changed:false};
         }
         response.dialogue ??= {task:'alert',alert,awaiting,changed};
-        if (changed) {
-          response.status = 'results';
-          response.conditions = {...response.conditions, place:alert.places.at(-1), places:alert.places,
-            item_query:alert.query, radius_m:alert.radius};
-          response.matches = {items:[{id:2,item_id:2,institution_id:42,item_name:alert.query,image_url:null}],total_count:1,next_cursor:null};
-        }
         if (turn.text === '서울역 지갑') response.status = 'no_matches';
       }
       if (turn.text === '메일은 나중에 하고 우산 찾아줘' || turn.text === '우산') {
@@ -201,7 +195,7 @@ async (page) => {
     await page.locator('.agent-alert-place-options').getByRole('button',{name:'서울역 제거',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
     check(!(await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('서울역') && calls === beforeEdit + 4,
-      'Place removal updates the alert and search in one request');
+      'Place removal updates the alert draft in one request');
     await page.getByRole('button',{name:'조건 수정',exact:true}).click();
     await page.getByRole('button',{name:'장소 변경',exact:true}).click();
     await page.locator('.agent-alert-place-options').getByRole('button',{name:'잠실역 제거',exact:true}).click();
@@ -216,13 +210,11 @@ async (page) => {
     check((await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('1.5km') && !await page.getByLabel('개인정보 수집·이용에 동의해요').isChecked(),
       'Radius change is reflected and requires fresh consent');
     const updatedSummary = await page.locator('.agent-summary').innerText();
-    check(calls === beforeEdit + 6 && institutionCalls === beforeInstitutions && updatedSummary !== searchSummary
-      && updatedSummary.includes('검정 가방') && updatedSummary.includes('1.5km') && !updatedSummary.includes('서울역'),
-      'Alert edits refresh the top search summary');
+    check(calls === beforeEdit + 6 && institutionCalls === beforeInstitutions && updatedSummary === searchSummary,
+      'Alert edits preserve the original search summary and do not fetch institutions');
     check(await page.locator('.agent-status').count() === 0, 'Intent interpretation finishes without lingering progress');
     await page.getByRole('button',{name:'결과 1건 보기',exact:true}).click();
-    check(await page.locator('.agent-item').innerText() !== originalResult
-      && (await page.locator('.agent-item').innerText()).includes('검정 가방'), 'Search results refresh for the edited item');
+    check(await page.locator('.agent-item').innerText() === originalResult, 'Alert edits preserve existing results');
     await page.getByRole('button',{name:'결과 목록 접기',exact:true}).click();
     check(mails === beforeEditMails, 'Condition edits never submit a reservation');
     const beforeEditedMails = editedMails;
@@ -312,23 +304,44 @@ async (page) => {
     check(confirms === 1 && await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).count() === 0,
       'Expired links never announce success; StrictMode sends only one POST');
     confirmResult = 'confirmed';
+    const existingChat = await page.locator('.agent-feed').innerText();
+    await input.fill('아직 입력 중인 메시지');
     await confirmation.getByRole('button',{name:'다시 확인하기',exact:true}).click();
     await confirmation.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).waitFor();
     await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).waitFor();
-    for (const chat of [page, confirmation]) {
-      const survey = chat.getByRole('link',{name:'이용 경험 설문 참여하기'});
-      check(await survey.count() === 1, 'Each chat receives one survey invitation after activation');
-      check(await survey.getAttribute('href') === await chat.getByRole('link',{name:'의견 보내기'}).getAttribute('href'),
-        'Survey invitation uses the existing feedback form');
-      check(await survey.getAttribute('target') === '_blank' && (await survey.getAttribute('rel')).includes('noopener'),
-        'Survey opens safely in another tab');
-      check((await chat.locator('.agent-feed > .agent-bubble').allTextContents()).at(-1).includes('리트리버 이용 경험은 어떠셨나요?'),
-        'Survey message follows the activation confirmation');
-    }
+    const survey = page.getByRole('link',{name:'이용 경험 설문 참여하기'});
+    check(await survey.count() === 1, 'Original chat receives one survey invitation after activation');
+    check(await survey.getAttribute('href') === await page.getByRole('link',{name:'의견 보내기'}).getAttribute('href'),
+      'Survey invitation uses the existing feedback form');
+    check(await survey.getAttribute('target') === '_blank' && (await survey.getAttribute('rel')).includes('noopener'),
+      'Survey opens safely in another tab');
+    check((await page.locator('.agent-feed > .agent-bubble').allTextContents()).at(-1).includes('리트리버 이용 경험은 어떠셨나요?'),
+      'Survey message follows the activation confirmation');
+    const chatAfter = await page.locator('.agent-feed').innerText();
+    check(chatAfter.indexOf('확인 메일을 보냈어요.') === existingChat.indexOf('확인 메일을 보냈어요.')
+      && await input.inputValue() === '아직 입력 중인 메시지', 'Confirmation preserves the original chat and draft');
     check(confirms === 2 && !confirmation.url().includes('token='), 'One POST per attempt and token removed');
-    check(await confirmation.getByLabel('이전 알림 조건',{exact:true}).count() > 0, 'Mail tab restores signup conditions');
-    check(!(await confirmation.locator('.agent-feed').innerText()).includes('user@example.com'), 'Restored chat excludes email');
+    check(new URL(confirmation.url()).pathname === '/alerts/confirm'
+      && await confirmation.getByRole('button',{name:'이 탭 닫기'}).count() === 1
+      && await confirmation.getByLabel('이전 알림 조건',{exact:true}).count() === 0,
+      'An acknowledged confirmation offers to close the mail tab without starting another chat');
     if (process.env.RETRIEVER_BROWSER_ARTIFACT_DIR) await confirmation.screenshot({path:`${process.env.RETRIEVER_BROWSER_ARTIFACT_DIR}/alert-return-${viewport.width}.png`});
+    confirmResult = 'already_active';
+    await confirmation.goto('http://127.0.0.1:5178/alerts/confirm?search=chat&token=7.00000000000000000000000000000000');
+    await confirmation.getByText('확인되었습니다. 이미 알림이 켜져 있어요.',{exact:true}).waitFor();
+    check(await confirmation.getByRole('button',{name:'이 탭 닫기'}).count() === 1
+      && await page.getByText('확인되었습니다. 알림이 시작됐어요.',{exact:true}).count() === 1
+      && await survey.count() === 1, 'Opening the same link again reaches the original chat without duplicating messages');
+
+    await page.evaluate(() => localStorage.setItem('retriever-alert-return:8', localStorage.getItem('retriever-alert-return:7')));
+    await confirmation.goto('http://127.0.0.1:5178/alerts/confirm?search=chat&token=8.00000000000000000000000000000000');
+    await confirmation.getByLabel('이전 알림 조건',{exact:true}).last().waitFor();
+    check(new URL(confirmation.url()).pathname === '/' && !(await confirmation.locator('.agent-feed').innerText()).includes('user@example.com'),
+      'Saved chat is restored without the email if the signup tab is unavailable');
+    await confirmation.goto('http://127.0.0.1:5178/alerts/confirm?search=chat&token=9.00000000000000000000000000000000');
+    await confirmation.getByRole('link',{name:'물건 찾기로 이동'}).waitFor();
+    check(await confirmation.getByText('확인되었습니다. 이미 알림이 켜져 있어요.',{exact:true}).count() === 1,
+      'Confirmation remains visible without an available signup tab or saved chat');
     await confirmation.close();
     await input.fill('여러 장소 알림 신청'); await page.getByRole('button',{name:'보내기',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
@@ -342,7 +355,7 @@ async (page) => {
       'Place list offers one remove button per location');
     await page.locator('.agent-alert-place-options').getByRole('button',{name:'강남역 제거',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
-    check(calls === beforePlaceChoices + 2, 'Removing an alert location submits one search turn');
+    check(calls === beforePlaceChoices + 2, 'Removing an alert location submits one draft update');
     const updatedPlaces = await page.locator('.agent-alert-setup .agent-alert-conditions').innerText();
     check(updatedPlaces.includes('서울역') && updatedPlaces.includes('잠실역') && !updatedPlaces.includes('강남역'),
       'Remaining places are shown in updated alert conditions');
@@ -355,7 +368,7 @@ async (page) => {
       'Generic radius-change request interprets intent once and offers exactly the supported radii');
     await radiusChoices.getByRole('button',{name:'1.5km',exact:true}).click();
     await page.getByLabel('알림 신청 조건').waitFor();
-    check(calls === beforeRadiusChoices + 2, 'Alert radius choice submits one search turn');
+    check(calls === beforeRadiusChoices + 2, 'Alert radius choice submits one draft update');
     check((await page.locator('.agent-alert-setup .agent-alert-conditions').innerText()).includes('1.5km') && !await page.getByLabel('개인정보 수집·이용에 동의해요').isChecked(),
       'Selected radius is reflected and consent remains unchecked');
     await page.getByRole('button',{name:'조건 수정',exact:true}).click();

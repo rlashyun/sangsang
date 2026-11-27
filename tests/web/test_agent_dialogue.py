@@ -1,4 +1,4 @@
-"""PRD 4.3-A · 4.3-E — Alert edits and search share the applied conditions."""
+"""PRD 4.3-A · 4.3-E — Alert edits preserve the existing search."""
 
 import json
 from unittest.mock import Mock
@@ -41,13 +41,14 @@ def test_question_keeps_old_item_and_following_answer_can_replace_it():
     lookup.assert_not_called()
 
 
-def client_with_search():
+def client_with_search(*, find_items_by_id=None):
     model = Mock(return_value=decision("search", item_query="검은 지갑"))
     search = Mock(return_value=SearchPage(({"item_id": 1, "institution_id": 42, "item_name": "검은 지갑"},), 1, "next"))
     institutions = Mock(return_value=[Institution(42, 37.55, 126.97)])
     places = Mock(return_value=[])
     client = TestClient(create_app(Mock(), "dummy", agent_router=create_agent_router(
-        model=model, search_items=search, get_institutions=institutions, find_places=places)))
+        model=model, search_items=search, get_institutions=institutions, find_places=places,
+        find_items_by_id=find_items_by_id)))
     def send(payload):
         response = client.post("/api/search-chat/turns", json=payload)
         assert response.status_code == 200
@@ -93,26 +94,33 @@ def test_alert_to_search_transition_applies_new_query():
     search.assert_called_once_with((42,), "우산", None)
 
 
-def test_alert_radius_button_syncs_final_expanded_radius_without_intent_call():
-    _, send, original, model, search, institutions, _ = client_with_search()
-    institutions.return_value = [Institution(42, 37.566, 126.97)]
+def test_alert_radius_button_keeps_selected_radius_without_search_or_intent_call():
+    _, send, original, model, search, institutions, places = client_with_search()
     result = send({"type": "change_radius", "radius_m": 1500, "request_id": "radius",
                    "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
-    assert result["status"] == "results"
-    assert result["conditions"]["radius_m"] == result["dialogue"]["alert"]["radius"] == 2000
-    model.assert_not_called()
-
-
-def test_failed_alert_edit_preserves_previous_search_and_has_no_confirmation():
-    _, send, original, model, search, _, _ = client_with_search()
-    model.return_value = decision("update_alert", task="alert",
-                                  alert_changes={"query": "우산", "radius": None, "remove_places": []})
-    search.side_effect = RuntimeError("search failed")
-    result = send({"type": "message", "text": "우산으로 바꿔줘", "request_id": "failed-alert",
-                   "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
-    assert result["status"] == "error"
+    assert result["status"] == "answered"
+    assert result["dialogue"]["alert"]["radius"] == 1500
     assert result["conditions"] == original["conditions"]
-    assert "dialogue" not in result
+    assert result["matches"] is None
+    model.assert_not_called()
+    search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
+
+
+def test_alert_place_removal_preserves_search_places():
+    _, send, _, model, search, institutions, places = client_with_search()
+    second = {"name": "용산역", "latitude": 37.53, "longitude": 126.96}
+    original = send({"type": "saved_search", "text": "검은 지갑", "radius_m": 1000,
+                     "places": [context()["alert"]["places"][0], second], "request_id": "two-places"})
+    search.reset_mock(); institutions.reset_mock()
+    draft = context()
+    draft["alert"]["places"].append(second)
+    result = send({"type": "remove_place", "place_target": 1, "request_id": "remove-alert-place",
+                   "session_id": original["session_id"], "revision": original["revision"], "dialogue": draft})
+    assert result["status"] == "answered"
+    assert result["dialogue"]["alert"]["places"] == [second]
+    assert result["conditions"] == original["conditions"]
+    model.assert_not_called()
+    search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
 
 
 def test_prepare_alert_can_start_from_search_with_alert_task():
@@ -126,8 +134,9 @@ def test_prepare_alert_can_start_from_search_with_alert_task():
     search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
 
 
-def test_alert_update_refreshes_search_and_confirms_applied_value():
-    _, send, original, model, search, institutions, places = client_with_search()
+def test_alert_update_only_changes_draft_and_preserves_search_cursor():
+    find_items = Mock(return_value=[])
+    client, send, original, model, search, institutions, places = client_with_search(find_items_by_id=find_items)
     model.return_value = decision("clarify", task="alert", awaiting="item", asks_for="item")
     question = send({"type": "message", "request_id": "question", "text": "물건 바꿀게",
                      "session_id": original["session_id"], "revision": original["revision"], "dialogue": context()})
@@ -136,18 +145,25 @@ def test_alert_update_refreshes_search_and_confirms_applied_value():
     model.return_value = decision("update_alert", task="alert", message="갈색 지갑으로 변경했어요.",
                                   alert_changes={"query": "우산", "radius": 1500, "remove_places": []})
     result = send({"type": "message", "request_id": "answer", "text": "우산으로 하고 반경은 1.5km. 언제 끝나?",
-                   "session_id": question["session_id"], "revision": question["revision"], "dialogue": followup})
+                   "session_id": question["session_id"], "revision": question["revision"], "dialogue": followup,
+                   "visible_item_ids": [1, 2]})
     assert result["dialogue"]["alert"]["query"] == "우산"
     assert result["dialogue"]["alert"]["radius"] == 1500
     assert result["dialogue"]["awaiting"] == "email"
     assert "우산" in result["message"]
     assert "갈색 지갑" not in result["message"]
     assert model.call_args.args[1]["dialogue"]["awaiting"] == "item"
-    assert result["status"] == "results"
-    assert result["conditions"]["item_query"] == "우산"
-    assert result["conditions"]["radius_m"] == 1500
-    search.assert_called_once_with((42,), "우산", None)
-    places.assert_not_called()
+    assert result["status"] == "answered"
+    assert result["conditions"] == original["conditions"]
+    assert result["matches"] is None
+    search.assert_not_called(); institutions.assert_not_called(); places.assert_not_called()
+    find_items.assert_not_called()
+    cursor = original["matches"]["next_cursor"]
+    page = client.post("/api/search-chat/pages", json={
+        "session_id": result["session_id"], "revision": result["revision"], "cursor": cursor,
+    })
+    assert page.status_code == 200
+    search.assert_called_once_with((42,), "검은 지갑", cursor)
 
 
 @pytest.mark.parametrize("changes", [

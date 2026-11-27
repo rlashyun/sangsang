@@ -6,7 +6,7 @@ import { DEFAULT_SEARCH_RADIUS_METERS, SEARCH_RADIUS_OPTIONS_METERS, isWithinRad
 import { GUIDE_HASH, SURVEY_URL } from "../lib/feedback";
 import { itemPageNumbers } from "../lib/item-pagination.js";
 import { formatRegisteredDate } from "../lib/presentation";
-import { ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib/alert-return";
+import { acknowledgeAlertConfirmation, ALREADY_ACTIVE_TEXT, ALERT_CONFIRMED_EVENT, CONFIRMED_TEXT, rememberAlertChat } from "../lib/alert-return";
 import { useChatPhotos, type ChatPhoto } from "../lib/useChatPhotos";
 import { useMobileChatSheet } from "../lib/useMobileChatSheet";
 import type { AgentItem, AgentPlace, AgentResponse, AgentTurn, Institution, Place } from "../types";
@@ -81,7 +81,7 @@ export function AgentSearchApp() {
     if (!returned || !Array.isArray(returned.messages) || typeof returned.text !== "string") return [];
     return [...returned.messages.filter((message: ChatMessage) => "author" in message && typeof message.text === "string"), ...alertStartedMessages(returned.text)];
   });
-  const pendingAlertIds = useRef(new Set<number>());
+  const requestedAlerts = useRef(new Map<number, boolean>());
   useEffect(() => {
     if (location.state?.alertReturn) navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
   }, []);
@@ -89,10 +89,18 @@ export function AgentSearchApp() {
     function onConfirmation(event: StorageEvent) {
       if (event.key !== ALERT_CONFIRMED_EVENT || !event.newValue) return;
       try {
-        const { id } = JSON.parse(event.newValue);
-        if (!pendingAlertIds.current.delete(id)) return;
-        setMessages(previous => [...previous, ...alertStartedMessages(CONFIRMED_TEXT)]);
+        const { id, requestId, alreadyActive } = JSON.parse(event.newValue);
+        const confirmed = requestedAlerts.current.get(id);
+        if (confirmed === undefined) return;
+        if (!confirmed) {
+          requestedAlerts.current.set(id, true);
+          const text = alreadyActive === true ? ALREADY_ACTIVE_TEXT : CONFIRMED_TEXT;
+          setMessages(previous => [...previous, ...alertStartedMessages(text)]);
+        }
         setTab("chat");
+        if (typeof requestId === "string") acknowledgeAlertConfirmation(requestId);
+        // PRD 4.3-E — 브라우저가 허용하는 경우 신청한 탭으로 전환한다.
+        window.focus();
       } catch { /* 다른 탭의 잘못된 값은 무시한다. */ }
     }
     window.addEventListener("storage", onConfirmation);
@@ -828,7 +836,7 @@ export function AgentSearchApp() {
       void createAlertReservation({ email: text, query: alertDraft.query, places: alertDraft.places.map(({name, latitude, longitude}) => ({name, latitude, longitude})), radius_m: alertDraft.radius, consent: true })
         .then(reservationId => {
           if (typeof reservationId === "number") {
-            pendingAlertIds.current.add(reservationId);
+            requestedAlerts.current.set(reservationId, false);
             // PRD 4.3-E — 이메일·사진·물품 상세를 제외한 신청 당시의 텍스트 대화만 복원한다.
             const history = messages.flatMap(message => "author" in message
               ? [{ author: message.author, text: message.text, alertConditions: message.alertConditions, survey: message.survey }] : []);
