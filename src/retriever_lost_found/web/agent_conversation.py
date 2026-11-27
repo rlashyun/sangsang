@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 from ..agent_diagnostics import record
 from ..privacy.masking import contains_identifier, mask_numbers
 from .agent_dates import FutureDateError, korea_today, resolve_lost_on
-from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, resolve_institution_scope, search_confirmed_place
+from .agent_search import Institution, PendingSearch, PlaceCandidate, SearchPage, _validated_query, search_confirmed_place
 
 Model = Callable[[str, dict[str, Any], dict[str, Any]], Any]
 ITEM_QUESTION = "어떤 물품을 잃어버렸어요?"
@@ -664,37 +664,11 @@ def search_conversation(
     get_institutions: Callable[[], Sequence[Institution]],
     search_items: Callable[[tuple[int, ...], str], SearchPage],
     radius_m: int | None = None,
-    latest_registered_on: Callable[[], date | None] | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Run the confirmed search and return an updated state in its final result."""
     place = state.confirmed
     if place is None or state.item_query is None:
         raise ValueError("장소와 물품 조건을 먼저 확인해 주세요.")
-    latest = None
-    if state.lost_on and latest_registered_on is not None:
-        try:
-            latest = latest_registered_on()
-        except (RuntimeError, TimeoutError) as error:
-            # 최신 등록일을 모르면 평소처럼 검색한다.
-            record("latest_date.fallback", error=error, stage="found_items", final_status="fallback")
-    if latest is not None and date.fromisoformat(state.lost_on) > latest:
-        # PRD 4.3-A·4.5 — 분실일 이후 등록분이 아직 없으면 검색과 0건 반경 확장을 하지 않는다.
-        yield from resolve_institution_scope(
-            place, get_institutions=get_institutions, search_centers=state.selected_places(), radius_m=radius_m,
-        )
-        today = korea_today()
-        message = (
-            f"지금은 {_korean_date(latest, today)}에 등록된 습득물까지만 확인할 수 있어요. "
-            f"{_korean_date(date.fromisoformat(state.lost_on), today)} 이후에 등록된 물건은 아직 없어요. "
-            "비슷한 물건이 새로 등록되면 메일로 알려드릴까요?"
-        )
-        yield {
-            "status": "no_matches", "message": message, "latest_registered_on": latest.isoformat(),
-            "matches": {"items": [], "total_count": 0, "next_cursor": None},
-            "search_attempts": [], "recommended_item_ids": [],
-            "state": replace(state, last_search_message=message, awaiting_answer=None),
-        }
-        return
     context = {
         "recent": state.recent,
         "confirmed_place": place.name,

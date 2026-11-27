@@ -7,7 +7,6 @@ from http.client import HTTPException
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
 from typing import Any, Sequence
 
 
@@ -105,21 +104,6 @@ class SupabaseFoundItemClient:
         self.timeout = timeout
         if not self.url or not self.secret_key:
             raise ValueError("Supabase URL과 서버 전용 secret key가 필요합니다.")
-
-    def latest_registered_on(self) -> date | None:
-        """PRD 4.3-A — 두 출처를 합친 가장 최근 등록일. 출처별 (출처, 등록일) 인덱스를 쓴다."""
-        latest = []
-        for source in ("partner_api", "police_api"):
-            query = urllib.parse.urlencode({"select": "registered_on", "item_source_code": f"eq.{source}",
-                                            "order": "registered_on.desc", "limit": 1})
-            request = urllib.request.Request(f"{self.url}/rest/v1/found_items?{query}",
-                                             headers=_headers(self.secret_key))
-            rows = _request_json(request, 2.0, "Supabase 최신 등록일 조회")
-            try:
-                latest.extend(date.fromisoformat(row["registered_on"]) for row in rows)
-            except (KeyError, TypeError, ValueError) as error:
-                raise RuntimeError("Supabase 최신 등록일 응답 형식이 올바르지 않습니다.") from error
-        return max(latest, default=None)
 
     def fetch_item_page(
         self,

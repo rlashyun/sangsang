@@ -180,7 +180,7 @@ def test_year_is_rolled_back_only_inside_the_retention_window():
         resolve_lost_on("6월 30일", date(2026, 1, 1))
 
 
-def _dated_chat(monkeypatch, lost_date_text, latest):
+def _dated_chat(monkeypatch, lost_date_text, *, has_match=True):
     monkeypatch.setattr("retriever_lost_found.web.agent_conversation.korea_today", lambda: date(2026, 11, 26))
     base = {"action": "search", "message": "", "place_query": None, "item_query": None, "clear_item_query": False,
             "asks_for": None, "item_changes": None, "target": None}
@@ -189,11 +189,12 @@ def _dated_chat(monkeypatch, lost_date_text, latest):
         {**base, "message": "분실일을 반영해 검색할게요.", "item_query": "검은 반지갑", "lost_date_text": lost_date_text},
         {"query": None},
     ])
-    search = Mock(return_value=SearchPage(({"item_id": 7, "institution_id": 42},), 1))
+    page = SearchPage(({"item_id": 7, "institution_id": 42},), 1) if has_match else SearchPage((), 0)
+    search = Mock(return_value=page)
     router = create_agent_router(
         model=model, find_places=lambda _: [PlaceCandidate("p", "강남역", "", 37.5, 127.03)],
         get_institutions=lambda: [Institution(42, 37.5, 127.03), Institution(99, 37.511, 127.03)],
-        search_items=search, latest_registered_on=latest,
+        search_items=search,
     )
     client = TestClient(create_app(Mock(), "", agent_router=router))
     preceding = {}
@@ -211,7 +212,7 @@ def _dated_chat(monkeypatch, lost_date_text, latest):
 
 
 def test_future_loss_date_asks_again_without_searching(monkeypatch):
-    result, search = _dated_chat(monkeypatch, "11월 29일", Mock(return_value=date(2026, 11, 26)))
+    result, search = _dated_chat(monkeypatch, "11월 29일")
     assert result["message"] == (
         "11월 29일은 아직 오지 않은 날짜예요. 오늘(11월 26일)이나 그 전 날짜로 다시 알려주세요. "
         "날짜 없이도 찾을 수 있어요."
@@ -222,42 +223,22 @@ def test_future_loss_date_asks_again_without_searching(monkeypatch):
     search.assert_not_called()
 
 
-def test_loss_date_after_latest_registration_skips_search_and_radius_expansion(monkeypatch):
-    result, search = _dated_chat(monkeypatch, "11월 26일", Mock(return_value=date(2026, 11, 25)))
-    search.assert_not_called()
+def test_dated_search_expands_when_no_items_match(monkeypatch):
+    result, search = _dated_chat(monkeypatch, "11월 26일", has_match=False)
     assert result["status"] == "no_matches"
-    assert result["message"] == (
-        "지금은 11월 25일에 등록된 습득물까지만 확인할 수 있어요. 11월 26일 이후에 등록된 물건은 아직 없어요. "
-        "비슷한 물건이 새로 등록되면 메일로 알려드릴까요?"
-    )
-    assert result["latest_registered_on"] == "2026-11-25"
+    assert result["message"] == "확정한 범위에서 2026-11-26부터 등록된 습득물 중 조건에 맞는 물건을 찾지 못했어요."
     assert result["matches"] == {"items": [], "total_count": 0, "next_cursor": None}
-    assert "explanation" not in result
     assert result["conditions"]["lost_on"] == "2026-11-26"
-    assert result["conditions"]["radius_m"] == 1000
-    assert result["conditions"]["institution_ids"] == [42]
+    assert result["conditions"]["radius_m"] == 2000
+    assert [attempt["radius_m"] for attempt in result["search_attempts"]] == [1000, 1500, 2000]
+    assert search.call_args_list == [
+        call((42,), "검은 반지갑", None, lost_on="2026-11-26"),
+        call((42, 99), "검은 반지갑", None, lost_on="2026-11-26"),
+        call((42, 99), "검은 반지갑", None, lost_on="2026-11-26"),
+    ]
 
 
-@pytest.mark.parametrize("latest", [
-    Mock(return_value=date(2026, 11, 25)),
-    Mock(return_value=None),
-    Mock(side_effect=RuntimeError("down")),
-])
-def test_search_runs_when_the_date_has_data_or_latest_is_unknown(monkeypatch, latest):
-    result, search = _dated_chat(monkeypatch, "11월 25일", latest)
+def test_dated_search_stops_at_the_first_matching_radius(monkeypatch):
+    result, search = _dated_chat(monkeypatch, "11월 25일")
     assert result["status"] == "results"
-    assert "latest_registered_on" not in result
     search.assert_called_once_with((42,), "검은 반지갑", None, lost_on="2026-11-25")
-
-
-@pytest.mark.parametrize(("rows", "expected"), [
-    ({"partner_api": "2026-11-24", "police_api": "2026-11-25"}, date(2026, 11, 25)),
-    ({}, None),
-])
-def test_latest_registered_on_takes_the_newer_source(monkeypatch, rows, expected):
-    def fake_request(request, timeout, label):
-        source = next((code for code in ("partner_api", "police_api") if code in request.full_url))
-        return [{"registered_on": rows[source]}] if source in rows else []
-
-    monkeypatch.setattr("retriever_lost_found.integrations.supabase._request_json", fake_request)
-    assert SupabaseFoundItemClient("http://localhost", "dummy").latest_registered_on() == expected
