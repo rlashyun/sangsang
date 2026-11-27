@@ -409,14 +409,22 @@ def create_agent_router(
 
                         visible_by_id = {item_id: session.items[item_id] for item_id in turn.visible_item_ids if item_id in session.items}
                         missing_ids = [item_id for item_id in turn.visible_item_ids if item_id not in visible_by_id and item_id > 0]
-                        if missing_ids and scope and find_items_by_id:
+
+                        def load_missing_items(ids: list[int]) -> None:
+                            if not ids or not scope or find_items_by_id is None:
+                                return
                             try:
                                 visible_by_id.update(
-                                    (item["item_id"], item) for item in find_items_by_id(scope, missing_ids)
-                                    if item["item_id"] in missing_ids and item["institution_id"] in scope
+                                    (item["item_id"], item) for item in find_items_by_id(scope, ids)
+                                    if item["item_id"] in ids and item["institution_id"] in scope
                                 )
                             except (RuntimeError, TimeoutError, ValueError) as error:
                                 record("item_details.fallback", error=error, stage="item_details", final_status="fallback")
+
+                        # PRD 4.3-E — 알림 입력의 의도를 판단할 때는 이미 조회한 결과만 사용한다.
+                        in_alert = turn.dialogue is not None and turn.dialogue.task == "alert"
+                        if not in_alert:
+                            load_missing_items(missing_ids)
                         # Preserve positions when an item is no longer available.
                         visible_items = [visible_by_id.get(item_id) for item_id in turn.visible_item_ids]
                         stage = "model"
@@ -471,7 +479,11 @@ def create_agent_router(
                                 else:
                                     result = {"status": "answered", "message": "목록에서 어떤 장소를 뜻하는지 알려주세요."}
                             elif decision.action == "item_details":
-                                if 1 <= target <= len(visible_items) and (item := visible_items[target - 1]) is not None:
+                                item_id = turn.visible_item_ids[target - 1] if 1 <= target <= len(visible_items) else None
+                                if in_alert and item_id is not None and item_id in missing_ids:
+                                    load_missing_items([item_id])
+                                item = visible_by_id.get(item_id) if item_id is not None else None
+                                if item is not None:
                                     try:
                                         institutions = get_institutions()
                                     except (RuntimeError, TimeoutError) as error:
@@ -551,22 +563,14 @@ def create_agent_router(
                         result = {"status": "awaiting_place_selection" if candidates else "no_place_candidates", "message": message}
                         state = replace(state, recent=(*state.recent, (turn.text or "장소 확인", message))[-4:])
 
-                    # PRD 4.3-E — 검증한 알림 조건으로 기존 검색을 갱신한다.
+                    # PRD 4.3-E — 알림 초안의 장소만 검증하고 기존 검색 범위는 유지한다.
                     alert_update = result.get("dialogue")
                     if alert_update and alert_update["changed"]:
                         updated = AlertDraft.model_validate(alert_update["alert"])
-                        selected = {(p.name, p.latitude, p.longitude): p for p in state.selected_places()}
+                        selected = {(p.name, p.latitude, p.longitude) for p in state.selected_places()}
                         keys = [(p.name, p.latitude, p.longitude) for p in updated.places]
                         if state.place_operation or len(set(keys)) != len(keys) or any(key not in selected for key in keys):
                             result = {"status": "answered", "message": "현재 검색에서 확정한 장소로 알림 조건을 다시 설정해 주세요."}
-                            alert_update = None
-                        else:
-                            centres = tuple(selected[key] for key in keys)
-                            state = replace(state, confirmed=centres[-1], places=centres, place_query=centres[-1].name,
-                                            candidates=(), item_query=updated.query,
-                                            item_details=state.item_details if updated.query == state.item_query else ItemDetails())
-                            manual_radius = updated.radius
-                            result["status"] = "ready_to_search"
 
                     actions = None
                     decision_message = result.get("message") if result["status"] == "ready_to_search" else None
@@ -599,10 +603,7 @@ def create_agent_router(
                                 result = event
                         if dialogue_result is not None:
                             result["dialogue"] = dialogue_result
-                        if dialogue_result and dialogue_result["changed"]:
-                            dialogue_result["alert"]["radius"] = radius
-                            result["message"] = decision_message
-                        elif decision_message and result.get("status") in {"results", "no_matches"}:
+                        if decision_message and result.get("status") in {"results", "no_matches"}:
                             result["explanation"] = decision_message
                     if photos and result["status"] == "results":
                         result["photo_status"] = photo_page.photo_status if photo_page else "unavailable"
