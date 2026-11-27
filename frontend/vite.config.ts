@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, "..", "");
   const kakaoSdkUrl = env.KAKAO_JAVASCRIPT_KEY
-    ? `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(env.KAKAO_JAVASCRIPT_KEY)}&autoload=false&libraries=clusterer`
+    ? `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(env.KAKAO_JAVASCRIPT_KEY)}&autoload=false&libraries=clusterer,services`
     : "__KAKAO_SDK_URL__";
 
   return {

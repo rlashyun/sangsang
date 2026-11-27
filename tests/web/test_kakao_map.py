@@ -211,10 +211,10 @@ class KakaoLocalClientTests(unittest.TestCase):
         self.assertNotIn("https:", directives["img-src"])
         self.assertNotIn("*", directives["img-src"])
 
-    def test_handler_requests_clusterer_library(self) -> None:
+    def test_handler_requests_clusterer_and_services_libraries(self) -> None:
         url = _kakao_sdk_url("javascript-key")
 
-        self.assertIn("libraries=clusterer", url)
+        self.assertIn("libraries=clusterer,services", url)
         self.assertIn("appkey=javascript-key", url)
 
     @patch("urllib.request.urlopen")

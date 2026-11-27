@@ -108,6 +108,18 @@
 .agent-selected-places li > span { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
 .agent-selected-places .agent-place-control { flex: none; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; color: var(--color-text-secondary); font-size: 18px; line-height: 1; }
 .agent-selected-places .agent-place-control:hover { color: var(--color-action-text); }
+/* PRD 4.3-A — 장소 추가 +는 유리처럼 비치는 동그란 버튼 안에 둔다(2026-11-27). */
+.agent-selected-places .agent-place-add {
+  width: 22px; height: 22px; margin: 1px 0; border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.75) 0%, rgba(240, 244, 246, 0.45) 100%);
+  box-shadow: 0 0 0 0.5px rgba(23, 33, 29, 0.16), inset 0 1px 1px rgba(255, 255, 255, 0.9), 0 1px 3px rgba(23, 33, 29, 0.1);
+  backdrop-filter: blur(10px) saturate(1.6); -webkit-backdrop-filter: blur(10px) saturate(1.6);
+  color: var(--color-text-primary);
+}
+.agent-selected-places .agent-place-add svg { display: block; }
+.agent-selected-places .agent-place-add:hover:not(:disabled) { background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(240, 244, 246, 0.65) 100%); }
+.agent-selected-places .agent-place-add:active:not(:disabled) { transform: scale(0.94); }
 .agent-place-queue { margin: 4px 0; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 
 :root[data-theme="warm-ivory"] {

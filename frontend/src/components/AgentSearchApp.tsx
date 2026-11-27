@@ -1060,8 +1060,13 @@ export function AgentSearchApp() {
               </li>)}
               {/* PRD 4.3-A — 장소 추가 요청을 채팅으로 바로 보낸다. */}
               {selectedPlaces.length < 3 && <li>
-                <button type="button" className="agent-place-control" disabled={busy || alertSending} aria-label="장소 추가" title="장소 추가"
-                  onClick={() => sendMessage("장소를 추가할게요.")}>+</button>
+                <button type="button" className="agent-place-control agent-place-add" disabled={busy || alertSending} aria-label="장소 추가" title="장소 추가"
+                  onClick={() => sendMessage("장소를 추가할게요.")}>
+                  {/* 글꼴 기준선 때문에 글자 +가 아래로 치우쳐 SVG로 정확히 가운데에 그린다. */}
+                  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+                    <path d="M5 1v8M1 5h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+                  </svg>
+                </button>
               </li>}
             </ul> : "선택 대기 중"}
             {conditions?.place_operation && <>
@@ -1104,7 +1109,9 @@ export function AgentSearchApp() {
             ? <div className="agent-confirmed-card" key={index}>
               <small>확정된 장소</small>
               <strong>{message.confirmedPlace.name}</strong>
-              {message.confirmedPlace.address && <small>{message.confirmedPlace.address}</small>}
+              {/* PRD 4.3-A — 지도에서 고른 주소만 있는 위치는 이름과 주소가 같아 한 번만 보여 준다. */}
+              {message.confirmedPlace.address && message.confirmedPlace.address !== message.confirmedPlace.name
+                && <small>{message.confirmedPlace.address}</small>}
             </div>
             : message.alertConditions ? <AlertConditionSummary key={index} conditions={message.alertConditions} recorded />
             : <div key={index} className={`agent-bubble agent-bubble-${message.author}${message.photos?.length ? " agent-bubble-with-photos" : ""}${message.photoGuidance ? " agent-photo-guidance" : ""}`}>

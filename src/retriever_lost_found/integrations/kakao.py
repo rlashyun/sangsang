@@ -93,5 +93,6 @@ def kakao_sdk_url(javascript_key: str) -> str:
     return (
         "https://dapi.kakao.com/v2/maps/sdk.js?autoload=false&appkey="
         + urllib.parse.quote(javascript_key, safe="")
-        + "&libraries=clusterer"
+        # PRD 4.3-A — 지도 위치 선택의 주소 변환은 JS 키로 쓰는 services 라이브러리를 쓴다.
+        + "&libraries=clusterer,services"
     )
