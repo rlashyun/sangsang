@@ -120,7 +120,6 @@
 .agent-selected-places .agent-place-add svg { display: block; }
 .agent-selected-places .agent-place-add:hover:not(:disabled) { background: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(240, 244, 246, 0.65) 100%); }
 .agent-selected-places .agent-place-add:active:not(:disabled) { transform: scale(0.94); }
-.agent-place-queue { margin: 4px 0; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 
 :root[data-theme="warm-ivory"] {
   --color-bg-page: #f3eadc;

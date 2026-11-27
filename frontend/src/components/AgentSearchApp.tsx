@@ -1069,15 +1069,14 @@ export function AgentSearchApp() {
                 </button>
               </li>}
             </ul> : "선택 대기 중"}
-            {conditions?.place_operation && <>
-              <p className="agent-place-queue" role="status">{conditions.selecting_place_query && `확인 중 · ${conditions.selecting_place_query}`}
-                {Boolean(conditions.pending_place_queries?.length) && ` · 다음 ${conditions.pending_place_queries?.join(", ")}`}</p>
-            </>}
+            {/* PRD 4.3-A — 장소 추가 중에도 상단에는 확인 중·다음 후보 안내를 표시하지 않는다(2026-11-27). */}
           </dd></div>
           <div><dt>물건</dt><dd className={conditions?.item_query ? undefined : "agent-summary-pending"}>{conditions?.item_query || "입력 대기 중"}</dd>
             {/* PRD 4.3-A — 상단 수정은 물품 변경 요청을 채팅에 바로 전송한다. */}
             {conditions?.item_query && <button type="button" disabled={busy} onClick={() => sendMessage("물건 정보를 바꿀게요.")}>수정</button>}</div>
-          {conditions?.lost_on && <div><dt>분실일</dt><dd>{formatRegisteredDate(conditions.lost_on)}</dd></div>}
+          {/* PRD 4.3-A — 분실일도 장소·물건처럼 입력 전부터 대기 상태로 보여 준다(2026-11-27). */}
+          <div><dt>분실일</dt><dd className={conditions?.lost_on ? undefined : "agent-summary-pending"}>
+            {conditions?.lost_on ? formatRegisteredDate(conditions.lost_on) : "입력 대기 중"}</dd></div>
           <div><dt>검색 반경</dt><dd>{radiusKilometersLabel(mappedRadius)}</dd></div>
         </dl>}
         <div ref={feed} tabIndex={-1} className={`agent-feed${feedScrolling ? " is-scrolling" : ""}`} onScroll={showFeedScrollbar}>
