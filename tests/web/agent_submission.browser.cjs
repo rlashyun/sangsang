@@ -18,7 +18,9 @@ async (page) => {
   });
   let requests=[], release, failures=0;
   const place={candidate_id:'p',name:'서울역',address:'서울',latitude:37.55,longitude:126.97};
-  const complete='검색을 마쳤어요. 결과 목록에서 찾으시는 물건이 있는지 확인해 보세요.';
+  // PRD 4.3-A — 날짜 없이 끝난 첫 검색에만 분실일 안내를 붙이고, 이후·날짜가 있으면 완료만 알린다.
+  const complete='검색을 마쳤어요. 잃어버린 날짜를 알려주시면 그날 이후 들어온 물건만 추려 드릴게요. (예: 어제, 11월 20일)';
+  const completeOnly='검색을 마쳤어요.';
   const expansions=[
     {type:'scope.updated',seq:2,previous_radius_m:1000,radius_m:1500,institution_ids:[42],expansion_reason:'no_matches'},
     {type:'scope.updated',seq:3,previous_radius_m:1500,radius_m:2000,institution_ids:[42],expansion_reason:'no_matches'},
@@ -109,13 +111,14 @@ async (page) => {
     }),'The add symbol sits below the place name and aligns with its left edge');
     await input.fill('반복 검색');
     await page.waitForFunction(()=>!document.querySelector('.agent-send').disabled);await burst();
-    await page.waitForFunction(text=>Array.from(document.querySelectorAll('.agent-message-text')).filter(element=>element.textContent===text).length===2,complete);
+    await page.waitForFunction(text=>Array.from(document.querySelectorAll('.agent-message-text')).filter(element=>element.textContent===text).length===1,completeOnly);
     await page.locator('.agent-result-actions').waitFor();
     check(await send.isDisabled(),'Empty input stays disabled after search finishes');
     check(requests.length===3&&await userText('반복 검색').count()===1,'New intentional search is sent once');
     check(await addPlace.count()===0,'No shortcut when three places are already confirmed');
     check(await lostDate.textContent()==='2026.11.20','Lost date row shows the entered date');
-    check(await page.getByText(complete,{exact:true}).count()===2,'Separate searches keep their own identical completion messages');
+    check(await page.getByText(complete,{exact:true}).count()===1&&await page.getByText(completeOnly,{exact:true}).count()===1,
+      'A dated follow-up search gets its own completion without repeating the date hint');
     const resultActions=page.locator('.agent-result-actions');
     check(await resultActions.getByRole('button',{name:'반경 넓혀보기'}).isVisible()
       && await resultActions.getByRole('button',{name:'비슷한 물건 알림 받기'}).isVisible()
